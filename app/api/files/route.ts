@@ -1,0 +1,60 @@
+import { env } from "cloudflare:workers";
+
+export const dynamic = "force-dynamic";
+
+type D1Statement = {
+  bind: (...values: unknown[]) => D1Statement;
+  first: <T>() => Promise<T | null>;
+  run: () => Promise<unknown>;
+};
+type D1 = { prepare: (query: string) => D1Statement };
+type Bucket = {
+  put: (
+    key: string,
+    value: ArrayBuffer,
+    options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> },
+  ) => Promise<unknown>;
+};
+
+export async function POST(request: Request) {
+  try {
+    const bindings = env as unknown as { DB: D1; FILES: Bucket };
+    const name = decodeURIComponent(request.headers.get("x-file-name") || "cartones.pdf");
+    const checksum = request.headers.get("x-checksum") || "";
+    const gameId = request.headers.get("x-game-id") || "";
+    const pages = Number(request.headers.get("x-pages") || "0");
+    const cards = Number(request.headers.get("x-cards") || "0");
+    if (!gameId || !checksum || request.headers.get("content-type") !== "application/pdf") {
+      return Response.json({ error: "Archivo PDF incompleto o inválido." }, { status: 400 });
+    }
+    const duplicate = await bindings.DB
+      .prepare("SELECT id FROM files WHERE game_id = ? AND checksum = ?")
+      .bind(gameId, checksum)
+      .first<{ id: string }>();
+    if (duplicate) {
+      return Response.json({ error: "Este PDF ya fue importado.", duplicate: true }, { status: 409 });
+    }
+    const bytes = await request.arrayBuffer();
+    const id = crypto.randomUUID();
+    const storageKey = `${gameId}/${id}-${name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    await bindings.FILES.put(storageKey, bytes, {
+      httpMetadata: { contentType: "application/pdf" },
+      customMetadata: { originalName: name, checksum, gameId },
+    });
+    const createdAt = new Date().toISOString();
+    await bindings.DB
+      .prepare(
+        `INSERT INTO files (
+          id, game_id, name, storage_key, size, checksum, pages, cards, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(id, gameId, name, storageKey, bytes.byteLength, checksum, pages, cards, createdAt)
+      .run();
+    return Response.json({ id, name, size: bytes.byteLength, checksum, pages, cards, createdAt });
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "No se pudo almacenar el PDF." },
+      { status: 500 },
+    );
+  }
+}
