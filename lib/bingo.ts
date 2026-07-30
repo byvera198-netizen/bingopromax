@@ -245,6 +245,13 @@ export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
   return card.grid.length === 5 ? COMPACT_CARD_PATTERN : activePattern;
 }
 
+export function patternsForCard(
+  card: BingoCard,
+  activePatterns: BingoPattern[],
+) {
+  return card.grid.length === 5 ? [COMPACT_CARD_PATTERN] : activePatterns;
+}
+
 export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
   const found = [...BUILTIN_PATTERNS, ...customPatterns].find(
     (pattern) => pattern.id === game.activePatternId,
@@ -287,6 +294,19 @@ export function isWinningCard(card: BingoCard, called: Set<number>, pattern: Bin
   const cardPattern = patternForCard(card, pattern);
   return cardPattern.variants.some((variant) =>
     variant.every((cell) => card.grid[cell] === 0 || called.has(card.grid[cell])),
+  );
+}
+
+export function winningPatternsForCard(
+  card: BingoCard,
+  called: Set<number>,
+  activePatterns: BingoPattern[],
+  alreadyWonPatternIds = new Set<string>(),
+) {
+  return patternsForCard(card, activePatterns).filter(
+    (pattern) =>
+      !alreadyWonPatternIds.has(pattern.id) &&
+      isWinningCard(card, called, pattern),
   );
 }
 

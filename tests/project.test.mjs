@@ -27,10 +27,13 @@ test("incluye los flujos operativos principales", async () => {
   assert.match(page, /saveManualCard/);
   assert.match(page, /registerBall/);
   assert.match(page, /recordWinners/);
+  assert.match(page, /Todos los patrones están activos/);
+  assert.match(page, /patternStatuses/);
   assert.match(page, /exportPdf/);
   assert.match(page, /exportExcel/);
   assert.match(page, /exportCsv/);
   assert.match(bingo, /isWinningCard/);
+  assert.match(bingo, /winningPatternsForCard/);
   assert.match(bingo, /blackout/);
   assert.match(parser, /pdfjs-dist/);
   assert.match(parser, /tesseract\.js/);

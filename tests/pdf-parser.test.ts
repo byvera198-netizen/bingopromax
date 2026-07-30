@@ -6,6 +6,7 @@ import {
   cardProgress,
   isWinningCard,
   patternForCard,
+  winningPatternsForCard,
   type BingoCard,
 } from "../lib/bingo";
 import {
@@ -96,6 +97,48 @@ test("un cartón ganador permanece elegible para un patrón distinto", () => {
   [2, 3, 4, 5].forEach((number) => called.add(number));
   assert.equal(isWinningCard(card, called, vertical), true);
   assert.equal(card.status, "active");
+});
+
+test("todos los patrones se evalúan simultáneamente sin repetir victorias", () => {
+  const card: BingoCard = {
+    id: "card-all-patterns",
+    number: "202",
+    serial: "",
+    grid: baseGrid,
+    sourceFile: "manual",
+    sourcePage: 0,
+    status: "active",
+  };
+  const horizontal = BUILTIN_PATTERNS.find(
+    (pattern) => pattern.id === "linea-horizontal",
+  );
+  const vertical = BUILTIN_PATTERNS.find(
+    (pattern) => pattern.id === "linea-vertical",
+  );
+  assert.ok(horizontal);
+  assert.ok(vertical);
+
+  const called = new Set([1, 16, 31, 46, 61, 2, 3, 4, 5]);
+  const firstPass = winningPatternsForCard(
+    card,
+    called,
+    [horizontal, vertical],
+  );
+  const secondPass = winningPatternsForCard(
+    card,
+    called,
+    [horizontal, vertical],
+    new Set(["linea-horizontal"]),
+  );
+
+  assert.deepEqual(
+    firstPass.map((pattern) => pattern.id),
+    ["linea-horizontal", "linea-vertical"],
+  );
+  assert.deepEqual(
+    secondPass.map((pattern) => pattern.id),
+    ["linea-vertical"],
+  );
 });
 
 test("un cartón Sabrosito gana al completar sus cinco números", () => {

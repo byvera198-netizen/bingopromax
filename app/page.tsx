@@ -46,12 +46,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BUILTIN_PATTERNS,
+  COMPACT_CARD_PATTERN,
   cardProgress,
   formatDuration,
-  getActivePattern,
-  isWinningCard,
-  patternForCard,
+  patternsForCard,
   validateCardGrid,
+  winningPatternsForCard,
   type AppState,
   type BingoCard,
   type BingoPattern,
@@ -178,20 +178,49 @@ function BingoGrid({
   );
 }
 
+function nearestPatternForCard(
+  card: BingoCard,
+  called: Set<number>,
+  patterns: BingoPattern[],
+  wins: Winner[] = [],
+) {
+  const applicablePatterns = patternsForCard(card, patterns);
+  const wonPatternIds = new Set(wins.map((winner) => winner.patternId));
+  const pendingPatterns = applicablePatterns.filter(
+    (pattern) => !wonPatternIds.has(pattern.id),
+  );
+  const progressOptions = (pendingPatterns.length
+    ? pendingPatterns
+    : applicablePatterns
+  ).map((pattern) => ({
+    pattern,
+    progress: cardProgress(card, called, pattern),
+  }));
+  return (
+    progressOptions.sort(
+      (a, b) => b.progress.progress - a.progress.progress,
+    )[0] ?? {
+      pattern: applicablePatterns[0] ?? BUILTIN_PATTERNS[0],
+      progress: { completed: 0, total: 0, progress: 0 },
+    }
+  );
+}
+
 function CardPreview({
   card,
   called,
-  pattern,
+  patterns,
   wins = [],
   onToggleStatus,
 }: {
   card: BingoCard;
   called: Set<number>;
-  pattern: BingoPattern;
+  patterns: BingoPattern[];
   wins?: Winner[];
   onToggleStatus: (card: BingoCard) => void;
 }) {
-  const progress = cardProgress(card, called, pattern);
+  const wonPatternIds = new Set(wins.map((winner) => winner.patternId));
+  const nearest = nearestPatternForCard(card, called, patterns, wins);
   return (
     <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
       <header>
@@ -210,10 +239,14 @@ function CardPreview({
           <b>Sigue activo</b>
         </div>
       )}
-      <BingoGrid grid={card.grid} called={called} pattern={pattern} compact />
+      <BingoGrid grid={card.grid} called={called} pattern={nearest.pattern} compact />
+      <div className="ticket-next-pattern">
+        <span>{wonPatternIds.size ? "Siguiente" : "Más cerca"}</span>
+        <b>{nearest.pattern.name}</b>
+      </div>
       <div className="ticket-progress">
-        <span><i style={{ width: `${Math.round(progress.progress * 100)}%` }} /></span>
-        <b>{Math.round(progress.progress * 100)}%</b>
+        <span><i style={{ width: `${Math.round(nearest.progress.progress * 100)}%` }} /></span>
+        <b>{Math.round(nearest.progress.progress * 100)}%</b>
       </div>
       <footer>
         <span>{card.sourceFile}</span>
@@ -354,7 +387,42 @@ export default function Home() {
     () => [...BUILTIN_PATTERNS, ...(state?.customPatterns ?? [])],
     [state?.customPatterns],
   );
-  const activePattern = state ? getActivePattern(state.game, state.customPatterns) : BUILTIN_PATTERNS[0];
+  const gamePatterns = useMemo(
+    () => [
+      ...allPatterns,
+      ...(state?.cards.some((card) => card.grid.length === 5)
+        ? [COMPACT_CARD_PATTERN]
+        : []),
+    ],
+    [allPatterns, state?.cards],
+  );
+  const patternStatuses = useMemo(
+    () =>
+      gamePatterns.map((pattern) => {
+        const compatibleCards = (state?.cards ?? []).filter(
+          (card) =>
+            card.status === "active" &&
+            (pattern.id === COMPACT_CARD_PATTERN.id
+              ? card.grid.length === 5
+              : card.grid.length !== 5),
+        );
+        const nearest = compatibleCards.reduce(
+          (best, card) =>
+            Math.max(best, cardProgress(card, called, pattern).progress),
+          0,
+        );
+        const winners = (state?.winners ?? []).filter(
+          (winner) => winner.patternId === pattern.id,
+        ).length;
+        return {
+          pattern,
+          cards: compatibleCards.length,
+          nearest,
+          winners,
+        };
+      }),
+    [called, gamePatterns, state?.cards, state?.winners],
+  );
   const lastDraw = state?.draws[state.draws.length - 1];
   const elapsed = game?.startedAt
     ? Math.max(0, Math.floor((nowTick - new Date(game.startedAt).getTime()) / 1000))
@@ -400,24 +468,25 @@ export default function Home() {
         const result = await api<{ draw: Draw }>({ action: "saveDraw", gameId: game.id, number });
         const nextCalled = new Set(called);
         nextCalled.add(number);
-        const winnerKeys = new Set(state.winners.map((winner) => `${winner.cardId}:${winner.patternId}`));
-        const detected = state.cards.flatMap<Winner>((card) => {
-          const winningPattern = patternForCard(card, activePattern);
-          if (
-            !isWinningCard(card, nextCalled, activePattern) ||
-            winnerKeys.has(`${card.id}:${winningPattern.id}`)
-          ) {
-            return [];
-          }
-          return [{
+        const detected = state.cards.flatMap<Winner>((card) =>
+          winningPatternsForCard(
+            card,
+            nextCalled,
+            allPatterns,
+            new Set(
+              state.winners
+                .filter((winner) => winner.cardId === card.id)
+                .map((winner) => winner.patternId),
+            ),
+          ).map<Winner>((pattern) => ({
             id: crypto.randomUUID(),
             cardId: card.id,
             cardNumber: card.number,
-            patternId: winningPattern.id,
-            patternName: winningPattern.name,
+            patternId: pattern.id,
+            patternName: pattern.name,
             validatedAt: result.draw.drawnAt,
-          }];
-        });
+          })),
+        );
         setState((current) =>
           current
             ? {
@@ -447,7 +516,7 @@ export default function Home() {
         notify(caught instanceof Error ? caught.message : "No se pudo registrar la bolilla.", "error");
       }
     },
-    [activePattern, called, game, notify, playTone, state],
+    [allPatterns, called, game, notify, playTone, state],
   );
 
   const undoLastDraw = async () => {
@@ -489,27 +558,6 @@ export default function Home() {
     }
   };
 
-  const selectPattern = async (pattern: BingoPattern) => {
-    if (!state) return;
-    try {
-      await api({ action: "setPattern", gameId: state.game.id, pattern });
-      setState({
-        ...state,
-        game: {
-          ...state.game,
-          activePatternId: pattern.id,
-          activePatternName: pattern.name,
-          activePatternCells: pattern.cells,
-          status: state.game.status === "paused" ? "running" : state.game.status,
-        },
-      });
-      setWinnerModal([]);
-      notify(`Patrón activo: ${pattern.name}. El sorteo puede continuar.`);
-    } catch (caught) {
-      notify(caught instanceof Error ? caught.message : "No se pudo activar el patrón.", "error");
-    }
-  };
-
   const continueAfterWin = async () => {
     if (!state) return;
     try {
@@ -519,7 +567,7 @@ export default function Home() {
         setState({ ...state, game: nextGame });
       }
       setWinnerModal([]);
-      notify("El cartón ganador sigue activo para los demás patrones.");
+      notify("El cartón ganador sigue activo para los demás patrones en juego.");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo reanudar la partida.", "error");
     }
@@ -681,7 +729,7 @@ export default function Home() {
       setPatternName("");
       setPatternDescription("");
       setPatternCells([10, 11, 12, 13, 14]);
-      notify(`Patrón “${pattern.name}” guardado.`);
+      notify(`Patrón “${pattern.name}” guardado y activo en la partida.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el patrón.", "error");
     }
@@ -722,7 +770,7 @@ export default function Home() {
     if (!state) return;
     const lines = [
       ["PARTIDA", state.game.name],
-      ["PATRÓN", activePattern.name],
+      ["PATRONES ACTIVOS", gamePatterns.map((pattern) => pattern.name).join(" · ")],
       ["BOLILLAS", state.draws.map((draw) => draw.number).join(" - ")],
       [],
       ["CARTÓN", "ESTADO", "ORIGEN", "PÁGINA", "NÚMEROS"],
@@ -798,7 +846,7 @@ export default function Home() {
     pdf.text("Reporte de partida — Bingo Control", 16, 20);
     pdf.setFontSize(11);
     pdf.text(`Partida: ${state.game.name}`, 16, 31);
-    pdf.text(`Patrón: ${activePattern.name}`, 16, 38);
+    pdf.text(`Patrones activos: ${gamePatterns.length}`, 16, 38);
     pdf.text(`Cartones: ${state.cards.length}   Bolillas: ${state.draws.length}   Ganadores: ${state.winners.length}`, 16, 45);
     pdf.setFontSize(13);
     pdf.text("Historial de bolillas", 16, 58);
@@ -843,10 +891,20 @@ export default function Home() {
       )
       .sort(
         (a, b) =>
-          cardProgress(b, called, activePattern).progress -
-          cardProgress(a, called, activePattern).progress,
+          nearestPatternForCard(
+            b,
+            called,
+            allPatterns,
+            state.winners.filter((winner) => winner.cardId === b.id),
+          ).progress.progress -
+          nearestPatternForCard(
+            a,
+            called,
+            allPatterns,
+            state.winners.filter((winner) => winner.cardId === a.id),
+          ).progress.progress,
       );
-  }, [activePattern, called, search, state]);
+  }, [allPatterns, called, search, state]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -909,12 +967,12 @@ export default function Home() {
           <button onClick={() => setView("reports")} type="button"><History size={19} /> Auditoría</button>
         </nav>
         <div className="sidebar-pattern">
-          <div className="eyebrow"><Zap size={13} /> PATRÓN ACTIVO</div>
+          <div className="eyebrow"><Zap size={13} /> TODOS ACTIVOS</div>
           <div className="pattern-lockup">
-            <PatternMini pattern={activePattern} />
-            <div><strong>{activePattern.name}</strong><span>{activePattern.category} · {activePattern.difficulty}</span></div>
+            <span className="pattern-multi-icon"><Sparkles size={20} /></span>
+            <div><strong>{gamePatterns.length} patrones</strong><span>Evaluación simultánea</span></div>
           </div>
-          <button onClick={() => setView("patterns")} type="button">Cambiar patrón <ChevronRight size={15} /></button>
+          <button onClick={() => setView("patterns")} type="button">Ver patrones <ChevronRight size={15} /></button>
         </div>
         <footer className="sidebar-footer"><ShieldCheck size={15} /> Guardado automático activo</footer>
       </aside>
@@ -964,7 +1022,7 @@ export default function Home() {
                 <StatCard accent="lime" detail={`${state.cards.filter((card) => card.status === "active").length} activos`} icon={Grid3X3} label="Cartones cargados" value={state.cards.length} />
                 <StatCard accent="mint" detail={`${90 - state.draws.length} restantes`} icon={CircleGauge} label="Bolillas sorteadas" value={state.draws.length} />
                 <StatCard accent="amber" detail={state.winners.length ? "Validación confirmada" : "Sin coincidencias completas"} icon={Trophy} label="Ganadores" value={state.winners.length} />
-                <StatCard accent="blue" detail={activePattern.category} icon={Sparkles} label="Patrón activo" value={activePattern.name} />
+                <StatCard accent="blue" detail="Evaluación simultánea" icon={Sparkles} label="Patrones activos" value={gamePatterns.length} />
               </div>
 
               <div className="game-grid">
@@ -1043,6 +1101,31 @@ export default function Home() {
                 </section>
               </div>
 
+              <section className="panel live-patterns-panel">
+                <div className="panel-heading">
+                  <div><span className="eyebrow"><Sparkles size={13} /> PATRONES EN JUEGO</span><h3>Todos se verifican con cada bolilla</h3></div>
+                  <span className="secure-badge"><Activity size={14} /> {gamePatterns.length} activos</span>
+                </div>
+                <div className="live-pattern-grid">
+                  {patternStatuses.map(({ pattern, cards, nearest, winners }) => (
+                    <article className="live-pattern-card" key={pattern.id}>
+                      <div>
+                        <PatternMini pattern={pattern} />
+                        <span><strong>{pattern.name}</strong><small>{pattern.category} · {pattern.difficulty}</small></span>
+                      </div>
+                      <div className="pattern-live-progress">
+                        <span><i style={{ width: `${Math.round(nearest * 100)}%` }} /></span>
+                        <b>{Math.round(nearest * 100)}%</b>
+                      </div>
+                      <footer>
+                        <span>{cards} cartones compatibles</span>
+                        <strong>{winners ? `${winners} ganador${winners === 1 ? "" : "es"}` : "En juego"}</strong>
+                      </footer>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
               <div className="lower-grid">
                 <section className="panel">
                   <div className="panel-heading">
@@ -1053,7 +1136,21 @@ export default function Home() {
                     <div className="live-ticket-grid">
                       {[...state.cards]
                         .filter((card) => card.status === "active")
-                        .sort((a, b) => cardProgress(b, called, activePattern).progress - cardProgress(a, called, activePattern).progress)
+                        .sort(
+                          (a, b) =>
+                            nearestPatternForCard(
+                              b,
+                              called,
+                              allPatterns,
+                              state.winners.filter((winner) => winner.cardId === b.id),
+                            ).progress.progress -
+                            nearestPatternForCard(
+                              a,
+                              called,
+                              allPatterns,
+                              state.winners.filter((winner) => winner.cardId === a.id),
+                            ).progress.progress,
+                        )
                         .slice(0, 4)
                         .map((card) => (
                           <CardPreview
@@ -1061,7 +1158,7 @@ export default function Home() {
                             card={card}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
-                            pattern={activePattern}
+                            patterns={allPatterns}
                             wins={state.winners.filter((winner) => winner.cardId === card.id)}
                           />
                         ))}
@@ -1155,7 +1252,7 @@ export default function Home() {
               </div>
               <div className="card-legend" aria-label="Leyenda del avance en vivo">
                 <span><i className="called-number" /> Número sorteado</span>
-                <span><i className="pattern-cell" /> Casilla del patrón</span>
+                <span><i className="pattern-cell" /> Patrón más cercano</span>
                 <span><i /> Pendiente</span>
                 <b><Activity size={13} /> Sincronización en vivo cada 4 s</b>
               </div>
@@ -1167,7 +1264,7 @@ export default function Home() {
                       called={called}
                       key={card.id}
                       onToggleStatus={toggleCardStatus}
-                      pattern={activePattern}
+                      patterns={allPatterns}
                       wins={state.winners.filter((winner) => winner.cardId === card.id)}
                     />
                   ))}
@@ -1186,30 +1283,29 @@ export default function Home() {
           {view === "patterns" && (
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
-                <div><span className="eyebrow">MODALIDADES</span><h2>Patrones de juego.</h2><p>Activa una modalidad oficial o dibuja la figura que necesites.</p></div>
+                <div><span className="eyebrow">MODALIDADES</span><h2>Todos los patrones están activos.</h2><p>Cada bolilla verifica automáticamente todas las figuras oficiales y personalizadas.</p></div>
                 <button className="primary-button" onClick={() => setPatternOpen(true)} type="button"><Plus size={17} /> Crear patrón</button>
               </div>
-              <section className="active-pattern-hero">
+              <section className="active-pattern-hero all-patterns-hero">
                 <div>
-                  <span className="eyebrow"><Zap size={14} /> ACTIVO AHORA</span>
-                  <h3>{activePattern.name}</h3>
-                  <p>{activePattern.description}</p>
-                  <div><b>{activePattern.category}</b><b>{activePattern.difficulty}</b><b>{activePattern.cells.length} casillas</b></div>
+                  <span className="eyebrow"><Zap size={14} /> VERIFICACIÓN SIMULTÁNEA</span>
+                  <h3>{gamePatterns.length} patrones en juego</h3>
+                  <p>No necesitas seleccionar ni cambiar una figura: todas permanecen habilitadas durante la partida.</p>
+                  <div><b>{BUILTIN_PATTERNS.length} oficiales</b><b>{state.customPatterns.length} personalizados</b><b>En tiempo real</b></div>
                 </div>
-                <PatternMini pattern={activePattern} />
+                <div className="pattern-stack-preview">
+                  {gamePatterns.slice(0, 4).map((pattern) => <PatternMini key={pattern.id} pattern={pattern} />)}
+                </div>
               </section>
               <div className="pattern-grid">
-                {allPatterns.map((pattern) => {
-                  const active = pattern.id === activePattern.id;
-                  return (
-                    <button className={`pattern-card ${active ? "active" : ""}`} key={pattern.id} onClick={() => void selectPattern(pattern)} type="button">
-                      <div className="pattern-card-top"><PatternMini pattern={pattern} />{active && <span><Check size={14} /> Activo</span>}</div>
+                {gamePatterns.map((pattern) => (
+                  <article className="pattern-card active" key={pattern.id}>
+                      <div className="pattern-card-top"><PatternMini pattern={pattern} /><span><Check size={14} /> En juego</span></div>
                       <strong>{pattern.name}</strong>
                       <p>{pattern.description}</p>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
-                    </button>
-                  );
-                })}
+                  </article>
+                ))}
               </div>
             </motion.div>
           )}
@@ -1230,7 +1326,7 @@ export default function Home() {
                   <dl>
                     <div><dt>Fecha</dt><dd>{new Date(`${game.date}T12:00:00`).toLocaleDateString("es-EC", { dateStyle: "long" })}</dd></div>
                     <div><dt>Premio</dt><dd>{game.prize || "No especificado"}</dd></div>
-                    <div><dt>Patrón</dt><dd>{activePattern.name}</dd></div>
+                    <div><dt>Patrones activos</dt><dd>{gamePatterns.length}</dd></div>
                     <div><dt>Duración</dt><dd>{formatDuration(elapsed)}</dd></div>
                     <div><dt>Cartones activos</dt><dd>{state.cards.filter((card) => card.status === "active").length}</dd></div>
                     <div><dt>PDF importados</dt><dd>{state.files.length}</dd></div>
@@ -1331,7 +1427,7 @@ export default function Home() {
               </div>
               <div className="winner-actions">
                 <button className="ghost-button" onClick={() => { setWinnerModal([]); setView("reports"); }} type="button"><FileText size={16} /> Ver reporte</button>
-                <button className="secondary-button" onClick={() => { setWinnerModal([]); setView("patterns"); }} type="button"><Sparkles size={16} /> Cambiar patrón</button>
+                <button className="secondary-button" onClick={() => { setWinnerModal([]); setView("patterns"); }} type="button"><Sparkles size={16} /> Ver patrones</button>
                 <button className="primary-button" onClick={() => void continueAfterWin()} type="button"><Play size={17} /> Continuar jugando</button>
               </div>
             </motion.section>
