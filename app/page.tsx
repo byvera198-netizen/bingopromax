@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Award,
-  BellRing,
   BookOpen,
   Check,
   ChevronRight,
@@ -159,11 +158,13 @@ function CardPreview({
   card,
   called,
   pattern,
+  wins = [],
   onToggleStatus,
 }: {
   card: BingoCard;
   called: Set<number>;
   pattern: BingoPattern;
+  wins?: Winner[];
   onToggleStatus: (card: BingoCard) => void;
 }) {
   const progress = cardProgress(card, called, pattern);
@@ -178,6 +179,13 @@ function CardPreview({
           <MoreHorizontal size={17} />
         </button>
       </header>
+      {wins.length > 0 && (
+        <div className="ticket-wins">
+          <Trophy size={12} />
+          <span>Ganó {wins.map((winner) => winner.patternName).join(", ")}</span>
+          <b>Sigue activo</b>
+        </div>
+      )}
       <BingoGrid grid={card.grid} called={called} pattern={pattern} compact />
       <div className="ticket-progress">
         <span><i style={{ width: `${Math.round(progress.progress * 100)}%` }} /></span>
@@ -238,7 +246,7 @@ export default function Home() {
   const [winnerModal, setWinnerModal] = useState<Winner[]>([]);
   const [search, setSearch] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [nowTick, setNowTick] = useState(Date.now());
+  const [nowTick, setNowTick] = useState(0);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [sound, setSound] = useState(true);
   const [processingFiles, setProcessingFiles] = useState(false);
@@ -260,28 +268,34 @@ export default function Home() {
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 4200);
   }, []);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError("");
+  const refresh = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const response = await fetch("/api/state", { cache: "no-store" });
       const payload = (await response.json()) as AppState & { error?: string };
       if (!response.ok) throw new Error(payload.error || "No se pudo abrir la partida.");
       setState(payload);
-      setGameDraft({
-        name: payload.game.name,
-        date: payload.game.date,
-        prize: payload.game.prize,
-        notes: payload.game.notes,
-      });
+      if (!silent) {
+        setGameDraft({
+          name: payload.game.name,
+          date: payload.game.date,
+          prize: payload.game.prize,
+          notes: payload.game.notes,
+        });
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo abrir la partida.");
+      if (!silent) setError(caught instanceof Error ? caught.message : "No se pudo abrir la partida.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // The initial API request hydrates the client-only game console.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     const savedTheme = localStorage.getItem("bingo-theme");
     const savedSound = localStorage.getItem("bingo-sound");
@@ -302,6 +316,13 @@ export default function Home() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const sync = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !processingFiles) void refresh(true);
+    }, 4000);
+    return () => window.clearInterval(sync);
+  }, [processingFiles, refresh]);
 
   const game = state?.game;
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
@@ -449,11 +470,28 @@ export default function Home() {
           activePatternId: pattern.id,
           activePatternName: pattern.name,
           activePatternCells: pattern.cells,
+          status: state.game.status === "paused" ? "running" : state.game.status,
         },
       });
-      notify(`Patrón activo: ${pattern.name}.`);
+      setWinnerModal([]);
+      notify(`Patrón activo: ${pattern.name}. El sorteo puede continuar.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo activar el patrón.", "error");
+    }
+  };
+
+  const continueAfterWin = async () => {
+    if (!state) return;
+    try {
+      if (state.game.status === "paused") {
+        const nextGame = { ...state.game, status: "running" as const };
+        await api({ action: "updateGame", gameId: state.game.id, fields: nextGame });
+        setState({ ...state, game: nextGame });
+      }
+      setWinnerModal([]);
+      notify("El cartón ganador sigue activo para los demás patrones.");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudo reanudar la partida.", "error");
     }
   };
 
@@ -517,6 +555,8 @@ export default function Home() {
     }
     setProcessingFiles(true);
     const warnings: string[] = [];
+    const signatures = new Set(state.cards.map((card) => card.grid.join(",")));
+    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
     let imported = 0;
     let duplicateCount = 0;
     try {
@@ -531,8 +571,18 @@ export default function Home() {
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const signatures = new Set(state.cards.map((card) => card.grid.join(",")));
-        const uniqueCards = parsed.cards.filter((card) => !signatures.has(card.grid.join(",")));
+        const uniqueCards = parsed.cards
+          .filter((card) => !signatures.has(card.grid.join(",")))
+          .map((card, index) => {
+            signatures.add(card.grid.join(","));
+            let number = card.number;
+            if (usedNumbers.has(number.toLowerCase())) {
+              number = `${number}-${checksum.slice(0, 6).toUpperCase()}${index ? `-${index + 1}` : ""}`;
+            }
+            while (usedNumbers.has(number.toLowerCase())) number = `${number}-2`;
+            usedNumbers.add(number.toLowerCase());
+            return { ...card, number };
+          });
         duplicateCount += parsed.cards.length - uniqueCards.length;
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
@@ -567,7 +617,10 @@ export default function Home() {
       if (imported) notify(`${imported} cartones importados correctamente.`);
       if (duplicateCount) notify(`${duplicateCount} elementos duplicados fueron omitidos.`, "warning");
     } catch (caught) {
-      notify(caught instanceof Error ? caught.message : "No se pudo completar la importación.", "error");
+      const message = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
+      warnings.push(message);
+      setImportWarnings(warnings);
+      notify(message, "error");
     } finally {
       setProcessingFiles(false);
       setPdfProgress(null);
@@ -750,14 +803,20 @@ export default function Home() {
   const filteredCards = useMemo(() => {
     if (!state) return [];
     const term = search.trim().toLowerCase();
-    if (!term) return state.cards;
-    return state.cards.filter(
-      (card) =>
+    return state.cards
+      .filter(
+        (card) =>
+          !term ||
         card.number.toLowerCase().includes(term) ||
         card.sourceFile.toLowerCase().includes(term) ||
         card.serial?.toLowerCase().includes(term),
-    );
-  }, [search, state]);
+      )
+      .sort(
+        (a, b) =>
+          cardProgress(b, called, activePattern).progress -
+          cardProgress(a, called, activePattern).progress,
+      );
+  }, [activePattern, called, search, state]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -961,21 +1020,21 @@ export default function Home() {
                     <button className="text-button" onClick={() => setView("cards")} type="button">Ver todos <ChevronRight size={15} /></button>
                   </div>
                   {state.cards.length ? (
-                    <div className="nearby-list">
+                    <div className="live-ticket-grid">
                       {[...state.cards]
                         .filter((card) => card.status === "active")
                         .sort((a, b) => cardProgress(b, called, activePattern).progress - cardProgress(a, called, activePattern).progress)
                         .slice(0, 4)
-                        .map((card) => {
-                          const progress = cardProgress(card, called, activePattern);
-                          return (
-                            <div className="nearby-row" key={card.id}>
-                              <span className="rank">#{card.number}</span>
-                              <div><strong>{progress.completed} de {progress.total} casillas</strong><span><i style={{ width: `${progress.progress * 100}%` }} /></span></div>
-                              <b>{Math.round(progress.progress * 100)}%</b>
-                            </div>
-                          );
-                        })}
+                        .map((card) => (
+                          <CardPreview
+                            called={called}
+                            card={card}
+                            key={card.id}
+                            onToggleStatus={toggleCardStatus}
+                            pattern={activePattern}
+                            wins={state.winners.filter((winner) => winner.cardId === card.id)}
+                          />
+                        ))}
                     </div>
                   ) : (
                     <EmptyState
@@ -1062,11 +1121,26 @@ export default function Home() {
               )}
               <div className="cards-toolbar">
                 <div className="search-box"><Search size={17} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
-                <div><span>{filteredCards.length} cartones</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span></div>
+                <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span></div>
+              </div>
+              <div className="card-legend" aria-label="Leyenda del avance en vivo">
+                <span><i className="called-number" /> Número sorteado</span>
+                <span><i className="pattern-cell" /> Casilla del patrón</span>
+                <span><i /> Pendiente</span>
+                <b><Activity size={13} /> Sincronización en vivo cada 4 s</b>
               </div>
               {filteredCards.length ? (
                 <div className="ticket-grid">
-                  {filteredCards.map((card) => <CardPreview card={card} called={called} key={card.id} onToggleStatus={toggleCardStatus} pattern={activePattern} />)}
+                  {filteredCards.map((card) => (
+                    <CardPreview
+                      card={card}
+                      called={called}
+                      key={card.id}
+                      onToggleStatus={toggleCardStatus}
+                      pattern={activePattern}
+                      wins={state.winners.filter((winner) => winner.cardId === card.id)}
+                    />
+                  ))}
                 </div>
               ) : (
                 <EmptyState
@@ -1226,8 +1300,9 @@ export default function Home() {
                 })}
               </div>
               <div className="winner-actions">
-                <button className="secondary-button" onClick={() => { setWinnerModal([]); setView("reports"); }} type="button"><FileText size={16} /> Ver reporte</button>
-                <button className="primary-button" onClick={() => setWinnerModal([])} type="button"><Check size={17} /> Confirmar</button>
+                <button className="ghost-button" onClick={() => { setWinnerModal([]); setView("reports"); }} type="button"><FileText size={16} /> Ver reporte</button>
+                <button className="secondary-button" onClick={() => { setWinnerModal([]); setView("patterns"); }} type="button"><Sparkles size={16} /> Cambiar patrón</button>
+                <button className="primary-button" onClick={() => void continueAfterWin()} type="button"><Play size={17} /> Continuar jugando</button>
               </div>
             </motion.section>
           </motion.div>

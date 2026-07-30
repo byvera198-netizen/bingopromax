@@ -24,7 +24,9 @@ export async function POST(request: Request) {
     const gameId = request.headers.get("x-game-id") || "";
     const pages = Number(request.headers.get("x-pages") || "0");
     const cards = Number(request.headers.get("x-cards") || "0");
-    if (!gameId || !checksum || request.headers.get("content-type") !== "application/pdf") {
+    const contentType = request.headers.get("content-type")?.toLowerCase() || "";
+    const isPdf = contentType.startsWith("application/pdf") || name.toLowerCase().endsWith(".pdf");
+    if (!gameId || !checksum || !isPdf) {
       return Response.json({ error: "Archivo PDF incompleto o inválido." }, { status: 400 });
     }
     const duplicate = await bindings.DB

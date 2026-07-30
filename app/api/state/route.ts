@@ -336,7 +336,9 @@ export async function POST(request: Request) {
       await db
         .prepare(
           `UPDATE games SET active_pattern_id = ?, active_pattern_name = ?,
-           active_pattern_cells = ?, updated_at = ? WHERE id = ?`,
+           active_pattern_cells = ?,
+           status = CASE WHEN status = 'paused' THEN 'running' ELSE status END,
+           updated_at = ? WHERE id = ?`,
         )
         .bind(pattern.id, pattern.name, JSON.stringify(pattern.cells), changedAt, gameId)
         .run();
