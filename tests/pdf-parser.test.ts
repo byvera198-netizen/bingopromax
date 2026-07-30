@@ -3,11 +3,17 @@ import test from "node:test";
 
 import {
   BUILTIN_PATTERNS,
+  cardProgress,
   isWinningCard,
+  patternForCard,
   type BingoCard,
 } from "../lib/bingo";
 import {
+  detectCompactRectangles,
+  detectGridRectangles,
+  extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
 
@@ -90,4 +96,129 @@ test("un cartón ganador permanece elegible para un patrón distinto", () => {
   [2, 3, 4, 5].forEach((number) => called.add(number));
   assert.equal(isWinningCard(card, called, vertical), true);
   assert.equal(card.status, "active");
+});
+
+test("un cartón Sabrosito gana al completar sus cinco números", () => {
+  const card: BingoCard = {
+    id: "compact-1",
+    number: "094575-1",
+    serial: "",
+    grid: [27, 45, 61, 12, 56],
+    sourceFile: "sabrosito.pdf",
+    sourcePage: 1,
+    status: "active",
+  };
+  const activePattern = BUILTIN_PATTERNS[0];
+  const almostComplete = new Set([27, 45, 61, 12]);
+  const complete = new Set([27, 45, 61, 12, 56]);
+
+  assert.equal(isWinningCard(card, almostComplete, activePattern), false);
+  assert.equal(isWinningCard(card, complete, activePattern), true);
+  assert.deepEqual(cardProgress(card, almostComplete, activePattern), {
+    completed: 4,
+    total: 5,
+    progress: 0.8,
+  });
+  assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
+});
+
+test("separa dos cuadrículas escaneadas por sus líneas", () => {
+  const width = 1_000;
+  const height = 800;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  const drawGrid = (left: number) => {
+    for (let line = 0; line <= 5; line += 1) {
+      const x = left + line * 80;
+      const y = 50 + line * 100;
+      for (let thickness = -1; thickness <= 1; thickness += 1) {
+        for (let row = 50; row <= 550; row += 1) drawPixel(x + thickness, row);
+        for (let column = left; column <= left + 400; column += 1) {
+          drawPixel(column, y + thickness);
+        }
+      }
+    }
+  };
+  drawGrid(50);
+  drawGrid(550);
+
+  const rectangles = detectGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 2);
+  assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [50, 550]);
+});
+
+test("detecta los ocho cartones compactos de una hoja escaneada", () => {
+  const width = 1_000;
+  const height = 1_400;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  for (let row = 0; row < 4; row += 1) {
+    for (let column = 0; column < 2; column += 1) {
+      const left = 70 + column * 455;
+      const top = 260 + row * 260;
+      const rectangleWidth = 405;
+      const rectangleHeight = 225;
+      for (let x = left; x <= left + rectangleWidth; x += 1) {
+        drawPixel(x, top);
+        drawPixel(x, top + rectangleHeight);
+      }
+      for (let y = top; y <= top + rectangleHeight; y += 1) {
+        drawPixel(left, y);
+        drawPixel(left + rectangleWidth, y);
+      }
+    }
+  }
+
+  const rectangles = detectCompactRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 8);
+});
+
+test("reconstruye una tabla desde símbolos OCR ubicados por celda", () => {
+  const words: OcrBlock["paragraphs"][number]["lines"][number]["words"] = [];
+  baseGrid.forEach((value, index) => {
+    if (!value) return;
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const text = String(value);
+    const symbols = [...text].map((digit, digitIndex) => ({
+      text: digit,
+      confidence: 98,
+      bbox: {
+        x0: column * 100 + 32 + digitIndex * 18,
+        y0: row * 100 + 24,
+        x1: column * 100 + 47 + digitIndex * 18,
+        y1: row * 100 + 78,
+      },
+    }));
+    words.push({
+      text,
+      confidence: 98,
+      bbox: {
+        x0: symbols[0].bbox.x0,
+        y0: symbols[0].bbox.y0,
+        x1: symbols[symbols.length - 1].bbox.x1,
+        y1: symbols[0].bbox.y1,
+      },
+      symbols,
+    });
+  });
+  const blocks: OcrBlock[] = [{ paragraphs: [{ lines: [{ words }] }] }];
+
+  const grid = extractGridFromKnownOcrBlocks(blocks, 500, 500);
+
+  assert.deepEqual(grid, baseGrid);
 });

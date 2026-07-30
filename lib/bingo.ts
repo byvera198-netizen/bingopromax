@@ -230,6 +230,21 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
   },
 ];
 
+export const COMPACT_CARD_PATTERN: BingoPattern = {
+  id: "sabrosito-completo",
+  name: "Sabrosito completo",
+  description: "Los cinco números del cartón Sabrosito.",
+  color: "#d7ff3f",
+  category: "Especial",
+  difficulty: "Media",
+  cells: [0, 1, 2, 3, 4],
+  variants: [[0, 1, 2, 3, 4]],
+};
+
+export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
+  return card.grid.length === 5 ? COMPACT_CARD_PATTERN : activePattern;
+}
+
 export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
   const found = [...BUILTIN_PATTERNS, ...customPatterns].find(
     (pattern) => pattern.id === game.activePatternId,
@@ -250,7 +265,8 @@ export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
 }
 
 export function cardProgress(card: BingoCard, called: Set<number>, pattern: BingoPattern) {
-  const results = pattern.variants.map((variant) => {
+  const cardPattern = patternForCard(card, pattern);
+  const results = cardPattern.variants.map((variant) => {
     const required = variant.filter((cell) => card.grid[cell] !== 0);
     const completed = required.filter((cell) => called.has(card.grid[cell])).length;
     return {
@@ -268,7 +284,8 @@ export function cardProgress(card: BingoCard, called: Set<number>, pattern: Bing
 
 export function isWinningCard(card: BingoCard, called: Set<number>, pattern: BingoPattern) {
   if (card.status !== "active") return false;
-  return pattern.variants.some((variant) =>
+  const cardPattern = patternForCard(card, pattern);
+  return cardPattern.variants.some((variant) =>
     variant.every((cell) => card.grid[cell] === 0 || called.has(card.grid[cell])),
   );
 }

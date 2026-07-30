@@ -226,6 +226,13 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .bingo-cell:disabled:not(.marked) { cursor: default; }
 .bingo-grid.compact .bingo-cell { font-size: clamp(7px, .7vw, 10px); }
 .bingo-grid.compact .bingo-cell.marked { box-shadow: 0 3px 10px rgba(160,195,23,.1); }
+.compact-card-grid { display: grid; gap: 9px; }
+.compact-card-title { color: var(--lime); font-size: 8px; font-weight: 850; letter-spacing: .16em; text-align: center; }
+.compact-number-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px 13%; }
+.compact-number-grid .bingo-cell { border-radius: 50%; font-size: clamp(9px, .9vw, 13px); font-weight: 750; }
+.compact-number-grid .bingo-cell:nth-child(4) { grid-column: 1; }
+.compact-number-grid .bingo-cell:nth-child(5) { grid-column: 3; }
+.compact-card-grid.compact .compact-number-grid .bingo-cell.marked { box-shadow: 0 3px 12px rgba(160,195,23,.14); }
 .ticket-progress { display: grid; grid-template-columns: 1fr 34px; align-items: center; gap: 8px; margin-top: 12px; }.ticket-progress b { font-family: var(--font-geist-mono); font-size: 8px; text-align: right; }
 .card-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: -2px 0 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 8px; }
 .card-legend span { display: flex; align-items: center; gap: 6px; }

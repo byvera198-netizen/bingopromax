@@ -50,6 +50,7 @@ import {
   formatDuration,
   getActivePattern,
   isWinningCard,
+  patternForCard,
   validateCardGrid,
   type AppState,
   type BingoCard,
@@ -129,6 +130,29 @@ function BingoGrid({
   selected?: number[];
   onCellClick?: (index: number) => void;
 }) {
+  if (grid?.length === 5) {
+    return (
+      <div className={`compact-card-grid ${compact ? "compact" : ""}`}>
+        <span className="compact-card-title">SABROSITO</span>
+        <div className="compact-number-grid">
+          {grid.map((value, index) => {
+            const marked = Boolean(called?.has(value));
+            return (
+              <button
+                aria-label={`Número ${value}`}
+                className={`bingo-cell target ${marked ? "marked" : ""}`}
+                disabled
+                key={`${index}-${value}`}
+                type="button"
+              >
+                {value}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={`bingo-grid ${compact ? "compact" : ""} ${editable ? "editable" : ""}`}>
       {BINGO.map((letter) => <span className="bingo-head" key={letter}>{letter}</span>)}
@@ -377,17 +401,23 @@ export default function Home() {
         const nextCalled = new Set(called);
         nextCalled.add(number);
         const winnerKeys = new Set(state.winners.map((winner) => `${winner.cardId}:${winner.patternId}`));
-        const detected = state.cards
-          .filter((card) => isWinningCard(card, nextCalled, activePattern))
-          .filter((card) => !winnerKeys.has(`${card.id}:${activePattern.id}`))
-          .map<Winner>((card) => ({
+        const detected = state.cards.flatMap<Winner>((card) => {
+          const winningPattern = patternForCard(card, activePattern);
+          if (
+            !isWinningCard(card, nextCalled, activePattern) ||
+            winnerKeys.has(`${card.id}:${winningPattern.id}`)
+          ) {
+            return [];
+          }
+          return [{
             id: crypto.randomUUID(),
             cardId: card.id,
             cardNumber: card.number,
-            patternId: activePattern.id,
-            patternName: activePattern.name,
+            patternId: winningPattern.id,
+            patternName: winningPattern.name,
             validatedAt: result.draw.drawnAt,
-          }));
+          }];
+        });
         setState((current) =>
           current
             ? {
