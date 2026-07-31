@@ -70,7 +70,10 @@ export interface Membership {
   id: string;
   email: string;
   name: string;
-  plan: "six-months" | "annual";
+  plan: "six-months" | "annual" | "custom";
+  months: number;
+  accessCode?: string;
+  activationVerified: boolean;
   status: "pending" | "approved" | "rejected" | "expired";
   requestedAt: string;
   approvedAt?: string | null;

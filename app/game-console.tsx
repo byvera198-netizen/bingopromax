@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   Menu,
+  MessageCircle,
   Moon,
   MoreHorizontal,
   Pause,
@@ -71,7 +72,7 @@ type Toast = { id: string; tone: "success" | "warning" | "error"; message: strin
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
-const ADMIN_EMAIL = "byvera198@gmail.com";
+const WHATSAPP_NUMBER = "593985280991";
 
 function deviceId() {
   const key = "bingo-device-id";
@@ -375,7 +376,8 @@ export default function GameConsole() {
   const [patternColor, setPatternColor] = useState("#d7ff3f");
   const [gameDraft, setGameDraft] = useState({ name: "", date: "", prize: "", notes: "" });
   const [membershipName, setMembershipName] = useState("");
-  const [membershipPlan, setMembershipPlan] = useState<Membership["plan"]>("six-months");
+  const [activationCode, setActivationCode] = useState("");
+  const [membershipMonths, setMembershipMonths] = useState<Record<string, number>>({});
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -449,7 +451,7 @@ export default function GameConsole() {
           },
         });
         if (authError) throw authError;
-        setAuthMessage("Revisa tu correo para confirmar la cuenta. Después podrás solicitar la aprobación del administrador.");
+        setAuthMessage("Cuenta creada. Ahora solicita al administrador la activación de tu membresía.");
       } else if (authMode === "recover") {
         const { error: authError } = await supabase.auth.resetPasswordForEmail(
           authEmail.trim(),
@@ -478,26 +480,38 @@ export default function GameConsole() {
       return;
     }
     try {
-      const result = await api<{ adminEmail: string; subject: string }>({
+      const result = await api<{ adminEmail: string; subject: string; accessCode: string }>({
         action: "requestMembership",
         email: access.email,
         name: membershipName.trim(),
-        plan: membershipPlan,
       });
-      const price = membershipPlan === "annual" ? "$10 anual" : "$5 por 6 meses";
-      window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(`Solicito activar mi cuenta de Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${access.email}\nPlan: ${price}`)}`, "_self");
+      window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(`Nueva solicitud de acceso a Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${access.email}\nCódigo de acceso: ${result.accessCode}\n\nLa duración de la membresía será definida por el administrador.`)}`, "_self");
       setAccess({ ...access, role: "pending", reason: "Solicitud enviada. Espera la aprobación del administrador." });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo enviar la solicitud.");
     }
   };
 
+  const activateMembership = async () => {
+    if (activationCode.trim().length !== 6) {
+      setError("Escribe el código de acceso de 6 dígitos.");
+      return;
+    }
+    try {
+      await api({ action: "activateMembership", accessCode: activationCode.trim() });
+      await refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No se pudo activar la membresía.");
+    }
+  };
+
   const manageMembership = async (membership: Membership, action: "approveMembership" | "rejectMembership" | "resetMembershipDevice") => {
     try {
-      const result = await api<{ email?: string; expiresAt?: string }>({ action, membershipId: membership.id });
+      const months = membershipMonths[membership.id] ?? membership.months ?? 1;
+      const result = await api<{ email?: string; expiresAt?: string; accessCode?: string; months?: number }>({ action, membershipId: membership.id, months });
       await refresh(true);
       if (action === "approveMembership" && result.email) {
-        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Cuenta activada - Bingo Control Pro")}&body=${encodeURIComponent(`Tu cuenta fue aprobada.\nPlan: ${membership.plan === "annual" ? "Anual ($10)" : "6 meses ($5)"}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\n\nIngresa a Bingo Control Pro con este mismo correo. El primer dispositivo quedará vinculado a tu cuenta.`)}`, "_self");
+        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Membresía aprobada - Bingo Control Pro")}&body=${encodeURIComponent(`Tu membresía fue aprobada por ${result.months} mes(es).\nCódigo de acceso: ${result.accessCode}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\n\nIngresa el código en Bingo Control Pro. El primer dispositivo quedará vinculado a tu cuenta.`)}`, "_self");
       }
       notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
     } catch (caught) {
@@ -1301,7 +1315,7 @@ export default function GameConsole() {
           </form>
           {authMode === "login" && <button className="auth-link" onClick={() => { setAuthMode("recover"); setAuthMessage(""); }} type="button">¿Olvidaste tu contraseña?</button>}
           {authMode === "recover" && <button className="auth-link" onClick={() => { setAuthMode("login"); setAuthMessage(""); }} type="button">Volver al inicio de sesión</button>}
-          <small>La única cuenta administradora es <strong>{ADMIN_EMAIL}</strong>. Los demás registros requieren aprobación y funcionan en un solo dispositivo.</small>
+          <small>Los registros nuevos son cuentas de usuario. Solo el administrador puede aprobar membresías y cada cuenta funciona en un único dispositivo.</small>
         </section>
       </main>
     );
@@ -1317,7 +1331,10 @@ export default function GameConsole() {
   }
 
   if (access && !access.allowed) {
-    const pending = access.role === "pending";
+    const pending = access.membership?.status === "pending";
+    const awaitingCode = access.membership?.status === "approved" && !access.membership.activationVerified;
+    const canRequest = !access.membership || access.membership.status === "rejected" || access.membership.status === "expired";
+    const whatsappMessage = encodeURIComponent(`Hola, solicito ${access.membership?.status === "expired" ? "renovar" : "activar"} mi cuenta de Bingo Control Pro.\nCorreo: ${access.email}`);
     return (
       <main className="membership-screen">
         <section className="membership-card">
@@ -1326,21 +1343,24 @@ export default function GameConsole() {
             <div><strong>BINGO</strong><small>CONTROL PRO</small></div>
           </div>
           <span className="eyebrow"><ShieldCheck size={14} /> ACCESO POR MEMBRESÍA</span>
-          <h1>{pending ? "Tu acceso está en revisión" : "Solicita tu acceso"}</h1>
+          <h1>{awaitingCode ? "Ingresa tu código de acceso" : pending ? "Tu acceso está en revisión" : "Solicita tu acceso"}</h1>
           <p>{access.reason || "El administrador debe aprobar tu cuenta antes de ingresar."}</p>
           <div className="membership-email"><UserRound size={17} /><span>{access.email}</span></div>
-          {!pending && (
+          {canRequest && (
             <div className="form-stack">
               <label>Nombre completo<input onChange={(event) => setMembershipName(event.target.value)} placeholder="Tu nombre" value={membershipName} /></label>
-              <div className="membership-plans">
-                <button className={membershipPlan === "six-months" ? "active" : ""} onClick={() => setMembershipPlan("six-months")} type="button"><strong>6 meses</strong><span>$5</span></button>
-                <button className={membershipPlan === "annual" ? "active" : ""} onClick={() => setMembershipPlan("annual")} type="button"><strong>1 año</strong><span>$10</span></button>
-              </div>
               <button className="primary-button" onClick={() => void requestMembership()} type="button">Solicitar aprobación</button>
             </div>
           )}
+          {awaitingCode && (
+            <div className="form-stack">
+              <label>Código de acceso<input inputMode="numeric" maxLength={6} onChange={(event) => setActivationCode(event.target.value.replace(/\D/g, ""))} placeholder="000000" value={activationCode} /></label>
+              <button className="primary-button" onClick={() => void activateMembership()} type="button">Activar membresía</button>
+            </div>
+          )}
+          <a className="whatsapp-button" href={`https://wa.me/${WHATSAPP_NUMBER}?text=${whatsappMessage}`} rel="noreferrer" target="_blank">Solicitar activación o renovación por WhatsApp</a>
           {error && <div className="membership-error">{error}</div>}
-          <small>Administración y pagos: <a href={`mailto:${ADMIN_EMAIL}`}>{ADMIN_EMAIL}</a>. Cada cuenta funciona en un solo dispositivo.</small>
+          <small>WhatsApp de atención: <a href={`https://wa.me/${WHATSAPP_NUMBER}`} rel="noreferrer" target="_blank">+593 98 528 0991</a>. Solo el administrador puede otorgar o renovar membresías.</small>
         </section>
       </main>
     );
@@ -1813,7 +1833,7 @@ export default function GameConsole() {
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
                 <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Usuarios y membresías</h2><p>Aprueba solicitudes, controla la vigencia y restablece el dispositivo autorizado.</p></div>
-                <a className="secondary-button" href={`mailto:${ADMIN_EMAIL}`}><FileText size={16} /> Correo administrador</a>
+                <a className="secondary-button" href={`https://wa.me/${WHATSAPP_NUMBER}`} rel="noreferrer" target="_blank"><MessageCircle size={16} /> WhatsApp de soporte</a>
               </div>
               <div className="membership-stats">
                 <StatCard accent="amber" detail="Requieren revisión" icon={Clock3} label="Pendientes" value={(state.memberships ?? []).filter((item) => item.status === "pending").length} />
@@ -1827,8 +1847,9 @@ export default function GameConsole() {
                     <article key={membership.id}>
                       <span className={`membership-status status-${membership.status}`}>{membership.status}</span>
                       <div><strong>{membership.name || "Sin nombre"}</strong><small>{membership.email}</small></div>
-                      <div><b>{membership.plan === "annual" ? "Anual · $10" : "6 meses · $5"}</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small></div>
+                      <div><b>{membership.months || 1} mes(es)</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : `Código: ${membership.accessCode || "pendiente"}`}</small></div>
                       <div className="membership-actions">
+                        {membership.status !== "approved" && <label className="months-control"><span>Meses</span><input min={1} max={120} onChange={(event) => setMembershipMonths((current) => ({ ...current, [membership.id]: Math.max(1, Math.min(120, Number(event.target.value) || 1)) }))} type="number" value={membershipMonths[membership.id] ?? membership.months ?? 1} /></label>}
                         {membership.status !== "approved" && <button className="primary-button compact" onClick={() => void manageMembership(membership, "approveMembership")} type="button">Aprobar</button>}
                         {membership.deviceBound && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resetMembershipDevice")} type="button">Cambiar dispositivo</button>}
                         {membership.status === "pending" && <button className="ghost-button compact" onClick={() => void manageMembership(membership, "rejectMembership")} type="button">Rechazar</button>}

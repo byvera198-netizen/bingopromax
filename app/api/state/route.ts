@@ -22,12 +22,15 @@ const SUPABASE_URL = "https://mnshvsxhntqsmzbvomhe.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_DBOaxRwgSRDSmdBtTEKTsQ_GB_sT8ZA";
 
-function mapMembership(row: Record<string, unknown>): Membership {
+function mapMembership(row: Record<string, unknown>, includeCode = false): Membership {
   return {
     id: String(row.id),
     email: String(row.email),
     name: String(row.name ?? ""),
     plan: String(row.plan) as Membership["plan"],
+    months: Number(row.membership_months ?? 1),
+    accessCode: includeCode && row.access_code ? String(row.access_code) : undefined,
+    activationVerified: Boolean(row.activation_verified),
     status: String(row.status) as Membership["status"],
     requestedAt: String(row.requested_at),
     approvedAt: row.approved_at ? String(row.approved_at) : null,
@@ -64,6 +67,9 @@ async function authorize(db: D1, request: Request) {
   const membership = mapMembership(row);
   if (membership.status !== "approved") {
     return { allowed: false, role: "pending" as const, email, reason: "Tu solicitud está pendiente de aprobación.", membership };
+  }
+  if (!membership.activationVerified) {
+    return { allowed: false, role: "pending" as const, email, reason: "Tu membresía fue aprobada. Ingresa el código de acceso enviado por el administrador.", membership };
   }
   if (!membership.expiresAt || new Date(membership.expiresAt).getTime() <= Date.now()) {
     await db.prepare("UPDATE memberships SET status = 'expired' WHERE id = ?").bind(membership.id).run();
@@ -138,6 +144,9 @@ const schemaStatements = [
     email TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL DEFAULT '',
     plan TEXT NOT NULL,
+    membership_months INTEGER NOT NULL DEFAULT 1,
+    access_code TEXT,
+    activation_verified INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     device_id TEXT,
     requested_at TEXT NOT NULL,
@@ -183,6 +192,17 @@ const schemaStatements = [
 
 async function ensureSchema(db: D1) {
   await db.batch(schemaStatements.map((statement) => db.prepare(statement)));
+  for (const statement of [
+    "ALTER TABLE memberships ADD COLUMN membership_months INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE memberships ADD COLUMN access_code TEXT",
+    "ALTER TABLE memberships ADD COLUMN activation_verified INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      await db.prepare(statement).run();
+    } catch {
+      // The column already exists.
+    }
+  }
 }
 
 async function audit(db: D1, gameId: string | null, action: string, detail: string, actor: string) {
@@ -322,7 +342,7 @@ export async function GET(request: Request) {
         createdAt: String(row.created_at),
       })),
       access,
-      memberships: (membershipRows.results ?? []).map(mapMembership),
+      memberships: (membershipRows.results ?? []).map((row) => mapMembership(row, true)),
     });
   } catch (error) {
     return Response.json(
@@ -354,22 +374,53 @@ export async function POST(request: Request) {
       const user = (await userResponse.json()) as { email?: string };
       const email = (user.email || "").trim().toLowerCase();
       const name = String(body.name ?? "").trim();
-      const plan = body.plan === "annual" ? "annual" : "six-months";
+      const accessCode = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
       if (!email || !email.includes("@")) return Response.json({ error: "Correo inválido." }, { status: 400 });
       await db
         .prepare(
-          `INSERT INTO memberships (id, email, name, plan, status, requested_at)
-           VALUES (?, ?, ?, ?, 'pending', ?)
-           ON CONFLICT(email) DO UPDATE SET name = excluded.name, plan = excluded.plan,
+          `INSERT INTO memberships (
+             id, email, name, plan, membership_months, access_code,
+             activation_verified, status, requested_at
+           )
+           VALUES (?, ?, ?, 'custom', 1, ?, 0, 'pending', ?)
+           ON CONFLICT(email) DO UPDATE SET name = excluded.name,
+             access_code = excluded.access_code, activation_verified = 0,
              status = 'pending', requested_at = excluded.requested_at`,
         )
-        .bind(crypto.randomUUID(), email, name, plan, now())
+        .bind(crypto.randomUUID(), email, name, accessCode, now())
         .run();
       return Response.json({
         ok: true,
         adminEmail: ADMIN_EMAIL,
+        accessCode,
         subject: `Solicitud de membresía Bingo Control - ${email}`,
       });
+    }
+
+    if (action === "activateMembership") {
+      const authorization = request.headers.get("authorization") || "";
+      if (!authorization.startsWith("Bearer ")) {
+        return Response.json({ error: "Inicia sesión para activar tu membresía." }, { status: 401 });
+      }
+      const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
+      });
+      if (!userResponse.ok) return Response.json({ error: "La sesión ha expirado." }, { status: 401 });
+      const user = (await userResponse.json()) as { email?: string };
+      const email = (user.email || "").trim().toLowerCase();
+      const accessCode = String(body.accessCode ?? "").trim();
+      const membership = await db
+        .prepare("SELECT status, access_code FROM memberships WHERE email = ?")
+        .bind(email)
+        .first<{ status: string; access_code: string | null }>();
+      if (!membership || membership.status !== "approved") {
+        return Response.json({ error: "El administrador aún no ha aprobado tu membresía." }, { status: 403 });
+      }
+      if (!membership.access_code || membership.access_code !== accessCode) {
+        return Response.json({ error: "El código de acceso no es correcto." }, { status: 400 });
+      }
+      await db.prepare("UPDATE memberships SET activation_verified = 1 WHERE email = ?").bind(email).run();
+      return Response.json({ ok: true });
     }
 
     const access = await authorize(db, request);
@@ -381,15 +432,15 @@ export async function POST(request: Request) {
       const membershipId = String(body.membershipId ?? "");
       const membership = await db.prepare("SELECT * FROM memberships WHERE id = ?").bind(membershipId).first<Record<string, unknown>>();
       if (!membership) return Response.json({ error: "Solicitud no encontrada." }, { status: 404 });
-      const months = String(membership.plan) === "annual" ? 12 : 6;
+      const months = Math.max(1, Math.min(120, Math.trunc(Number(body.months) || 1)));
       const approvedAt = new Date();
       const expiresAt = new Date(approvedAt);
       expiresAt.setMonth(expiresAt.getMonth() + months);
       await db
-        .prepare("UPDATE memberships SET status = 'approved', approved_at = ?, expires_at = ?, device_id = NULL WHERE id = ?")
-        .bind(approvedAt.toISOString(), expiresAt.toISOString(), membershipId)
+        .prepare("UPDATE memberships SET status = 'approved', membership_months = ?, approved_at = ?, expires_at = ?, activation_verified = 0, device_id = NULL WHERE id = ?")
+        .bind(months, approvedAt.toISOString(), expiresAt.toISOString(), membershipId)
         .run();
-      return Response.json({ ok: true, email: String(membership.email), expiresAt: expiresAt.toISOString() });
+      return Response.json({ ok: true, email: String(membership.email), accessCode: String(membership.access_code ?? ""), months, expiresAt: expiresAt.toISOString() });
     }
 
     if (action === "rejectMembership") {
