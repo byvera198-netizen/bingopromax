@@ -117,6 +117,33 @@ test("usa la numeración impresa del borde aunque no incluya la palabra Tab", ()
   assert.doesNotMatch(cards[0]?.number ?? "", /CamScanner/i);
 });
 
+test("nunca acepta texto OCR como número de cartón", () => {
+  const items: PdfTextItem[] = [
+    { str: "Tab#es", transform: [1, 0, 0, 1, 40, 734], width: 58, height: 12 },
+  ];
+  for (let row = 0; row < 5; row += 1) {
+    items.push({ str: rowText(baseGrid, row), transform: [1, 0, 0, 1, 40, 700 - row * 28], width: 150, height: 12 });
+  }
+  const cards = extractCardsFromTextItems(items, "escaneo.pdf", 1);
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].number, /^SIN-ID-/);
+});
+
+test("rechaza una cuadrícula OCR que mezcla las columnas BINGO", () => {
+  const mixed = [
+    41, 32, 11, 8, 15,
+    24, 26, 69, 35, 71,
+    6, 19, 0, 53, 67,
+    5, 59, 49, 54, 46,
+    40, 51, 7, 25, 10,
+  ];
+  const items: PdfTextItem[] = [];
+  for (let row = 0; row < 5; row += 1) {
+    items.push({ str: rowText(mixed, row), transform: [1, 0, 0, 1, 40, 700 - row * 28], width: 150, height: 12 });
+  }
+  assert.equal(extractCardsFromTextItems(items, "inconsistente.pdf", 1).length, 0);
+});
+
 test("un cartón ganador permanece elegible para un patrón distinto", () => {
   const card: BingoCard = {
     id: "card-1",

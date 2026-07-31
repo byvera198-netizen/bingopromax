@@ -415,10 +415,14 @@ export function validateCardGrid(grid: number[]) {
   const errors: string[] = [];
   if (grid.length !== 25) errors.push("La cuadrícula debe tener 25 casillas.");
   const nonFree = grid.filter((number) => number !== 0);
-  if (nonFree.some((number) => !Number.isInteger(number) || number < 1 || number > 90)) {
-    errors.push("Los números deben estar entre 1 y 90.");
+  if (nonFree.some((number) => !Number.isInteger(number) || number < 1 || number > 75)) {
+    errors.push("Los números deben estar entre 1 y 75.");
   }
   if (new Set(nonFree).size !== nonFree.length) errors.push("El cartón contiene números repetidos.");
+  const ranges = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
+  if (grid.length === 25 && grid.some((number, index) => number !== 0 && (number < ranges[index % 5][0] || number > ranges[index % 5][1]))) {
+    errors.push("Las columnas deben respetar los rangos B, I, N, G y O.");
+  }
   return errors;
 }
 

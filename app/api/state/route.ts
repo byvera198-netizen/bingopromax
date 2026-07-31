@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { BingoCard, BingoPattern, Game, Membership, Winner } from "@/lib/bingo";
+import { validateCardGrid, type BingoCard, type BingoPattern, type Game, type Membership, type Winner } from "@/lib/bingo";
 
 export const dynamic = "force-dynamic";
 
@@ -563,7 +563,11 @@ export async function POST(request: Request) {
         .bind(gameId)
         .all<{ number: string }>();
       const numbers = new Set((existing.results ?? []).map((row) => row.number));
-      const accepted = cards.filter((card) => !numbers.has(card.number));
+      const accepted = cards.filter((card) =>
+        !numbers.has(card.number) &&
+        !card.number.startsWith("SIN-ID-") &&
+        validateCardGrid(card.grid).length === 0,
+      );
       const duplicates = cards.length - accepted.length;
       if (accepted.length) {
         await db.batch(

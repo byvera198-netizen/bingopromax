@@ -484,6 +484,10 @@ function gridQuality(grid: number[]) {
     standardTotal += 1;
     if (grid[index] >= minimum && grid[index] <= maximum) standardMatches += 1;
   }
+  // Un cartón clásico de 75 bolillas debe conservar las columnas
+  // B=1-15, I=16-30, N=31-45, G=46-60 y O=61-75. Si el OCR mezcla
+  // filas o columnas, es más seguro rechazarlo que guardar otro cartón.
+  if (standardMatches !== standardTotal) return -1;
   score += standardTotal ? (standardMatches / standardTotal) * 7 : 0;
   return score;
 }
@@ -519,7 +523,7 @@ function tokensFromTextItems(items: PdfTextItem[]) {
 function identifiersFromTextItems(items: PdfTextItem[]) {
   const identifiers: Identifier[] = [];
   const expression =
-    /(?:tab|cart[oó]n|tabla|ticket|serie)\s*(?:n(?:úm(?:ero)?)?\.?|n[°ºo]?|#)?\s*[:\-]?\s*([a-z0-9][a-z0-9._-]{0,23})/giu;
+    /(?:tab|cart[oó]n|tabla|ticket|serie)\s*(?:n(?:úm(?:ero)?)?\.?|n[°ºo]?|#)?\s*[:\-]?\s*(\d{1,12}(?:-\d{1,3})?)/giu;
   for (const item of items) {
     if (item.transform.length < 6) continue;
     for (const match of item.str.matchAll(expression)) {

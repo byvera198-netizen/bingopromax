@@ -977,7 +977,12 @@ export default function GameConsole() {
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const uniqueCards = parsed.cards
+        const unidentified = parsed.cards.filter((card) => card.number.startsWith("SIN-ID-"));
+        if (unidentified.length) {
+          warnings.push(`${file.name}: ${unidentified.length} cartón(es) fueron omitidos porque no se pudo leer su numeración impresa.`);
+        }
+        const identifiedCards = parsed.cards.filter((card) => !card.number.startsWith("SIN-ID-"));
+        const uniqueCards = identifiedCards
           .filter((card) => !signatures.has(card.grid.join(",")))
           .map((card, index) => {
             signatures.add(card.grid.join(","));
@@ -989,7 +994,7 @@ export default function GameConsole() {
             usedNumbers.add(number.toLowerCase());
             return { ...card, number };
           });
-        duplicateCount += parsed.cards.length - uniqueCards.length;
+        duplicateCount += identifiedCards.length - uniqueCards.length;
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
           continue;
