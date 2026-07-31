@@ -257,8 +257,8 @@ function CardPreview({
     <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
       <header>
         <div>
-          <span>Cartón</span>
-          <strong>#{card.number}</strong>
+          <span>Tabla</span>
+          <strong>Tab#{card.number}</strong>
         </div>
         <div className="ticket-actions">
           <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>

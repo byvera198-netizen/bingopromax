@@ -75,6 +75,31 @@ test("detecta cuatro cartones cuando cada fila del PDF es un solo bloque de text
   });
 });
 
+test("conserva la numeración Tab# del PDF aunque el texto venga separado", () => {
+  const items: PdfTextItem[] = [];
+  [
+    { x: 40, number: "87019-1" },
+    { x: 330, number: "87019-2" },
+  ].forEach((placement, cardIndex) => {
+    items.push(
+      { str: "Tab#", transform: [1, 0, 0, 1, placement.x, 734], width: 28, height: 12 },
+      { str: placement.number, transform: [1, 0, 0, 1, placement.x + 30, 734], width: 52, height: 12 },
+    );
+    const grid = baseGrid.map((value) => value ? value + (cardIndex && value < 15 ? 1 : 0) : 0);
+    for (let row = 0; row < 5; row += 1) {
+      items.push({
+        str: rowText(grid, row),
+        transform: [1, 0, 0, 1, placement.x, 700 - row * 28],
+        width: 150,
+        height: 12,
+      });
+    }
+  });
+
+  const cards = extractCardsFromTextItems(items, "tabs.pdf", 1);
+  assert.deepEqual(cards.map((card) => card.number), ["87019-1", "87019-2"]);
+});
+
 test("un cartón ganador permanece elegible para un patrón distinto", () => {
   const card: BingoCard = {
     id: "card-1",

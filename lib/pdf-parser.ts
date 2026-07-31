@@ -519,7 +519,7 @@ function tokensFromTextItems(items: PdfTextItem[]) {
 function identifiersFromTextItems(items: PdfTextItem[]) {
   const identifiers: Identifier[] = [];
   const expression =
-    /(?:cart[oó]n|tabla|ticket|serie)\s*(?:n(?:úm(?:ero)?)?\.?|n[°ºo]?|#)?\s*[:\-]?\s*([a-z0-9][a-z0-9._-]{0,23})/giu;
+    /(?:tab|cart[oó]n|tabla|ticket|serie)\s*(?:n(?:úm(?:ero)?)?\.?|n[°ºo]?|#)?\s*[:\-]?\s*([a-z0-9][a-z0-9._-]{0,23})/giu;
   for (const item of items) {
     if (item.transform.length < 6) continue;
     for (const match of item.str.matchAll(expression)) {
@@ -530,7 +530,42 @@ function identifiersFromTextItems(items: PdfTextItem[]) {
       });
     }
   }
-  return identifiers;
+  const positioned = items
+    .filter((item) => item.transform.length >= 6 && item.str.trim())
+    .map((item) => ({ item, x: item.transform[4], y: item.transform[5] }))
+    .sort((a, b) => b.y - a.y || a.x - b.x);
+  const rows: typeof positioned[] = [];
+  for (const entry of positioned) {
+    const row = rows.find((candidate) => Math.abs(candidate[0].y - entry.y) <= 4);
+    if (row) row.push(entry);
+    else rows.push([entry]);
+  }
+  for (const row of rows) {
+    row.sort((a, b) => a.x - b.x);
+    for (let index = 0; index < row.length; index += 1) {
+      const group = [row[index]];
+      for (let offset = 1; offset < 3 && index + offset < row.length; offset += 1) {
+        const previous = group[group.length - 1];
+        const next = row[index + offset];
+        const gap = next.x - (previous.x + (Number(previous.item.width) || 0));
+        if (gap > 80) break;
+        group.push(next);
+      }
+      const combined = group.map((entry) => entry.item.str.trim()).join("");
+      for (const match of combined.matchAll(expression)) {
+        identifiers.push({ value: match[1], x: group[0].x, y: group[0].y });
+      }
+    }
+  }
+  return identifiers.filter(
+    (identifier, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.value.toLowerCase() === identifier.value.toLowerCase() &&
+          Math.abs(candidate.x - identifier.x) < 5 &&
+          Math.abs(candidate.y - identifier.y) < 5,
+      ) === index,
+  );
 }
 
 function groupIntoRows(numbers: PositionedNumber[]) {
@@ -763,8 +798,14 @@ function cardsFromDetectedGrids(
   return orderedGrids.map((detected, index) => ({
     id: crypto.randomUUID(),
     number:
-      orderedIdentifiers.length === orderedGrids.length
-        ? orderedIdentifiers[index].value
+      orderedIdentifiers.length >= orderedGrids.length
+        ? orderedIdentifiers
+            .filter((identifier) => identifier.y >= detected.y - 8)
+            .sort(
+              (a, b) =>
+                Math.abs(a.x - detected.x) - Math.abs(b.x - detected.x) ||
+                Math.abs(a.y - detected.y) - Math.abs(b.y - detected.y),
+            )[0]?.value ?? `${stem}-${String(page).padStart(3, "0")}-${index + 1}`
         : `${stem}-${String(page).padStart(3, "0")}-${index + 1}`,
     serial: "",
     grid: detected.grid,

@@ -229,13 +229,13 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ticket > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .ticket-actions { display: flex; align-items: center; gap: 5px; }
 .danger-button { color: var(--red) !important; }
-.ticket > header > div { min-width: 0; display: flex; flex-direction: column; }.ticket > header span { color: var(--muted); font-size: 7px; text-transform: uppercase; letter-spacing: .12em; }.ticket > header strong { overflow: hidden; margin-top: 2px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.ticket > header > div { min-width: 0; display: flex; flex-direction: column; }.ticket > header span { color: var(--muted); font-size: 7px; text-transform: uppercase; letter-spacing: .12em; }.ticket > header strong { overflow: hidden; margin-top: 2px; font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-wins { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: -2px 0 9px; padding: 6px 7px; border: 1px solid rgba(215,255,63,.2); border-radius: 7px; background: var(--lime-soft); color: var(--lime); }
 .ticket-wins span { overflow: hidden; color: var(--text); font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-wins b { font-size: 6px; text-transform: uppercase; letter-spacing: .08em; }
 .bingo-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
 .bingo-head { display: grid; place-items: center; height: 22px; color: var(--lime); font-size: 9px; font-weight: 800; }
-.bingo-cell { aspect-ratio: 1; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: 9px; }
+.bingo-cell { aspect-ratio: 1; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: 15px; font-weight: 700; }
 .bingo-cell.target { border-color: color-mix(in srgb, var(--lime), var(--line) 56%); }
 .bingo-cell.marked { border-color: var(--lime); background: var(--lime); color: #101309; font-weight: 800; }
 .bingo-cell:disabled { opacity: 1; }
@@ -243,7 +243,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .bingo-cell:disabled:not(.marked) { cursor: default; }
 .bingo-grid.hide-pending .bingo-cell:not(.marked):not(.target),
 .compact-card-grid.hide-pending .bingo-cell:not(.marked) { opacity: .16; }
-.bingo-grid.compact .bingo-cell { font-size: clamp(7px, .7vw, 10px); }
+.bingo-grid.compact .bingo-cell { font-size: clamp(12px, 1.05vw, 16px); }
 .bingo-grid.compact .bingo-cell.marked { box-shadow: 0 3px 10px rgba(160,195,23,.1); }
 .compact-card-grid { display: grid; gap: 9px; }
 .compact-card-title { color: var(--lime); font-size: 8px; font-weight: 850; letter-spacing: .16em; text-align: center; }
