@@ -18,6 +18,9 @@ type D1 = {
 const getDb = () => (env as unknown as { DB: D1 }).DB;
 const now = () => new Date().toISOString();
 const ADMIN_EMAIL = "byvera198@gmail.com";
+const SUPABASE_URL = "https://mnshvsxhntqsmzbvomhe.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY =
+  "sb_publishable_DBOaxRwgSRDSmdBtTEKTsQ_GB_sT8ZA";
 
 function mapMembership(row: Record<string, unknown>): Membership {
   return {
@@ -34,9 +37,24 @@ function mapMembership(row: Record<string, unknown>): Membership {
 }
 
 async function authorize(db: D1, request: Request) {
-  const email = (request.headers.get("oai-authenticated-user-email") || "").toLowerCase();
-  if (!email || email === ADMIN_EMAIL) {
-    return { allowed: true, role: "admin" as const, email: email || ADMIN_EMAIL };
+  const authorization = request.headers.get("authorization") || "";
+  if (!authorization.startsWith("Bearer ")) {
+    return { allowed: false, role: "anonymous" as const, email: "", reason: "Inicia sesión para continuar." };
+  }
+  const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+      authorization,
+    },
+  });
+  if (!userResponse.ok) {
+    return { allowed: false, role: "anonymous" as const, email: "", reason: "La sesión no es válida o ha expirado." };
+  }
+  const user = (await userResponse.json()) as { email?: string };
+  const email = (user.email || "").toLowerCase();
+  if (!email) return { allowed: false, role: "anonymous" as const, email: "", reason: "La cuenta no tiene un correo válido." };
+  if (email === ADMIN_EMAIL) {
+    return { allowed: true, role: "admin" as const, email };
   }
   const row = await db
     .prepare("SELECT * FROM memberships WHERE email = ?")
@@ -318,13 +336,23 @@ export async function POST(request: Request) {
   try {
     const db = getDb();
     await ensureSchema(db);
-    const actor = request.headers.get("oai-authenticated-user-email") || "Operador local";
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
     const gameId = body.gameId ? String(body.gameId) : null;
 
     if (action === "requestMembership") {
-      const email = (request.headers.get("oai-authenticated-user-email") || String(body.email ?? "")).trim().toLowerCase();
+      const authorization = request.headers.get("authorization") || "";
+      if (!authorization.startsWith("Bearer ")) {
+        return Response.json({ error: "Inicia sesión antes de solicitar acceso." }, { status: 401 });
+      }
+      const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
+      });
+      if (!userResponse.ok) {
+        return Response.json({ error: "La sesión no es válida o ha expirado." }, { status: 401 });
+      }
+      const user = (await userResponse.json()) as { email?: string };
+      const email = (user.email || "").trim().toLowerCase();
       const name = String(body.name ?? "").trim();
       const plan = body.plan === "annual" ? "annual" : "six-months";
       if (!email || !email.includes("@")) return Response.json({ error: "Correo inválido." }, { status: 400 });
@@ -346,6 +374,7 @@ export async function POST(request: Request) {
 
     const access = await authorize(db, request);
     if (!access.allowed) return Response.json({ error: access.reason, access }, { status: 403 });
+    const actor = access.email;
 
     if (action === "approveMembership") {
       if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede aprobar usuarios." }, { status: 403 });

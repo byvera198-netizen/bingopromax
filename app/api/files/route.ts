@@ -15,12 +15,23 @@ type Bucket = {
     options: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> },
   ) => Promise<unknown>;
 };
+const SUPABASE_URL = "https://mnshvsxhntqsmzbvomhe.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY =
+  "sb_publishable_DBOaxRwgSRDSmdBtTEKTsQ_GB_sT8ZA";
 
 export async function POST(request: Request) {
   try {
     const bindings = env as unknown as { DB: D1; FILES: Bucket };
-    const email = (request.headers.get("oai-authenticated-user-email") || "").toLowerCase();
-    if (email && email !== "byvera198@gmail.com") {
+    const authorization = request.headers.get("authorization") || "";
+    const userResponse = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, authorization },
+    });
+    if (!userResponse.ok) {
+      return Response.json({ error: "Inicia sesión para importar archivos." }, { status: 401 });
+    }
+    const user = (await userResponse.json()) as { email?: string };
+    const email = (user.email || "").toLowerCase();
+    if (email !== "byvera198@gmail.com") {
       const membership = await bindings.DB
         .prepare("SELECT status, expires_at, device_id FROM memberships WHERE email = ?")
         .bind(email)

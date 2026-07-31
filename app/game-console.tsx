@@ -45,6 +45,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import {
   BUILTIN_PATTERNS,
   COMPACT_CARD_PATTERN,
@@ -63,6 +64,7 @@ import {
   type Winner,
 } from "@/lib/bingo";
 import { fileChecksum, parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
@@ -82,9 +84,14 @@ function deviceId() {
 }
 
 async function api<T>(body: Record<string, unknown>): Promise<T> {
+  const authorization = await authorizationHeaders();
   const response = await fetch("/api/state", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-device-id": deviceId() },
+    headers: {
+      "content-type": "application/json",
+      "x-device-id": deviceId(),
+      ...authorization,
+    },
     body: JSON.stringify(body),
   });
   const payload = (await response.json()) as T & { error?: string };
@@ -327,6 +334,14 @@ function EmptyState({
 
 export default function GameConsole() {
   const [state, setState] = useState<AppState | null>(null);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register" | "recover" | "update">("login");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [access, setAccess] = useState<AccessState | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -342,8 +357,12 @@ export default function GameConsole() {
   const [search, setSearch] = useState("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [nowTick, setNowTick] = useState(0);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [sound, setSound] = useState(true);
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
+  );
+  const [sound, setSound] = useState(() =>
+    typeof window === "undefined" || localStorage.getItem("bingo-sound") !== "off",
+  );
   const [processingFiles, setProcessingFiles] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
@@ -372,9 +391,10 @@ export default function GameConsole() {
       setError("");
     }
     try {
+      const authorization = await authorizationHeaders();
       const response = await fetch("/api/state", {
         cache: "no-store",
-        headers: { "x-device-id": deviceId() },
+        headers: { "x-device-id": deviceId(), ...authorization },
       });
       const payload = (await response.json()) as AppState & { error?: string; access?: AccessState };
       if (response.status === 403 && payload.access) {
@@ -399,6 +419,58 @@ export default function GameConsole() {
       if (!silent) setLoading(false);
     }
   }, []);
+
+  const submitAuth = async () => {
+    if (!authEmail.trim() && authMode !== "update") {
+      setAuthMessage("Escribe un correo válido.");
+      return;
+    }
+    if ((authMode === "login" || authMode === "register" || authMode === "update") && authPassword.length < 8) {
+      setAuthMessage("La contraseña debe tener al menos 8 caracteres.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage("");
+    try {
+      if (authMode === "login") {
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        });
+        if (authError) throw authError;
+      } else if (authMode === "register") {
+        if (!authName.trim()) throw new Error("Escribe tu nombre completo.");
+        const { error: authError } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { name: authName.trim() },
+          },
+        });
+        if (authError) throw authError;
+        setAuthMessage("Revisa tu correo para confirmar la cuenta. Después podrás solicitar la aprobación del administrador.");
+      } else if (authMode === "recover") {
+        const { error: authError } = await supabase.auth.resetPasswordForEmail(
+          authEmail.trim(),
+          { redirectTo: `${window.location.origin}/?mode=reset` },
+        );
+        if (authError) throw authError;
+        setAuthMessage("Enviamos las instrucciones de recuperación a tu correo.");
+      } else {
+        const { error: authError } = await supabase.auth.updateUser({
+          password: authPassword,
+        });
+        if (authError) throw authError;
+        setAuthMode("login");
+        setAuthMessage("Contraseña guardada correctamente.");
+      }
+    } catch (caught) {
+      setAuthMessage(caught instanceof Error ? caught.message : "No se pudo completar el acceso.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   const requestMembership = async () => {
     if (!access?.email || !membershipName.trim()) {
@@ -434,13 +506,32 @@ export default function GameConsole() {
   };
 
   useEffect(() => {
-    // The initial API request hydrates the client-only game console.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh();
-    const savedTheme = localStorage.getItem("bingo-theme");
-    const savedSound = localStorage.getItem("bingo-sound");
-    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
-    if (savedSound === "off") setSound(false);
+    const bootstrapAuth = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      setAuthUser(session?.user ?? null);
+      setAuthReady(true);
+      const recovery =
+        window.location.hash.includes("type=invite") ||
+        window.location.hash.includes("type=recovery") ||
+        new URLSearchParams(window.location.search).get("mode") === "reset";
+      if (recovery) setAuthMode("update");
+      if (session) void refresh();
+    };
+    void bootstrapAuth();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      setAuthUser(session?.user ?? null);
+      if (event === "PASSWORD_RECOVERY") setAuthMode("update");
+      if (session) void refresh();
+      else {
+        setState(null);
+        setAccess(null);
+      }
+    });
+    return () => subscription.unsubscribe();
   }, [refresh]);
 
   useEffect(() => {
@@ -459,10 +550,10 @@ export default function GameConsole() {
 
   useEffect(() => {
     const sync = window.setInterval(() => {
-      if (document.visibilityState === "visible" && !processingFiles) void refresh(true);
+      if (authUser && document.visibilityState === "visible" && !processingFiles) void refresh(true);
     }, 4000);
     return () => window.clearInterval(sync);
-  }, [processingFiles, refresh]);
+  }, [authUser, processingFiles, refresh]);
 
   const game = state?.game;
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
@@ -881,6 +972,7 @@ export default function GameConsole() {
         });
         imported += result.accepted;
         duplicateCount += result.duplicates;
+        const authorization = await authorizationHeaders();
         const upload = await fetch("/api/files", {
           method: "POST",
           headers: {
@@ -891,6 +983,7 @@ export default function GameConsole() {
             "x-device-id": deviceId(),
             "x-pages": String(parsed.pages),
             "x-cards": String(result.accepted),
+            ...authorization,
           },
           body: file,
         });
@@ -1149,6 +1242,71 @@ export default function GameConsole() {
       : []),
   ];
 
+  if (!authReady) {
+    return (
+      <main className="loading-screen">
+        <div className="loading-mark"><span>B</span><i /></div>
+        <p>Verificando tu cuenta</p>
+      </main>
+    );
+  }
+
+  if (!authUser || authMode === "update") {
+    const title =
+      authMode === "register"
+        ? "Crear una cuenta"
+        : authMode === "recover"
+          ? "Recuperar acceso"
+          : authMode === "update"
+            ? "Define tu contraseña"
+            : "Bienvenido";
+    const description =
+      authMode === "register"
+        ? "Regístrate con un correo válido. El administrador aprobará tu acceso."
+        : authMode === "recover"
+          ? "Te enviaremos un enlace seguro para cambiar tu contraseña."
+          : authMode === "update"
+            ? "Escribe una contraseña nueva para completar la activación."
+            : "Inicia sesión para entrar a Bingo Control Pro.";
+    return (
+      <main className="auth-screen">
+        <section className="auth-card">
+          <div className="brand auth-brand">
+            <div className="brand-mark"><span>B</span><i /></div>
+            <div><strong>BINGO</strong><small>CONTROL PRO</small></div>
+          </div>
+          <span className="eyebrow"><ShieldCheck size={14} /> ACCESO SEGURO</span>
+          <h1>{title}</h1>
+          <p>{description}</p>
+          {authMode !== "update" && (
+            <div className="auth-tabs">
+              <button className={authMode === "login" ? "active" : ""} onClick={() => { setAuthMode("login"); setAuthMessage(""); }} type="button">Ingresar</button>
+              <button className={authMode === "register" ? "active" : ""} onClick={() => { setAuthMode("register"); setAuthMessage(""); }} type="button">Registrarse</button>
+            </div>
+          )}
+          <form className="form-stack auth-form" onSubmit={(event) => { event.preventDefault(); void submitAuth(); }}>
+            {authMode === "register" && (
+              <label>Nombre completo<input autoComplete="name" onChange={(event) => setAuthName(event.target.value)} placeholder="Nombre y apellido" value={authName} /></label>
+            )}
+            {authMode !== "update" && (
+              <label>Correo electrónico<input autoComplete="email" onChange={(event) => setAuthEmail(event.target.value)} placeholder="nombre@correo.com" type="email" value={authEmail} /></label>
+            )}
+            {authMode !== "recover" && (
+              <label>Contraseña<input autoComplete={authMode === "login" ? "current-password" : "new-password"} minLength={8} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Mínimo 8 caracteres" type="password" value={authPassword} /></label>
+            )}
+            {authMessage && <div className="auth-message">{authMessage}</div>}
+            <button className="primary-button auth-submit" disabled={authBusy} type="submit">
+              {authBusy ? "Procesando..." : authMode === "register" ? "Crear cuenta" : authMode === "recover" ? "Enviar enlace" : authMode === "update" ? "Guardar contraseña" : "Iniciar sesión"}
+            </button>
+          </form>
+          {authMode === "login" && <button className="auth-link" onClick={() => { setAuthMode("recover"); setAuthMessage(""); }} type="button">¿Olvidaste tu contraseña?</button>}
+          {authMode === "recover" && <button className="auth-link" onClick={() => { setAuthMode("login"); setAuthMessage(""); }} type="button">Volver al inicio de sesión</button>}
+          <small>La única cuenta administradora es <strong>{ADMIN_EMAIL}</strong>. Los demás registros requieren aprobación y funcionan en un solo dispositivo.</small>
+        </section>
+      </main>
+    );
+  }
+
   if (loading && !state) {
     return (
       <main className="loading-screen">
@@ -1211,7 +1369,7 @@ export default function GameConsole() {
         </div>
         <div className="operator">
           <div className="operator-avatar"><UserRound size={18} /></div>
-          <div><strong>Operador principal</strong><span><i /> Sesión activa</span></div>
+          <div><strong>{state.access.role === "admin" ? "Administrador" : "Operador"}</strong><span><i /> {authUser.email}</span></div>
           <ChevronRight size={17} />
         </div>
         <nav>
@@ -1795,6 +1953,7 @@ export default function GameConsole() {
               <section><span className="settings-label">APARIENCIA</span><div className="theme-picker"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button></div></section>
               <section><span className="settings-label">COMPORTAMIENTO</span><label className="setting-row"><span><Volume2 size={18} /></span><div><strong>Sonidos</strong><small>Bolillas y anuncio de ganador</small></div><input checked={sound} onChange={(event) => setSound(event.target.checked)} type="checkbox" /></label><label className="setting-row"><span><Pause size={18} /></span><div><strong>Pausa automática</strong><small>Detener al detectar un bingo</small></div><input checked={game.autoPause} onChange={(event) => void updateAutoPause(event.target.checked)} type="checkbox" /></label></section>
               <section className="system-status"><span className="settings-label">ESTADO DEL SISTEMA</span><div><ShieldCheck size={20} /><p><strong>Todo operativo</strong><small>Datos persistentes y validación en tiempo real.</small></p></div></section>
+              <section><span className="settings-label">CUENTA</span><div className="account-summary"><UserRound size={18} /><div><strong>{authUser.email}</strong><small>{state.access.role === "admin" ? "Administrador" : "Usuario aprobado"}</small></div></div><button className="secondary-button account-signout" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión</button></section>
             </motion.aside>
           </>
         )}
