@@ -87,6 +87,18 @@ export const memberships = sqliteTable("memberships", {
   expiresAt: text("expires_at"),
 });
 
+export const admins = sqliteTable("admins", {
+  email: text("email").primaryKey(),
+  addedBy: text("added_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const blockedUsers = sqliteTable("blocked_users", {
+  email: text("email").primaryKey(),
+  blockedBy: text("blocked_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
 export const winners = sqliteTable(
   "winners",
   {

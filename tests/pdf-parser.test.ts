@@ -100,6 +100,23 @@ test("conserva la numeración Tab# del PDF aunque el texto venga separado", () =
   assert.deepEqual(cards.map((card) => card.number), ["87019-1", "87019-2"]);
 });
 
+test("usa la numeración impresa del borde aunque no incluya la palabra Tab", () => {
+  const items: PdfTextItem[] = [
+    { str: "87021-1", transform: [1, 0, 0, 1, 40, 734], width: 58, height: 12 },
+  ];
+  for (let row = 0; row < 5; row += 1) {
+    items.push({
+      str: rowText(baseGrid, row),
+      transform: [1, 0, 0, 1, 40, 700 - row * 28],
+      width: 150,
+      height: 12,
+    });
+  }
+  const cards = extractCardsFromTextItems(items, "CamScanner 07-30-2026.pdf", 1);
+  assert.equal(cards[0]?.number, "87021-1");
+  assert.doesNotMatch(cards[0]?.number ?? "", /CamScanner/i);
+});
+
 test("un cartón ganador permanece elegible para un patrón distinto", () => {
   const card: BingoCard = {
     id: "card-1",

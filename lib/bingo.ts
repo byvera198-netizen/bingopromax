@@ -87,6 +87,13 @@ export interface AccessState {
   email: string;
   reason?: string;
   membership?: Membership | null;
+  isPrimaryAdmin?: boolean;
+}
+
+export interface AdminAccount {
+  email: string;
+  addedBy: string;
+  createdAt: string;
 }
 
 export interface AppState {
@@ -99,6 +106,7 @@ export interface AppState {
   files: ImportedFile[];
   access: AccessState;
   memberships?: Membership[];
+  admins?: AdminAccount[];
 }
 
 const range = (start: number, end: number) =>

@@ -462,7 +462,7 @@ function isPlausibleGrid(grid: number[]) {
   if (grid.length !== 25) return false;
   const values = grid.filter((value) => value !== 0);
   if (values.length < 24 || new Set(values).size !== values.length) return false;
-  return values.every((value) => Number.isInteger(value) && value >= 1 && value <= 90);
+  return values.every((value) => Number.isInteger(value) && value >= 1 && value <= 75);
 }
 
 function gridQuality(grid: number[]) {
@@ -489,7 +489,7 @@ function gridQuality(grid: number[]) {
 }
 
 function numberMatches(text: string) {
-  return [...text.matchAll(/(?<![\d])(?:[1-9]|[1-8]\d|90)(?![\d])/g)];
+  return [...text.matchAll(/(?<![\d])(?:[1-9]|[1-6]\d|7[0-5])(?![\d])/g)];
 }
 
 function tokensFromTextItems(items: PdfTextItem[]) {
@@ -528,6 +528,9 @@ function identifiersFromTextItems(items: PdfTextItem[]) {
         x: item.transform[4],
         y: item.transform[5],
       });
+    }
+    for (const match of item.str.matchAll(/\b(\d{4,10}-\d{1,3})\b/g)) {
+      identifiers.push({ value: match[1], x: item.transform[4], y: item.transform[5] });
     }
   }
   const positioned = items
@@ -788,12 +791,8 @@ function cardsFromDetectedGrids(
   const orderedIdentifiers = [...identifiers].sort(
     (a, b) => b.y - a.y || a.x - b.x,
   );
-  const stem =
-    fileName
-      .replace(/\.pdf$/i, "")
-      .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 20) || "PDF";
+  const missingIdentifier = (index: number) =>
+    `SIN-ID-${String(page).padStart(3, "0")}-${index + 1}`;
 
   return orderedGrids.map((detected, index) => ({
     id: crypto.randomUUID(),
@@ -805,8 +804,8 @@ function cardsFromDetectedGrids(
               (a, b) =>
                 Math.abs(a.x - detected.x) - Math.abs(b.x - detected.x) ||
                 Math.abs(a.y - detected.y) - Math.abs(b.y - detected.y),
-            )[0]?.value ?? `${stem}-${String(page).padStart(3, "0")}-${index + 1}`
-        : `${stem}-${String(page).padStart(3, "0")}-${index + 1}`,
+            )[0]?.value ?? missingIdentifier(index)
+        : missingIdentifier(index),
     serial: "",
     grid: detected.grid,
     sourceFile: fileName,

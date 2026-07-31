@@ -41,8 +41,11 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /cardLayers/);
   assert.match(page, /Usuarios y membresías/);
   assert.match(page, /exportPdf/);
-  assert.match(page, /exportExcel/);
-  assert.match(page, /exportCsv/);
+  assert.doesNotMatch(page, /Libro Excel/);
+  assert.doesNotMatch(page, /Archivo CSV/);
+  assert.match(page, /updatePattern/);
+  assert.match(page, /deleteMembershipUser/);
+  assert.match(route, /addAdmin/);
   assert.match(route, /approveMembership/);
   assert.match(route, /x-device-id/);
   assert.match(bingo, /isWinningCard/);

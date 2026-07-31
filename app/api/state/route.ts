@@ -57,8 +57,12 @@ async function authorize(db: D1, request: Request) {
   const email = (user.email || "").toLowerCase();
   if (!email) return { allowed: false, role: "anonymous" as const, email: "", reason: "La cuenta no tiene un correo válido." };
   if (email === ADMIN_EMAIL) {
-    return { allowed: true, role: "admin" as const, email };
+    return { allowed: true, role: "admin" as const, email, isPrimaryAdmin: true };
   }
+  const blocked = await db.prepare("SELECT email FROM blocked_users WHERE email = ?").bind(email).first<{ email: string }>();
+  if (blocked) return { allowed: false, role: "anonymous" as const, email, reason: "Esta cuenta fue eliminada por el administrador." };
+  const admin = await db.prepare("SELECT email FROM admins WHERE email = ?").bind(email).first<{ email: string }>();
+  if (admin) return { allowed: true, role: "admin" as const, email, isPrimaryAdmin: false };
   const row = await db
     .prepare("SELECT * FROM memberships WHERE email = ?")
     .bind(email)
@@ -153,6 +157,16 @@ const schemaStatements = [
     requested_at TEXT NOT NULL,
     approved_at TEXT,
     expires_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS admins (
+    email TEXT PRIMARY KEY,
+    added_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS blocked_users (
+    email TEXT PRIMARY KEY,
+    blocked_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS winners (
     id TEXT PRIMARY KEY,
@@ -293,6 +307,9 @@ export async function GET(request: Request) {
     const membershipRows = access.role === "admin"
       ? await db.prepare("SELECT * FROM memberships ORDER BY requested_at DESC").all<Record<string, unknown>>()
       : { results: [] as Record<string, unknown>[] };
+    const adminRows = access.role === "admin"
+      ? await db.prepare("SELECT * FROM admins ORDER BY created_at DESC").all<Record<string, unknown>>()
+      : { results: [] as Record<string, unknown>[] };
     return Response.json({
       game,
       cards: (cardRows.results ?? []).map((row) => ({
@@ -347,6 +364,11 @@ export async function GET(request: Request) {
       })),
       access,
       memberships: (membershipRows.results ?? []).map((row) => mapMembership(row, true)),
+      admins: (adminRows.results ?? []).map((row) => ({
+        email: String(row.email),
+        addedBy: String(row.added_by),
+        createdAt: String(row.created_at),
+      })),
     });
   } catch (error) {
     return Response.json(
@@ -380,6 +402,8 @@ export async function POST(request: Request) {
       const name = String(body.name ?? "").trim();
       const accessCode = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
       if (!email || !email.includes("@")) return Response.json({ error: "Correo inválido." }, { status: 400 });
+      const blocked = await db.prepare("SELECT email FROM blocked_users WHERE email = ?").bind(email).first<{ email: string }>();
+      if (blocked) return Response.json({ error: "Esta cuenta fue eliminada. Contacta al administrador." }, { status: 403 });
       await db
         .prepare(
           `INSERT INTO memberships (
@@ -435,6 +459,35 @@ export async function POST(request: Request) {
       if (!ownedGame || ownedGame.owner_email !== actor) {
         return Response.json({ error: "Esta partida pertenece a otro usuario." }, { status: 403 });
       }
+    }
+
+    if (action === "addAdmin" || action === "removeAdmin") {
+      if (access.role !== "admin" || !access.isPrimaryAdmin) {
+        return Response.json({ error: "Solo el administrador principal puede gestionar administradores." }, { status: 403 });
+      }
+      const email = String(body.email ?? "").trim().toLowerCase();
+      if (!email.includes("@") || email === ADMIN_EMAIL) {
+        return Response.json({ error: "Escribe el correo válido de otro usuario." }, { status: 400 });
+      }
+      if (action === "addAdmin") {
+        await db.prepare("INSERT OR REPLACE INTO admins (email, added_by, created_at) VALUES (?, ?, ?)").bind(email, access.email, now()).run();
+        await db.prepare("DELETE FROM blocked_users WHERE email = ?").bind(email).run();
+      } else {
+        await db.prepare("DELETE FROM admins WHERE email = ?").bind(email).run();
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteMembershipUser") {
+      if (access.role !== "admin") return Response.json({ error: "Solo un administrador puede eliminar usuarios." }, { status: 403 });
+      const membershipId = String(body.membershipId ?? "");
+      const membership = await db.prepare("SELECT email FROM memberships WHERE id = ?").bind(membershipId).first<{ email: string }>();
+      if (!membership) return Response.json({ error: "Usuario no encontrado." }, { status: 404 });
+      await db.batch([
+        db.prepare("DELETE FROM memberships WHERE id = ?").bind(membershipId),
+        db.prepare("INSERT OR REPLACE INTO blocked_users (email, blocked_by, created_at) VALUES (?, ?, ?)").bind(membership.email, access.email, now()),
+      ]);
+      return Response.json({ ok: true });
     }
 
     if (action === "approveMembership") {
@@ -533,7 +586,7 @@ export async function POST(request: Request) {
 
     if (action === "saveDraw") {
       const number = Number(body.number);
-      if (!gameId || !Number.isInteger(number) || number < 1 || number > 90) {
+      if (!gameId || !Number.isInteger(number) || number < 1 || number > 75) {
         return Response.json({ error: "Bolilla inválida." }, { status: 400 });
       }
       const duplicate = await db
@@ -633,6 +686,20 @@ export async function POST(request: Request) {
         ).bind(gameId, pattern.id, now()),
       ]);
       await audit(db, gameId, "CREATE_PATTERN", pattern.name, actor);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "updatePattern") {
+      const pattern = body.pattern as BingoPattern;
+      if (!gameId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
+        return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
+      }
+      const ownedPattern = await db.prepare("SELECT pattern_id FROM game_patterns WHERE game_id = ? AND pattern_id = ? AND custom = 1").bind(gameId, pattern.id).first<{ pattern_id: string }>();
+      if (!ownedPattern) return Response.json({ error: "Solo puedes editar patrones personalizados de esta partida." }, { status: 403 });
+      await db.prepare("UPDATE patterns SET name = ?, description = ?, color = ?, category = ?, difficulty = ?, cells_json = ? WHERE id = ?")
+        .bind(pattern.name, pattern.description, pattern.color, pattern.category, pattern.difficulty, JSON.stringify(pattern.cells), pattern.id)
+        .run();
+      await audit(db, gameId, "UPDATE_PATTERN", pattern.name, actor);
       return Response.json({ ok: true });
     }
 

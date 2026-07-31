@@ -6,13 +6,11 @@ import {
   AlertTriangle,
   ArrowLeft,
   Award,
-  BookOpen,
   Check,
   ChevronRight,
   CircleGauge,
   Clock3,
   Download,
-  FileCheck2,
   FileSpreadsheet,
   FileText,
   Gamepad2,
@@ -374,6 +372,8 @@ export default function GameConsole() {
   const [patternDescription, setPatternDescription] = useState("");
   const [patternCells, setPatternCells] = useState<number[]>([10, 11, 12, 13, 14]);
   const [patternColor, setPatternColor] = useState("#d7ff3f");
+  const [editingPatternId, setEditingPatternId] = useState<string | null>(null);
+  const [adminEmail, setAdminEmail] = useState("");
   const [gameDraft, setGameDraft] = useState({ name: "", date: "", prize: "", notes: "" });
   const [membershipName, setMembershipName] = useState("");
   const [activationCode, setActivationCode] = useState("");
@@ -505,7 +505,7 @@ export default function GameConsole() {
     }
   };
 
-  const manageMembership = async (membership: Membership, action: "approveMembership" | "rejectMembership" | "resetMembershipDevice" | "resendMembershipCode") => {
+  const manageMembership = async (membership: Membership, action: "approveMembership" | "rejectMembership" | "resetMembershipDevice" | "resendMembershipCode" | "deleteMembershipUser") => {
     try {
       const months = membershipMonths[membership.id] ?? membership.months ?? 1;
       const result = await api<{ email?: string; expiresAt?: string; accessCode?: string; months?: number }>({ action, membershipId: membership.id, months });
@@ -520,6 +520,17 @@ export default function GameConsole() {
       notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "resendMembershipCode" ? "Código permanente copiado y correo preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo actualizar el usuario.", "error");
+    }
+  };
+
+  const manageAdmin = async (action: "addAdmin" | "removeAdmin", email: string) => {
+    try {
+      await api({ action, email });
+      setAdminEmail("");
+      await refresh(true);
+      notify(action === "addAdmin" ? "Administrador adicional aprobado." : "Administrador adicional eliminado.", action === "addAdmin" ? "success" : "warning");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudo actualizar el administrador.", "error");
     }
   };
 
@@ -649,8 +660,8 @@ export default function GameConsole() {
     async (rawNumber: string | number) => {
       if (!state || !game) return;
       const number = Number(rawNumber);
-      if (!Number.isInteger(number) || number < 1 || number > 90) {
-        notify("Ingresa un número entero entre 1 y 90.", "warning");
+      if (!Number.isInteger(number) || number < 1 || number > 75) {
+        notify("Ingresa un número entero entre 1 y 75.", "warning");
         return;
       }
       if (called.has(number)) {
@@ -957,11 +968,6 @@ export default function GameConsole() {
     try {
       for (const file of files) {
         const checksum = await fileChecksum(file);
-        if (state.files.some((entry) => entry.checksum === checksum)) {
-          duplicateCount += 1;
-          warnings.push(`${file.name}: el archivo ya había sido importado.`);
-          continue;
-        }
         const parsed = await parseBingoPdf(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
@@ -990,25 +996,6 @@ export default function GameConsole() {
         });
         imported += result.accepted;
         duplicateCount += result.duplicates;
-        const authorization = await authorizationHeaders();
-        const upload = await fetch("/api/files", {
-          method: "POST",
-          headers: {
-            "content-type": "application/pdf",
-            "x-file-name": encodeURIComponent(file.name),
-            "x-checksum": checksum,
-            "x-game-id": state.game.id,
-            "x-device-id": deviceId(),
-            "x-pages": String(parsed.pages),
-            "x-cards": String(result.accepted),
-            ...authorization,
-          },
-          body: file,
-        });
-        if (!upload.ok) {
-          const detail = (await upload.json()) as { error?: string };
-          warnings.push(`${file.name}: ${detail.error || "no se pudo conservar el archivo original."}`);
-        }
       }
       await refresh();
       setImportWarnings(warnings);
@@ -1032,7 +1019,7 @@ export default function GameConsole() {
       return;
     }
     const pattern: BingoPattern = {
-      id: `custom-${crypto.randomUUID()}`,
+      id: editingPatternId || `custom-${crypto.randomUUID()}`,
       name: patternName.trim(),
       description: patternDescription.trim() || "Patrón personalizado",
       color: patternColor,
@@ -1043,16 +1030,31 @@ export default function GameConsole() {
       custom: true,
     };
     try {
-      await api({ action: "savePattern", gameId: state.game.id, pattern });
-      setState({ ...state, customPatterns: [pattern, ...state.customPatterns] });
+      await api({ action: editingPatternId ? "updatePattern" : "savePattern", gameId: state.game.id, pattern });
+      setState({
+        ...state,
+        customPatterns: editingPatternId
+          ? state.customPatterns.map((item) => item.id === editingPatternId ? pattern : item)
+          : [pattern, ...state.customPatterns],
+      });
       setPatternOpen(false);
       setPatternName("");
       setPatternDescription("");
       setPatternCells([10, 11, 12, 13, 14]);
+      setEditingPatternId(null);
       notify(`Patrón “${pattern.name}” guardado y activo en la partida.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el patrón.", "error");
     }
+  };
+
+  const openPatternEditor = (pattern?: BingoPattern) => {
+    setEditingPatternId(pattern?.id ?? null);
+    setPatternName(pattern?.name ?? "");
+    setPatternDescription(pattern?.description ?? "");
+    setPatternCells(pattern?.cells ?? [10, 11, 12, 13, 14]);
+    setPatternColor(pattern?.color ?? "#d7ff3f");
+    setPatternOpen(true);
   };
 
   const saveGame = async () => {
@@ -1086,6 +1088,8 @@ export default function GameConsole() {
     }
   };
 
+  // Conservados temporalmente sin exposición en la interfaz para compatibilidad con partidas antiguas.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const exportCsv = () => {
     if (!state) return;
     const lines = [
@@ -1116,6 +1120,7 @@ export default function GameConsole() {
     downloadBlob(new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" }), "reporte-bingo.csv");
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const exportExcel = async () => {
     if (!state) return;
     const XLSX = await import("xlsx");
@@ -1469,7 +1474,7 @@ export default function GameConsole() {
 
               <div className="stats-grid">
                 <StatCard accent="lime" detail={`${state.cards.filter((card) => card.status === "active").length} activos`} icon={Grid3X3} label="Cartones cargados" value={state.cards.length} />
-                <StatCard accent="mint" detail={`${90 - state.draws.length} restantes`} icon={CircleGauge} label="Bolillas sorteadas" value={state.draws.length} />
+                <StatCard accent="mint" detail={`${75 - state.draws.length} restantes`} icon={CircleGauge} label="Bolillas sorteadas" value={state.draws.length} />
                 <StatCard accent="amber" detail={state.winners.length ? "Validación confirmada" : "Sin coincidencias completas"} icon={Trophy} label="Ganadores" value={state.winners.length} />
                 <StatCard accent="blue" detail="Evaluación simultánea" icon={Sparkles} label="Patrones activos" value={gamePatterns.length} />
               </div>
@@ -1492,7 +1497,7 @@ export default function GameConsole() {
                         <input
                           id="ball-number"
                           inputMode="numeric"
-                          max="90"
+                          max="75"
                           min="1"
                           onChange={(event) => setBallInput(event.target.value.replace(/\D/g, "").slice(0, 2))}
                           onKeyDown={(event) => { if (event.key === "Enter") void registerBall(ballInput); }}
@@ -1513,7 +1518,7 @@ export default function GameConsole() {
                     {ballBoardOpen && (
                       <motion.div animate={{ height: "auto", opacity: 1 }} className="number-board-wrap" exit={{ height: 0, opacity: 0 }} initial={{ height: 0, opacity: 0 }}>
                         <div className="number-board">
-                          {Array.from({ length: 90 }, (_, index) => index + 1).map((number) => (
+                          {Array.from({ length: 75 }, (_, index) => index + 1).map((number) => (
                             <button
                               className={called.has(number) ? "called" : ""}
                               disabled={called.has(number) || game.status === "paused"}
@@ -1533,7 +1538,7 @@ export default function GameConsole() {
                 <section className="panel history-panel">
                   <div className="panel-heading">
                     <div><span className="eyebrow"><History size={13} /> SECUENCIA</span><h3>Historial de bolillas</h3></div>
-                    <strong>{Math.round((state.draws.length / 90) * 100)}%</strong>
+                    <strong>{Math.round((state.draws.length / 75) * 100)}%</strong>
                   </div>
                   {state.draws.length ? (
                     <>
@@ -1542,7 +1547,7 @@ export default function GameConsole() {
                           <span className={index === 0 ? "latest" : ""} key={draw.id}>{draw.number}</span>
                         ))}
                       </div>
-                      <div className="game-progress"><span><i style={{ width: `${(state.draws.length / 90) * 100}%` }} /></span><small>{90 - state.draws.length} números restantes</small></div>
+                      <div className="game-progress"><span><i style={{ width: `${(state.draws.length / 75) * 100}%` }} /></span><small>{75 - state.draws.length} números restantes</small></div>
                     </>
                   ) : (
                     <EmptyState icon={CircleGauge} text="Cada bolilla aparecerá aquí en el orden exacto de salida." title="Aún no empieza el sorteo" />
@@ -1688,13 +1693,6 @@ export default function GameConsole() {
                   <button onClick={() => setImportWarnings([])} type="button"><X size={17} /></button>
                 </section>
               )}
-              {state.files.length > 0 && (
-                <section className="file-strip">
-                  {state.files.slice(0, 4).map((file) => (
-                    <div key={file.id}><span><FileCheck2 size={18} /></span><div><strong>{file.name}</strong><small>{file.pages} páginas · {file.cards} cartones</small></div><Check size={16} /></div>
-                  ))}
-                </section>
-              )}
               <div className="cards-toolbar">
                 <div className="search-box"><Search size={17} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
                 <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
@@ -1737,7 +1735,7 @@ export default function GameConsole() {
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
                 <div><span className="eyebrow">MODALIDADES</span><h2>Administra los patrones del juego.</h2><p>Inhabilita figuras ya premiadas, reactívalas o elimina patrones personalizados.</p></div>
-                <button className="primary-button" onClick={() => setPatternOpen(true)} type="button"><Plus size={17} /> Crear patrón</button>
+                <button className="primary-button" onClick={() => openPatternEditor()} type="button"><Plus size={17} /> Crear patrón</button>
               </div>
               <section className="active-pattern-hero all-patterns-hero">
                 <div>
@@ -1764,6 +1762,7 @@ export default function GameConsole() {
                         <button className={enabled ? "ghost-button" : "secondary-button"} onClick={() => void togglePattern(pattern, !enabled)} type="button">
                           {enabled ? "Inhabilitar" : "Habilitar"}
                         </button>
+                        {pattern.custom && <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={15} /></button>}
                         {pattern.custom && <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>}
                       </div>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
@@ -1780,9 +1779,7 @@ export default function GameConsole() {
                 <div><span className="eyebrow">INFORMES Y CONTROL</span><h2>Todo queda registrado.</h2><p>Exporta la partida actual y consulta sus indicadores clave.</p></div>
               </div>
               <div className="report-grid">
-                <button onClick={exportPdf} type="button"><span className="report-icon pdf"><FileText size={23} /></span><div><strong>Reporte PDF</strong><p>Resumen ejecutivo, bolillas y ganadores.</p></div><Download size={18} /></button>
-                <button onClick={() => void exportExcel()} type="button"><span className="report-icon excel"><FileSpreadsheet size={23} /></span><div><strong>Libro Excel</strong><p>Hojas separadas para cartones, bolillas y ganadores.</p></div><Download size={18} /></button>
-                <button onClick={exportCsv} type="button"><span className="report-icon csv"><BookOpen size={23} /></span><div><strong>Archivo CSV</strong><p>Datos compatibles con cualquier sistema.</p></div><Download size={18} /></button>
+                <button onClick={exportPdf} type="button"><span className="report-icon pdf"><FileText size={23} /></span><div><strong>Reporte PDF</strong><p>Resumen, bolillas, patrones y cartones ganadores completos.</p></div><Download size={18} /></button>
               </div>
               <section className="panel winning-cards-report">
                 <div className="panel-heading">
@@ -1817,7 +1814,7 @@ export default function GameConsole() {
                     <div><dt>Patrones activos</dt><dd>{gamePatterns.length}</dd></div>
                     <div><dt>Duración</dt><dd>{formatDuration(elapsed)}</dd></div>
                     <div><dt>Cartones activos</dt><dd>{state.cards.filter((card) => card.status === "active").length}</dd></div>
-                    <div><dt>PDF importados</dt><dd>{state.files.length}</dd></div>
+                    <div><dt>Procesamiento PDF</dt><dd>Local · sin almacenamiento</dd></div>
                   </dl>
                 </section>
                 <section className="panel audit-panel">
@@ -1844,6 +1841,16 @@ export default function GameConsole() {
                 <StatCard accent="mint" detail="Con vigencia" icon={ShieldCheck} label="Aprobados" value={(state.memberships ?? []).filter((item) => item.status === "approved").length} />
                 <StatCard accent="blue" detail="Un equipo por cuenta" icon={UserRound} label="Dispositivos vinculados" value={(state.memberships ?? []).filter((item) => item.deviceBound).length} />
               </div>
+              {state.access.isPrimaryAdmin && (
+                <section className="panel membership-admin-panel">
+                  <div className="panel-heading"><div><span className="eyebrow">ADMINISTRADORES</span><h3>Administradores adicionales</h3></div><span className="secure-badge"><ShieldCheck size={14} /> Solo propietario</span></div>
+                  <div className="admin-manager">
+                    <div className="admin-add"><input onChange={(event) => setAdminEmail(event.target.value)} placeholder="correo@ejemplo.com" type="email" value={adminEmail} /><button className="primary-button" disabled={!adminEmail.includes("@") } onClick={() => void manageAdmin("addAdmin", adminEmail)} type="button"><Plus size={16} /> Aprobar administrador</button></div>
+                    {(state.admins ?? []).map((admin) => <div className="admin-row" key={admin.email}><span><strong>{admin.email}</strong><small>Aprobado por {admin.addedBy}</small></span><button className="danger-button compact" onClick={() => window.confirm(`¿Quitar permisos de administrador a ${admin.email}?`) && void manageAdmin("removeAdmin", admin.email)} type="button"><Trash2 size={14} /> Quitar</button></div>)}
+                    {!(state.admins ?? []).length && <small className="admin-empty">Todavía no hay administradores adicionales.</small>}
+                  </div>
+                </section>
+              )}
               <section className="panel membership-admin-panel">
                 <div className="panel-heading"><div><span className="eyebrow">SOLICITUDES</span><h3>Control de acceso</h3></div><span className="secure-badge"><ShieldCheck size={14} /> Administrador</span></div>
                 <div className="membership-list">
@@ -1859,6 +1866,7 @@ export default function GameConsole() {
                         {membership.status === "approved" && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resendMembershipCode")} type="button">Reenviar código</button>}
                         {membership.deviceBound && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resetMembershipDevice")} type="button">Cambiar dispositivo</button>}
                         {membership.status === "pending" && <button className="ghost-button compact" onClick={() => void manageMembership(membership, "rejectMembership")} type="button">Rechazar</button>}
+                        <button className="danger-button compact" onClick={() => window.confirm(`¿Eliminar a ${membership.email}? Su acceso quedará bloqueado.`) && void manageMembership(membership, "deleteMembershipUser")} type="button"><Trash2 size={14} /> Eliminar</button>
                       </div>
                     </article>
                   ))}
@@ -1892,7 +1900,7 @@ export default function GameConsole() {
                         disabled={index === 12 && value === "0"}
                         inputMode="numeric"
                         key={index}
-                        max="90"
+                        max="75"
                         min="1"
                         onChange={(event) => setManualGrid((current) => current.map((item, cell) => cell === index ? event.target.value.replace(/\D/g, "").slice(0, 2) : item))}
                         placeholder={index === 12 ? "LIBRE" : "—"}
@@ -1910,7 +1918,7 @@ export default function GameConsole() {
         {patternOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal pattern-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
-              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>Nuevo patrón</h2></div><button className="icon-button" onClick={() => setPatternOpen(false)} type="button"><X size={19} /></button></header>
+              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>{editingPatternId ? "Editar patrón" : "Nuevo patrón"}</h2></div><button className="icon-button" onClick={() => setPatternOpen(false)} type="button"><X size={19} /></button></header>
               <div className="pattern-editor">
                 <div>
                   <BingoGrid editable onCellClick={(index) => setPatternCells((current) => current.includes(index) ? current.filter((cell) => cell !== index) : [...current, index])} selected={patternCells} />
