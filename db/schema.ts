@@ -2,6 +2,7 @@ import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core
 
 export const games = sqliteTable("games", {
   id: text("id").primaryKey(),
+  ownerEmail: text("owner_email").notNull().default(""),
   name: text("name").notNull(),
   date: text("date").notNull(),
   prize: text("prize").notNull().default(""),

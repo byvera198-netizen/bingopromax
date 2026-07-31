@@ -58,6 +58,13 @@ export async function POST(request: Request) {
     if (!gameId || !checksum || !isPdf) {
       return Response.json({ error: "Archivo PDF incompleto o inválido." }, { status: 400 });
     }
+    const ownedGame = await bindings.DB
+      .prepare("SELECT owner_email FROM games WHERE id = ?")
+      .bind(gameId)
+      .first<{ owner_email: string }>();
+    if (!ownedGame || ownedGame.owner_email !== email) {
+      return Response.json({ error: "Esta partida pertenece a otro usuario." }, { status: 403 });
+    }
     const duplicate = await bindings.DB
       .prepare("SELECT id FROM files WHERE game_id = ? AND checksum = ?")
       .bind(gameId, checksum)

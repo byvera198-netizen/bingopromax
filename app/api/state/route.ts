@@ -89,6 +89,7 @@ async function authorize(db: D1, request: Request) {
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS games (
     id TEXT PRIMARY KEY,
+    owner_email TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     date TEXT NOT NULL,
     prize TEXT NOT NULL DEFAULT '',
@@ -188,6 +189,7 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS winners_game_idx ON winners(game_id, validated_at)",
   "CREATE INDEX IF NOT EXISTS game_patterns_game_idx ON game_patterns(game_id, enabled)",
   "CREATE INDEX IF NOT EXISTS memberships_status_idx ON memberships(status)",
+  "CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)",
 ];
 
 async function ensureSchema(db: D1) {
@@ -196,6 +198,7 @@ async function ensureSchema(db: D1) {
     "ALTER TABLE memberships ADD COLUMN membership_months INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE memberships ADD COLUMN access_code TEXT",
     "ALTER TABLE memberships ADD COLUMN activation_verified INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE games ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''",
   ]) {
     try {
       await db.prepare(statement).run();
@@ -214,9 +217,10 @@ async function audit(db: D1, gameId: string | null, action: string, detail: stri
     .run();
 }
 
-async function getOrCreateGame(db: D1) {
+async function getOrCreateGame(db: D1, ownerEmail: string) {
   let game = await db
-    .prepare("SELECT * FROM games ORDER BY created_at DESC LIMIT 1")
+    .prepare("SELECT * FROM games WHERE owner_email = ? ORDER BY created_at DESC LIMIT 1")
+    .bind(ownerEmail)
     .first<Record<string, unknown>>();
   if (!game) {
     const createdAt = now();
@@ -225,11 +229,11 @@ async function getOrCreateGame(db: D1) {
     await db
       .prepare(
         `INSERT INTO games (
-          id, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
+          id, owner_email, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
           active_pattern_cells, auto_pause, started_at, created_at, updated_at
-        ) VALUES (?, ?, ?, '', 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, '', 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
       )
-      .bind(id, "Noche de Bingo", date, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
+      .bind(id, ownerEmail, "Noche de Bingo", date, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
       .run();
     game = await db.prepare("SELECT * FROM games WHERE id = ?").bind(id).first<Record<string, unknown>>();
   }
@@ -260,9 +264,9 @@ export async function GET(request: Request) {
     await ensureSchema(db);
     const access = await authorize(db, request);
     if (!access.allowed) return Response.json({ access }, { status: 403 });
-    const gameRow = await getOrCreateGame(db);
+    const gameRow = await getOrCreateGame(db, access.email);
     const game = mapGame(gameRow);
-    const gameCount = await db.prepare("SELECT COUNT(*) AS total FROM games").first<{ total: number }>();
+    const gameCount = await db.prepare("SELECT COUNT(*) AS total FROM games WHERE owner_email = ?").bind(access.email).first<{ total: number }>();
     if (Number(gameCount?.total ?? 0) === 1) {
       await db
         .prepare(
@@ -426,6 +430,12 @@ export async function POST(request: Request) {
     const access = await authorize(db, request);
     if (!access.allowed) return Response.json({ error: access.reason, access }, { status: 403 });
     const actor = access.email;
+    if (gameId) {
+      const ownedGame = await db.prepare("SELECT owner_email FROM games WHERE id = ?").bind(gameId).first<{ owner_email: string }>();
+      if (!ownedGame || ownedGame.owner_email !== actor) {
+        return Response.json({ error: "Esta partida pertenece a otro usuario." }, { status: 403 });
+      }
+    }
 
     if (action === "approveMembership") {
       if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede aprobar usuarios." }, { status: 403 });
@@ -766,11 +776,11 @@ export async function POST(request: Request) {
       await db
         .prepare(
           `INSERT INTO games (
-            id, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
+            id, owner_email, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
             active_pattern_cells, auto_pause, started_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
         )
-        .bind(id, name, date, prize, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
+        .bind(id, actor, name, date, prize, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
         .run();
       await audit(db, id, "CREATE_GAME", name, actor);
       return Response.json({ id });

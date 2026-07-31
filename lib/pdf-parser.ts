@@ -1935,11 +1935,11 @@ export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
 ): Promise<PdfParseResult> {
-  const pdfjs = await import("pdfjs-dist");
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url,
-  ).toString();
+  const pdfModuleUrl = "/pdfjs/pdf.mjs";
+  const pdfjs = (await import(
+    /* @vite-ignore */ pdfModuleUrl
+  )) as typeof import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/pdf.worker.min.mjs";
   const pdf = await pdfjs.getDocument({
     data: await file.arrayBuffer(),
     isEvalSupported: false,
