@@ -235,6 +235,7 @@ function CardPreview({
   wins = [],
   onToggleStatus,
   onDelete,
+  onEditNumber,
   showCalled = true,
   showPattern = true,
   showPending = true,
@@ -245,6 +246,7 @@ function CardPreview({
   wins?: Winner[];
   onToggleStatus: (card: BingoCard) => void;
   onDelete?: (card: BingoCard) => void;
+  onEditNumber?: (card: BingoCard) => void;
   showCalled?: boolean;
   showPattern?: boolean;
   showPending?: boolean;
@@ -259,6 +261,7 @@ function CardPreview({
           <strong>Tab#{card.number}</strong>
         </div>
         <div className="ticket-actions">
+          {onEditNumber && <button className="icon-button small" title="Editar número del cartón" type="button" onClick={() => onEditNumber(card)}><PencilLine size={15} /></button>}
           <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>
             <MoreHorizontal size={17} />
           </button>
@@ -1055,6 +1058,23 @@ export default function GameConsole() {
     }
   };
 
+  const editCardNumber = async (card: BingoCard) => {
+    if (!state) return;
+    const value = window.prompt("Número del cartón:", card.number)?.trim().replace(/^Tab#?/i, "");
+    if (!value || value === card.number) return;
+    try {
+      await api({ action: "updateCardNumber", gameId: state.game.id, cardId: card.id, number: value });
+      setState({
+        ...state,
+        cards: state.cards.map((item) => item.id === card.id ? { ...item, number: value } : item),
+        winners: state.winners.map((winner) => winner.cardId === card.id ? { ...winner, cardNumber: value } : winner),
+      });
+      notify(`Cartón actualizado a Tab#${value}.`);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudo cambiar el número del cartón.", "error");
+    }
+  };
+
   const openPatternEditor = (pattern?: BingoPattern) => {
     setEditingPatternId(pattern?.custom ? pattern.id : null);
     setReplacingPatternId(pattern && !pattern.custom ? pattern.id : null);
@@ -1613,13 +1633,14 @@ export default function GameConsole() {
                               state.winners.filter((winner) => winner.cardId === a.id),
                             ).progress.progress,
                         )
-                        .slice(0, 4)
+                        .slice(0, 12)
                         .map((card) => (
                           <CardPreview
                             called={called}
                             card={card}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
+                            onEditNumber={editCardNumber}
                             patterns={allPatterns}
                             wins={state.winners.filter((winner) => winner.cardId === card.id)}
                           />
@@ -1719,6 +1740,7 @@ export default function GameConsole() {
                       called={called}
                       key={card.id}
                       onDelete={deleteCard}
+                      onEditNumber={editCardNumber}
                       onToggleStatus={toggleCardStatus}
                       patterns={allPatterns}
                       showCalled={cardLayers.called}
@@ -1962,6 +1984,14 @@ export default function GameConsole() {
                       <time>{new Date(winner.validatedAt).toLocaleTimeString("es-EC")}</time>
                     </div>
                   );
+                })}
+              </div>
+              <div className="winner-card-previews">
+                {winnerModal.map((winner) => {
+                  const card = state.cards.find((item) => item.id === winner.cardId);
+                  const pattern = [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId);
+                  if (!card) return null;
+                  return <article key={`card-${winner.id}`}><strong>Tab#{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern} /></article>;
                 })}
               </div>
               <div className="winner-actions">

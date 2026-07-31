@@ -529,7 +529,7 @@ function identifiersFromTextItems(items: PdfTextItem[]) {
         y: item.transform[5],
       });
     }
-    for (const match of item.str.matchAll(/\b(\d{4,10}-\d{1,3})\b/g)) {
+    for (const match of item.str.matchAll(/\b(\d{5,12}(?:-\d{1,3})?)\b/g)) {
       identifiers.push({ value: match[1], x: item.transform[4], y: item.transform[5] });
     }
   }
@@ -794,24 +794,26 @@ function cardsFromDetectedGrids(
   const missingIdentifier = (index: number) =>
     `SIN-ID-${String(page).padStart(3, "0")}-${index + 1}`;
 
-  return orderedGrids.map((detected, index) => ({
-    id: crypto.randomUUID(),
-    number:
-      orderedIdentifiers.length >= orderedGrids.length
-        ? orderedIdentifiers
-            .filter((identifier) => identifier.y >= detected.y - 8)
-            .sort(
-              (a, b) =>
-                Math.abs(a.x - detected.x) - Math.abs(b.x - detected.x) ||
-                Math.abs(a.y - detected.y) - Math.abs(b.y - detected.y),
-            )[0]?.value ?? missingIdentifier(index)
-        : missingIdentifier(index),
-    serial: "",
-    grid: detected.grid,
-    sourceFile: fileName,
-    sourcePage: page,
-    status: "active" as const,
-  }));
+  const usedIdentifiers = new Set<Identifier>();
+  return orderedGrids.map((detected, index) => {
+    const identifier = orderedIdentifiers
+      .filter((candidate) => !usedIdentifiers.has(candidate))
+      .sort((a, b) => {
+        const distanceA = Math.abs(a.x - detected.x) + Math.abs(a.y - detected.y);
+        const distanceB = Math.abs(b.x - detected.x) + Math.abs(b.y - detected.y);
+        return distanceA - distanceB;
+      })[0];
+    if (identifier) usedIdentifiers.add(identifier);
+    return {
+      id: crypto.randomUUID(),
+      number: identifier?.value ?? missingIdentifier(index),
+      serial: "",
+      grid: detected.grid,
+      sourceFile: fileName,
+      sourcePage: page,
+      status: "active" as const,
+    };
+  });
 }
 
 function cardsFromTokens(

@@ -762,6 +762,21 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "updateCardNumber") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const cardId = String(body.cardId ?? "");
+      const number = String(body.number ?? "").trim().replace(/^Tab#?/i, "");
+      if (!number || number.length > 40) return Response.json({ error: "Número de cartón inválido." }, { status: 400 });
+      const duplicate = await db.prepare("SELECT id FROM cards WHERE game_id = ? AND number = ? AND id <> ?").bind(gameId, number, cardId).first<{ id: string }>();
+      if (duplicate) return Response.json({ error: "Ya existe otro cartón con ese número." }, { status: 409 });
+      await db.batch([
+        db.prepare("UPDATE cards SET number = ? WHERE game_id = ? AND id = ?").bind(number, gameId, cardId),
+        db.prepare("UPDATE winners SET card_number = ? WHERE game_id = ? AND card_id = ?").bind(number, gameId, cardId),
+      ]);
+      await audit(db, gameId, "UPDATE_CARD_NUMBER", number, actor);
+      return Response.json({ ok: true, number });
+    }
+
     if (action === "deleteVoidCards") {
       if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
       const voided = await db
