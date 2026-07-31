@@ -455,6 +455,32 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "resendMembershipCode") {
+      if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede generar códigos." }, { status: 403 });
+      const membershipId = String(body.membershipId ?? "");
+      const membership = await db
+        .prepare("SELECT email, name, status, membership_months, expires_at FROM memberships WHERE id = ?")
+        .bind(membershipId)
+        .first<Record<string, unknown>>();
+      if (!membership) return Response.json({ error: "Usuario no encontrado." }, { status: 404 });
+      if (String(membership.status) !== "approved") {
+        return Response.json({ error: "Aprueba primero la membresía del usuario." }, { status: 400 });
+      }
+      const accessCode = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
+      await db
+        .prepare("UPDATE memberships SET access_code = ?, activation_verified = 0 WHERE id = ?")
+        .bind(accessCode, membershipId)
+        .run();
+      return Response.json({
+        ok: true,
+        email: String(membership.email),
+        name: String(membership.name ?? ""),
+        accessCode,
+        months: Number(membership.membership_months ?? 1),
+        expiresAt: membership.expires_at ? String(membership.expires_at) : null,
+      });
+    }
+
     if (action === "saveCards") {
       const cards = (body.cards ?? []) as BingoCard[];
       if (!gameId || !Array.isArray(cards) || !cards.length) {
