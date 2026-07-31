@@ -99,6 +99,12 @@ export const blockedUsers = sqliteTable("blocked_users", {
   createdAt: text("created_at").notNull(),
 });
 
+export const removedPatterns = sqliteTable("removed_patterns", {
+  gameId: text("game_id").notNull(),
+  patternId: text("pattern_id").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [uniqueIndex("removed_patterns_game_pattern_unique").on(table.gameId, table.patternId)]);
+
 export const winners = sqliteTable(
   "winners",
   {

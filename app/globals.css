@@ -224,7 +224,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .search-box { width: min(420px, 100%); display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); }
 .search-box input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
 .cards-toolbar > div:last-child { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: var(--muted); font-size: 8px; }
-.ticket-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.ticket-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
 .ticket { position: relative; overflow: hidden; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .ticket > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .ticket-actions { display: flex; align-items: center; gap: 5px; }
@@ -233,9 +233,9 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ticket-wins { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: -2px 0 9px; padding: 6px 7px; border: 1px solid rgba(215,255,63,.2); border-radius: 7px; background: var(--lime-soft); color: var(--lime); }
 .ticket-wins span { overflow: hidden; color: var(--text); font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-wins b { font-size: 6px; text-transform: uppercase; letter-spacing: .08em; }
-.bingo-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.bingo-grid { width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .bingo-head { display: grid; place-items: center; height: 25px; color: var(--lime); font-size: 14px; font-weight: 850; }
-.bingo-cell { aspect-ratio: 1; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: 21px; font-weight: 750; }
+.bingo-cell { min-width: 0; aspect-ratio: 1; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: clamp(16px, 1.35vw, 21px); font-weight: 750; }
 .bingo-cell.target { border-color: color-mix(in srgb, var(--lime), var(--line) 56%); }
 .bingo-cell.marked { border-color: var(--lime); background: var(--lime); color: #101309; font-weight: 800; }
 .bingo-cell:disabled { opacity: 1; }

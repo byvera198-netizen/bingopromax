@@ -103,6 +103,7 @@ export interface AppState {
   winners: Winner[];
   customPatterns: BingoPattern[];
   disabledPatternIds: string[];
+  removedPatternIds: string[];
   files: ImportedFile[];
   access: AccessState;
   memberships?: Membership[];

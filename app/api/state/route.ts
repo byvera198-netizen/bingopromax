@@ -168,6 +168,12 @@ const schemaStatements = [
     blocked_by TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS removed_patterns (
+    game_id TEXT NOT NULL,
+    pattern_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(game_id, pattern_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS winners (
     id TEXT PRIMARY KEY,
     game_id TEXT NOT NULL,
@@ -290,7 +296,7 @@ export async function GET(request: Request) {
         .bind(game.id)
         .run();
     }
-    const [cardRows, drawRows, winnerRows, patternRows, gamePatternRows, fileRows] = await Promise.all([
+    const [cardRows, drawRows, winnerRows, patternRows, gamePatternRows, removedPatternRows, fileRows] = await Promise.all([
       db.prepare("SELECT * FROM cards WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM draws WHERE game_id = ? ORDER BY drawn_at ASC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM winners WHERE game_id = ? ORDER BY validated_at DESC").bind(game.id).all<Record<string, unknown>>(),
@@ -301,6 +307,7 @@ export async function GET(request: Request) {
          ORDER BY p.created_at DESC`,
       ).bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT pattern_id, enabled FROM game_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
+      db.prepare("SELECT pattern_id FROM removed_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM files WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
     ]);
 
@@ -353,6 +360,7 @@ export async function GET(request: Request) {
       disabledPatternIds: (gamePatternRows.results ?? [])
         .filter((row) => !Boolean(row.enabled))
         .map((row) => String(row.pattern_id)),
+      removedPatternIds: (removedPatternRows.results ?? []).map((row) => String(row.pattern_id)),
       files: (fileRows.results ?? []).map((row) => ({
         id: String(row.id),
         name: String(row.name),
@@ -732,6 +740,14 @@ export async function POST(request: Request) {
         .first<{ pattern_id: string }>();
       if (!remaining) await db.prepare("DELETE FROM patterns WHERE id = ?").bind(patternId).run();
       await audit(db, gameId, "DELETE_PATTERN", patternId, actor);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "removeBuiltinPattern") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const patternId = String(body.patternId ?? "");
+      await db.prepare("INSERT OR IGNORE INTO removed_patterns (game_id, pattern_id, created_at) VALUES (?, ?, ?)").bind(gameId, patternId, now()).run();
+      await audit(db, gameId, "REMOVE_PATTERN", patternId, actor);
       return Response.json({ ok: true });
     }
 

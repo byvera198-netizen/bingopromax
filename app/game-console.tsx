@@ -373,6 +373,7 @@ export default function GameConsole() {
   const [patternCells, setPatternCells] = useState<number[]>([10, 11, 12, 13, 14]);
   const [patternColor, setPatternColor] = useState("#d7ff3f");
   const [editingPatternId, setEditingPatternId] = useState<string | null>(null);
+  const [replacingPatternId, setReplacingPatternId] = useState<string | null>(null);
   const [adminEmail, setAdminEmail] = useState("");
   const [gameDraft, setGameDraft] = useState({ name: "", date: "", prize: "", notes: "" });
   const [membershipName, setMembershipName] = useState("");
@@ -588,13 +589,13 @@ export default function GameConsole() {
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
   const availablePatterns = useMemo(
     () => [
-      ...BUILTIN_PATTERNS,
+      ...BUILTIN_PATTERNS.filter((pattern) => !state?.removedPatternIds?.includes(pattern.id)),
       ...(state?.customPatterns ?? []),
       ...(state?.cards.some((card) => card.grid.length === 5)
         ? [COMPACT_CARD_PATTERN]
         : []),
     ],
-    [state?.cards, state?.customPatterns],
+    [state?.cards, state?.customPatterns, state?.removedPatternIds],
   );
   const allPatterns = useMemo(
     () =>
@@ -885,13 +886,14 @@ export default function GameConsole() {
   };
 
   const deletePattern = async (pattern: BingoPattern) => {
-    if (!state || !pattern.custom || !window.confirm(`¿Eliminar “${pattern.name}” de esta partida?`)) return;
+    if (!state || !window.confirm(`¿Eliminar “${pattern.name}” de esta partida?`)) return;
     try {
-      await api({ action: "deletePattern", gameId: state.game.id, patternId: pattern.id });
+      await api({ action: pattern.custom ? "deletePattern" : "removeBuiltinPattern", gameId: state.game.id, patternId: pattern.id });
       setState({
         ...state,
         customPatterns: state.customPatterns.filter((item) => item.id !== pattern.id),
         disabledPatternIds: state.disabledPatternIds.filter((id) => id !== pattern.id),
+        removedPatternIds: pattern.custom ? state.removedPatternIds : [...state.removedPatternIds, pattern.id],
       });
       notify(`Patrón “${pattern.name}” eliminado.`, "warning");
     } catch (caught) {
@@ -1031,17 +1033,22 @@ export default function GameConsole() {
     };
     try {
       await api({ action: editingPatternId ? "updatePattern" : "savePattern", gameId: state.game.id, pattern });
+      if (replacingPatternId) {
+        await api({ action: "removeBuiltinPattern", gameId: state.game.id, patternId: replacingPatternId });
+      }
       setState({
         ...state,
         customPatterns: editingPatternId
           ? state.customPatterns.map((item) => item.id === editingPatternId ? pattern : item)
           : [pattern, ...state.customPatterns],
+        removedPatternIds: replacingPatternId ? [...state.removedPatternIds, replacingPatternId] : state.removedPatternIds,
       });
       setPatternOpen(false);
       setPatternName("");
       setPatternDescription("");
       setPatternCells([10, 11, 12, 13, 14]);
       setEditingPatternId(null);
+      setReplacingPatternId(null);
       notify(`Patrón “${pattern.name}” guardado y activo en la partida.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el patrón.", "error");
@@ -1049,7 +1056,8 @@ export default function GameConsole() {
   };
 
   const openPatternEditor = (pattern?: BingoPattern) => {
-    setEditingPatternId(pattern?.id ?? null);
+    setEditingPatternId(pattern?.custom ? pattern.id : null);
+    setReplacingPatternId(pattern && !pattern.custom ? pattern.id : null);
     setPatternName(pattern?.name ?? "");
     setPatternDescription(pattern?.description ?? "");
     setPatternCells(pattern?.cells ?? [10, 11, 12, 13, 14]);
@@ -1762,8 +1770,8 @@ export default function GameConsole() {
                         <button className={enabled ? "ghost-button" : "secondary-button"} onClick={() => void togglePattern(pattern, !enabled)} type="button">
                           {enabled ? "Inhabilitar" : "Habilitar"}
                         </button>
-                        {pattern.custom && <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={15} /></button>}
-                        {pattern.custom && <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>}
+                        <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={15} /></button>
+                        <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>
                       </div>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
                   </article>
@@ -1918,7 +1926,7 @@ export default function GameConsole() {
         {patternOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal pattern-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
-              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>{editingPatternId ? "Editar patrón" : "Nuevo patrón"}</h2></div><button className="icon-button" onClick={() => setPatternOpen(false)} type="button"><X size={19} /></button></header>
+              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>{editingPatternId || replacingPatternId ? "Editar patrón" : "Nuevo patrón"}</h2></div><button className="icon-button" onClick={() => setPatternOpen(false)} type="button"><X size={19} /></button></header>
               <div className="pattern-editor">
                 <div>
                   <BingoGrid editable onCellClick={(index) => setPatternCells((current) => current.includes(index) ? current.filter((cell) => cell !== index) : [...current, index])} selected={patternCells} />
