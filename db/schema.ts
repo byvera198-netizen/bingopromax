@@ -54,6 +54,35 @@ export const patterns = sqliteTable("patterns", {
   createdAt: text("created_at").notNull(),
 });
 
+export const gamePatterns = sqliteTable(
+  "game_patterns",
+  {
+    gameId: text("game_id").notNull(),
+    patternId: text("pattern_id").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    custom: integer("custom", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("game_patterns_game_pattern_unique").on(
+      table.gameId,
+      table.patternId,
+    ),
+  ],
+);
+
+export const memberships = sqliteTable("memberships", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull().default(""),
+  plan: text("plan").notNull(),
+  status: text("status").notNull().default("pending"),
+  deviceId: text("device_id"),
+  requestedAt: text("requested_at").notNull(),
+  approvedAt: text("approved_at"),
+  expiresAt: text("expires_at"),
+});
+
 export const winners = sqliteTable(
   "winners",
   {

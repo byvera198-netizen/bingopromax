@@ -5,21 +5,27 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
 
-test("declara persistencia para partidas y archivos PDF", async () => {
+test("declara persistencia para partidas, membresías y archivos PDF", async () => {
   const hosting = JSON.parse(await read(".openai/hosting.json"));
   const schema = await read("db/schema.ts");
-  const migration = await read("drizzle/0000_high_warbird.sql");
+  const baseMigration = await read("drizzle/0000_high_warbird.sql");
+  const accessMigration = await read("drizzle/0001_zippy_namorita.sql");
 
   assert.equal(hosting.d1, "DB");
   assert.equal(hosting.r2, "FILES");
   for (const table of ["games", "cards", "draws", "patterns", "winners", "files", "audit_logs"]) {
     assert.match(schema, new RegExp(`"${table}"`));
-    assert.match(migration, new RegExp(`CREATE TABLE \`${table}\``));
+    assert.match(baseMigration, new RegExp(`CREATE TABLE \`${table}\``));
+  }
+  for (const table of ["game_patterns", "memberships"]) {
+    assert.match(schema, new RegExp(`"${table}"`));
+    assert.match(accessMigration, new RegExp(`CREATE TABLE \`${table}\``));
   }
 });
 
-test("incluye los flujos operativos principales", async () => {
-  const page = await read("app/page.tsx");
+test("incluye los flujos operativos y administrativos principales", async () => {
+  const page = await read("app/game-console.tsx");
+  const route = await read("app/api/state/route.ts");
   const bingo = await read("lib/bingo.ts");
   const parser = await read("lib/pdf-parser.ts");
 
@@ -27,11 +33,18 @@ test("incluye los flujos operativos principales", async () => {
   assert.match(page, /saveManualCard/);
   assert.match(page, /registerBall/);
   assert.match(page, /recordWinners/);
-  assert.match(page, /Todos los patrones están activos/);
+  assert.match(page, /Administra los patrones del juego/);
   assert.match(page, /patternStatuses/);
+  assert.match(page, /togglePattern/);
+  assert.match(page, /deleteCard/);
+  assert.match(page, /deleteVoidedCards/);
+  assert.match(page, /cardLayers/);
+  assert.match(page, /Usuarios y membresías/);
   assert.match(page, /exportPdf/);
   assert.match(page, /exportExcel/);
   assert.match(page, /exportCsv/);
+  assert.match(route, /approveMembership/);
+  assert.match(route, /x-device-id/);
   assert.match(bingo, /isWinningCard/);
   assert.match(bingo, /winningPatternsForCard/);
   assert.match(bingo, /blackout/);
@@ -40,7 +53,7 @@ test("incluye los flujos operativos principales", async () => {
 });
 
 test("no conserva la interfaz temporal del starter", async () => {
-  const page = await read("app/page.tsx");
+  const page = await read("app/game-console.tsx");
   const layout = await read("app/layout.tsx");
   const packageJson = await read("package.json");
 

@@ -19,6 +19,24 @@ type Bucket = {
 export async function POST(request: Request) {
   try {
     const bindings = env as unknown as { DB: D1; FILES: Bucket };
+    const email = (request.headers.get("oai-authenticated-user-email") || "").toLowerCase();
+    if (email && email !== "byvera198@gmail.com") {
+      const membership = await bindings.DB
+        .prepare("SELECT status, expires_at, device_id FROM memberships WHERE email = ?")
+        .bind(email)
+        .first<{ status: string; expires_at: string | null; device_id: string | null }>();
+      const deviceId = request.headers.get("x-device-id") || "";
+      if (
+        !membership ||
+        membership.status !== "approved" ||
+        !membership.expires_at ||
+        new Date(membership.expires_at).getTime() <= Date.now() ||
+        !deviceId ||
+        membership.device_id !== deviceId
+      ) {
+        return Response.json({ error: "La membresía o el dispositivo no están autorizados." }, { status: 403 });
+      }
+    }
     const name = decodeURIComponent(request.headers.get("x-file-name") || "cartones.pdf");
     const checksum = request.headers.get("x-checksum") || "";
     const gameId = request.headers.get("x-game-id") || "";

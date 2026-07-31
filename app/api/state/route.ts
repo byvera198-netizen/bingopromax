@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import type { BingoCard, BingoPattern, Game, Winner } from "@/lib/bingo";
+import type { BingoCard, BingoPattern, Game, Membership, Winner } from "@/lib/bingo";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +17,50 @@ type D1 = {
 
 const getDb = () => (env as unknown as { DB: D1 }).DB;
 const now = () => new Date().toISOString();
+const ADMIN_EMAIL = "byvera198@gmail.com";
+
+function mapMembership(row: Record<string, unknown>): Membership {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    name: String(row.name ?? ""),
+    plan: String(row.plan) as Membership["plan"],
+    status: String(row.status) as Membership["status"],
+    requestedAt: String(row.requested_at),
+    approvedAt: row.approved_at ? String(row.approved_at) : null,
+    expiresAt: row.expires_at ? String(row.expires_at) : null,
+    deviceBound: Boolean(row.device_id),
+  };
+}
+
+async function authorize(db: D1, request: Request) {
+  const email = (request.headers.get("oai-authenticated-user-email") || "").toLowerCase();
+  if (!email || email === ADMIN_EMAIL) {
+    return { allowed: true, role: "admin" as const, email: email || ADMIN_EMAIL };
+  }
+  const row = await db
+    .prepare("SELECT * FROM memberships WHERE email = ?")
+    .bind(email)
+    .first<Record<string, unknown>>();
+  if (!row) return { allowed: false, role: "anonymous" as const, email, reason: "Solicita una membresía para continuar." };
+  const membership = mapMembership(row);
+  if (membership.status !== "approved") {
+    return { allowed: false, role: "pending" as const, email, reason: "Tu solicitud está pendiente de aprobación.", membership };
+  }
+  if (!membership.expiresAt || new Date(membership.expiresAt).getTime() <= Date.now()) {
+    await db.prepare("UPDATE memberships SET status = 'expired' WHERE id = ?").bind(membership.id).run();
+    return { allowed: false, role: "pending" as const, email, reason: "Tu membresía ha vencido.", membership: { ...membership, status: "expired" as const } };
+  }
+  const deviceId = request.headers.get("x-device-id") || "";
+  const storedDevice = String(row.device_id ?? "");
+  if (!deviceId) return { allowed: false, role: "pending" as const, email, reason: "No se pudo identificar este dispositivo.", membership };
+  if (!storedDevice) {
+    await db.prepare("UPDATE memberships SET device_id = ? WHERE id = ?").bind(deviceId, membership.id).run();
+  } else if (storedDevice !== deviceId) {
+    return { allowed: false, role: "pending" as const, email, reason: "Esta cuenta ya está vinculada a otro dispositivo.", membership };
+  }
+  return { allowed: true, role: "member" as const, email, membership: { ...membership, deviceBound: true } };
+}
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS games (
@@ -63,6 +107,25 @@ const schemaStatements = [
     cells_json TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS game_patterns (
+    game_id TEXT NOT NULL,
+    pattern_id TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    custom INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(game_id, pattern_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS memberships (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    plan TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    device_id TEXT,
+    requested_at TEXT NOT NULL,
+    approved_at TEXT,
+    expires_at TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS winners (
     id TEXT PRIMARY KEY,
     game_id TEXT NOT NULL,
@@ -96,6 +159,8 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS cards_game_status_idx ON cards(game_id, status)",
   "CREATE INDEX IF NOT EXISTS draws_game_idx ON draws(game_id, drawn_at)",
   "CREATE INDEX IF NOT EXISTS winners_game_idx ON winners(game_id, validated_at)",
+  "CREATE INDEX IF NOT EXISTS game_patterns_game_idx ON game_patterns(game_id, enabled)",
+  "CREATE INDEX IF NOT EXISTS memberships_status_idx ON memberships(status)",
 ];
 
 async function ensureSchema(db: D1) {
@@ -151,20 +216,41 @@ function mapGame(row: Record<string, unknown>): Game {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const db = getDb();
     await ensureSchema(db);
+    const access = await authorize(db, request);
+    if (!access.allowed) return Response.json({ access }, { status: 403 });
     const gameRow = await getOrCreateGame(db);
     const game = mapGame(gameRow);
-    const [cardRows, drawRows, winnerRows, patternRows, fileRows] = await Promise.all([
+    const gameCount = await db.prepare("SELECT COUNT(*) AS total FROM games").first<{ total: number }>();
+    if (Number(gameCount?.total ?? 0) === 1) {
+      await db
+        .prepare(
+          `INSERT OR IGNORE INTO game_patterns (game_id, pattern_id, enabled, custom, created_at)
+           SELECT ?, id, 1, 1, created_at FROM patterns`,
+        )
+        .bind(game.id)
+        .run();
+    }
+    const [cardRows, drawRows, winnerRows, patternRows, gamePatternRows, fileRows] = await Promise.all([
       db.prepare("SELECT * FROM cards WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM draws WHERE game_id = ? ORDER BY drawn_at ASC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM winners WHERE game_id = ? ORDER BY validated_at DESC").bind(game.id).all<Record<string, unknown>>(),
-      db.prepare("SELECT * FROM patterns ORDER BY created_at DESC").all<Record<string, unknown>>(),
+      db.prepare(
+        `SELECT p.* FROM patterns p
+         INNER JOIN game_patterns gp ON gp.pattern_id = p.id
+         WHERE gp.game_id = ? AND gp.custom = 1
+         ORDER BY p.created_at DESC`,
+      ).bind(game.id).all<Record<string, unknown>>(),
+      db.prepare("SELECT pattern_id, enabled FROM game_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM files WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
     ]);
 
+    const membershipRows = access.role === "admin"
+      ? await db.prepare("SELECT * FROM memberships ORDER BY requested_at DESC").all<Record<string, unknown>>()
+      : { results: [] as Record<string, unknown>[] };
     return Response.json({
       game,
       cards: (cardRows.results ?? []).map((row) => ({
@@ -205,6 +291,9 @@ export async function GET() {
           custom: true,
         };
       }),
+      disabledPatternIds: (gamePatternRows.results ?? [])
+        .filter((row) => !Boolean(row.enabled))
+        .map((row) => String(row.pattern_id)),
       files: (fileRows.results ?? []).map((row) => ({
         id: String(row.id),
         name: String(row.name),
@@ -214,6 +303,8 @@ export async function GET() {
         cards: Number(row.cards),
         createdAt: String(row.created_at),
       })),
+      access,
+      memberships: (membershipRows.results ?? []).map(mapMembership),
     });
   } catch (error) {
     return Response.json(
@@ -231,6 +322,58 @@ export async function POST(request: Request) {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
     const gameId = body.gameId ? String(body.gameId) : null;
+
+    if (action === "requestMembership") {
+      const email = (request.headers.get("oai-authenticated-user-email") || String(body.email ?? "")).trim().toLowerCase();
+      const name = String(body.name ?? "").trim();
+      const plan = body.plan === "annual" ? "annual" : "six-months";
+      if (!email || !email.includes("@")) return Response.json({ error: "Correo inválido." }, { status: 400 });
+      await db
+        .prepare(
+          `INSERT INTO memberships (id, email, name, plan, status, requested_at)
+           VALUES (?, ?, ?, ?, 'pending', ?)
+           ON CONFLICT(email) DO UPDATE SET name = excluded.name, plan = excluded.plan,
+             status = 'pending', requested_at = excluded.requested_at`,
+        )
+        .bind(crypto.randomUUID(), email, name, plan, now())
+        .run();
+      return Response.json({
+        ok: true,
+        adminEmail: ADMIN_EMAIL,
+        subject: `Solicitud de membresía Bingo Control - ${email}`,
+      });
+    }
+
+    const access = await authorize(db, request);
+    if (!access.allowed) return Response.json({ error: access.reason, access }, { status: 403 });
+
+    if (action === "approveMembership") {
+      if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede aprobar usuarios." }, { status: 403 });
+      const membershipId = String(body.membershipId ?? "");
+      const membership = await db.prepare("SELECT * FROM memberships WHERE id = ?").bind(membershipId).first<Record<string, unknown>>();
+      if (!membership) return Response.json({ error: "Solicitud no encontrada." }, { status: 404 });
+      const months = String(membership.plan) === "annual" ? 12 : 6;
+      const approvedAt = new Date();
+      const expiresAt = new Date(approvedAt);
+      expiresAt.setMonth(expiresAt.getMonth() + months);
+      await db
+        .prepare("UPDATE memberships SET status = 'approved', approved_at = ?, expires_at = ?, device_id = NULL WHERE id = ?")
+        .bind(approvedAt.toISOString(), expiresAt.toISOString(), membershipId)
+        .run();
+      return Response.json({ ok: true, email: String(membership.email), expiresAt: expiresAt.toISOString() });
+    }
+
+    if (action === "rejectMembership") {
+      if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede rechazar usuarios." }, { status: 403 });
+      await db.prepare("UPDATE memberships SET status = 'rejected' WHERE id = ?").bind(String(body.membershipId ?? "")).run();
+      return Response.json({ ok: true });
+    }
+
+    if (action === "resetMembershipDevice") {
+      if (access.role !== "admin") return Response.json({ error: "Solo el administrador puede restablecer dispositivos." }, { status: 403 });
+      await db.prepare("UPDATE memberships SET device_id = NULL WHERE id = ?").bind(String(body.membershipId ?? "")).run();
+      return Response.json({ ok: true });
+    }
 
     if (action === "saveCards") {
       const cards = (body.cards ?? []) as BingoCard[];
@@ -348,11 +491,11 @@ export async function POST(request: Request) {
 
     if (action === "savePattern") {
       const pattern = body.pattern as BingoPattern;
-      if (!pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
+      if (!gameId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
         return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
       }
-      await db
-        .prepare(
+      await db.batch([
+        db.prepare(
           `INSERT INTO patterns (
             id, name, description, color, category, difficulty, cells_json, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -366,10 +509,76 @@ export async function POST(request: Request) {
           pattern.difficulty,
           JSON.stringify(pattern.cells),
           now(),
-        )
-        .run();
+        ),
+        db.prepare(
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, created_at)
+           VALUES (?, ?, 1, 1, ?)`,
+        ).bind(gameId, pattern.id, now()),
+      ]);
       await audit(db, gameId, "CREATE_PATTERN", pattern.name, actor);
       return Response.json({ ok: true });
+    }
+
+    if (action === "togglePattern") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const patternId = String(body.patternId ?? "");
+      const enabled = body.enabled !== false;
+      await db
+        .prepare(
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, created_at)
+           VALUES (?, ?, ?, 0, ?)
+           ON CONFLICT(game_id, pattern_id) DO UPDATE SET enabled = excluded.enabled`,
+        )
+        .bind(gameId, patternId, enabled ? 1 : 0, now())
+        .run();
+      await audit(db, gameId, enabled ? "ENABLE_PATTERN" : "DISABLE_PATTERN", patternId, actor);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deletePattern") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const patternId = String(body.patternId ?? "");
+      await db
+        .prepare("DELETE FROM game_patterns WHERE game_id = ? AND pattern_id = ? AND custom = 1")
+        .bind(gameId, patternId)
+        .run();
+      const remaining = await db
+        .prepare("SELECT pattern_id FROM game_patterns WHERE pattern_id = ? LIMIT 1")
+        .bind(patternId)
+        .first<{ pattern_id: string }>();
+      if (!remaining) await db.prepare("DELETE FROM patterns WHERE id = ?").bind(patternId).run();
+      await audit(db, gameId, "DELETE_PATTERN", patternId, actor);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteCard") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const cardId = String(body.cardId ?? "");
+      await db.batch([
+        db.prepare("DELETE FROM winners WHERE game_id = ? AND card_id = ?").bind(gameId, cardId),
+        db.prepare("DELETE FROM cards WHERE game_id = ? AND id = ?").bind(gameId, cardId),
+      ]);
+      await audit(db, gameId, "DELETE_CARD", cardId, actor);
+      return Response.json({ ok: true });
+    }
+
+    if (action === "deleteVoidCards") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const voided = await db
+        .prepare("SELECT id FROM cards WHERE game_id = ? AND status = 'void'")
+        .bind(gameId)
+        .all<{ id: string }>();
+      const ids = (voided.results ?? []).map((row) => row.id);
+      if (ids.length) {
+        await db.batch(
+          ids.flatMap((cardId) => [
+            db.prepare("DELETE FROM winners WHERE game_id = ? AND card_id = ?").bind(gameId, cardId),
+            db.prepare("DELETE FROM cards WHERE game_id = ? AND id = ?").bind(gameId, cardId),
+          ]),
+        );
+      }
+      await audit(db, gameId, "DELETE_VOID_CARDS", String(ids.length), actor);
+      return Response.json({ deleted: ids.length });
     }
 
     if (action === "updateCardStatus") {

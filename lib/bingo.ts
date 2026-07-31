@@ -66,13 +66,36 @@ export interface ImportedFile {
   createdAt: string;
 }
 
+export interface Membership {
+  id: string;
+  email: string;
+  name: string;
+  plan: "six-months" | "annual";
+  status: "pending" | "approved" | "rejected" | "expired";
+  requestedAt: string;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  deviceBound: boolean;
+}
+
+export interface AccessState {
+  allowed: boolean;
+  role: "admin" | "member" | "pending" | "anonymous";
+  email: string;
+  reason?: string;
+  membership?: Membership | null;
+}
+
 export interface AppState {
   game: Game;
   cards: BingoCard[];
   draws: Draw[];
   winners: Winner[];
   customPatterns: BingoPattern[];
+  disabledPatternIds: string[];
   files: ImportedFile[];
+  access: AccessState;
+  memberships?: Membership[];
 }
 
 const range = (start: number, end: number) =>
@@ -249,7 +272,9 @@ export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
-  return card.grid.length === 5 ? [COMPACT_CARD_PATTERN] : activePatterns;
+  return card.grid.length === 5
+    ? activePatterns.filter((pattern) => pattern.id === COMPACT_CARD_PATTERN.id)
+    : activePatterns.filter((pattern) => pattern.id !== COMPACT_CARD_PATTERN.id);
 }
 
 export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
