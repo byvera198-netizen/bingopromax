@@ -515,9 +515,9 @@ export default function GameConsole() {
       }
       if (action === "resendMembershipCode" && result.email && result.accessCode) {
         await navigator.clipboard?.writeText(result.accessCode).catch(() => undefined);
-        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Nuevo código de acceso - Bingo Control Pro")}&body=${encodeURIComponent(`Hola ${membership.name || ""},\n\nTu nuevo código de acceso es: ${result.accessCode}\nMembresía: ${result.months || membership.months || 1} mes(es)\nVigencia hasta: ${new Date(result.expiresAt || membership.expiresAt || "").toLocaleDateString("es-EC")}\n\nEl código anterior dejó de funcionar.`)}`, "_self");
+        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Código de acceso - Bingo Control Pro")}&body=${encodeURIComponent(`Hola ${membership.name || ""},\n\nTu código permanente de acceso es: ${result.accessCode}\nMembresía: ${result.months || membership.months || 1} mes(es)\nVigencia hasta: ${new Date(result.expiresAt || membership.expiresAt || "").toLocaleDateString("es-EC")}\n\nConserva este código para futuras consultas.`)}`, "_self");
       }
-      notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "resendMembershipCode" ? "Código nuevo copiado y correo preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
+      notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "resendMembershipCode" ? "Código permanente copiado y correo preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo actualizar el usuario.", "error");
     }
@@ -1851,11 +1851,11 @@ export default function GameConsole() {
                     <article key={membership.id}>
                       <span className={`membership-status status-${membership.status}`}>{membership.status}</span>
                       <div><strong>{membership.name || "Sin nombre"}</strong><small>{membership.email}</small></div>
-                      <div><b>{membership.months || 1} mes(es)</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small>{membership.accessCode && !membership.activationVerified && <code className="membership-code">Código: {membership.accessCode}</code>}</div>
+                      <div><b>{membership.months || 1} mes(es)</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small>{membership.accessCode && <code className="membership-code">Código: {membership.accessCode}</code>}</div>
                       <div className="membership-actions">
                         {membership.status !== "approved" && <label className="months-control"><span>Meses</span><input min={1} max={120} onChange={(event) => setMembershipMonths((current) => ({ ...current, [membership.id]: Math.max(1, Math.min(120, Number(event.target.value) || 1)) }))} type="number" value={membershipMonths[membership.id] ?? membership.months ?? 1} /></label>}
                         {membership.status !== "approved" && <button className="primary-button compact" onClick={() => void manageMembership(membership, "approveMembership")} type="button">Aprobar</button>}
-                        {membership.status === "approved" && membership.accessCode && !membership.activationVerified && <button className="secondary-button compact" onClick={() => { void navigator.clipboard?.writeText(membership.accessCode || ""); notify("Código copiado."); }} type="button">Copiar código</button>}
+                        {membership.status === "approved" && membership.accessCode && <button className="secondary-button compact" onClick={() => { void navigator.clipboard?.writeText(membership.accessCode || ""); notify("Código copiado."); }} type="button">Copiar código</button>}
                         {membership.status === "approved" && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resendMembershipCode")} type="button">Reenviar código</button>}
                         {membership.deviceBound && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resetMembershipDevice")} type="button">Cambiar dispositivo</button>}
                         {membership.status === "pending" && <button className="ghost-button compact" onClick={() => void manageMembership(membership, "rejectMembership")} type="button">Rechazar</button>}
