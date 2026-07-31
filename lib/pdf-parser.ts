@@ -1517,6 +1517,45 @@ function cropGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   return target.canvas;
 }
 
+async function recognizeGridIdentifiers(
+  source: HTMLCanvasElement,
+  rectangles: GridRectangle[],
+  worker: OcrWorker,
+) {
+  const identifiers: Identifier[] = [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789-#Tab",
+    tessedit_pageseg_mode: "7",
+    preserve_interword_spaces: "1",
+  });
+  for (const [index, rectangle] of rectangles.entries()) {
+    const margin = Math.max(18, rectangle.height * 0.16);
+    const top = Math.max(0, rectangle.y - margin);
+    const height = Math.max(1, rectangle.y - top);
+    const target = makeCanvas(rectangle.width * 2, height * 2);
+    if (!target) continue;
+    target.context.drawImage(source, rectangle.x, top, rectangle.width, height, 0, 0, target.canvas.width, target.canvas.height);
+    binarizeNumbers(target.canvas, target.context);
+    const result = await worker.recognize(target.canvas, {}, { text: true });
+    const text = (result.data.text ?? "").replace(/\s+/g, " ");
+    const separated = text.match(/(\d{5,12})\s*[-_]\s*(\d{1,3})/);
+    let value = separated ? `${separated[1]}-${separated[2]}` : "";
+    if (!value) {
+      const joined = text.match(/\b(\d{6,13})\b/);
+      if (joined && joined[1].endsWith(String((index % 4) + 1))) {
+        value = `${joined[1].slice(0, -1)}-${joined[1].slice(-1)}`;
+      }
+    }
+    if (value) identifiers.push({ value, x: rectangle.x + rectangle.width / 2, y: source.height - rectangle.y });
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return identifiers;
+}
+
 function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   const cellWidth = 150;
   const cellHeight = 120;
@@ -1643,7 +1682,9 @@ async function recognizeDetectedGrids(
   pageNumber: number,
 ) {
   const detected: DetectedGrid[] = [];
-  for (const rectangle of rectangles.filter((item) => item.score >= 85)) {
+  const eligibleRectangles = rectangles.filter((item) => item.score >= 85);
+  const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
+  for (const rectangle of eligibleRectangles) {
     const original = cropGridCanvas(source, rectangle);
     if (!original) continue;
     const originalResult = await worker.recognize(
@@ -1690,7 +1731,7 @@ async function recognizeDetectedGrids(
       rowIds: [],
     });
   }
-  return cardsFromDetectedGrids(detected, fileName, pageNumber);
+  return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
 }
 
 const compactCellPositions = [
