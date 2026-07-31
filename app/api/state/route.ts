@@ -189,7 +189,6 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS winners_game_idx ON winners(game_id, validated_at)",
   "CREATE INDEX IF NOT EXISTS game_patterns_game_idx ON game_patterns(game_id, enabled)",
   "CREATE INDEX IF NOT EXISTS memberships_status_idx ON memberships(status)",
-  "CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)",
 ];
 
 async function ensureSchema(db: D1) {
@@ -206,6 +205,7 @@ async function ensureSchema(db: D1) {
       // The column already exists.
     }
   }
+  await db.prepare("CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)").run();
 }
 
 async function audit(db: D1, gameId: string | null, action: string, detail: string, actor: string) {
