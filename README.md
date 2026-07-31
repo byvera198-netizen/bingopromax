@@ -1,5 +1,12 @@
 # Bingo Control Pro
 
+## Abrir la aplicación
+
+### [▶ Abrir Bingo Control Pro Ecuador](https://bingo-control-pro-ecuador.eemite.chatgpt.site)
+
+Esta página de GitHub conserva el código fuente y la documentación. La aplicación
+funcional se abre desde el botón anterior.
+
 Aplicación web para gestionar partidas de bingo en tiempo real. Permite importar
 cartones desde PDF, crearlos manualmente, registrar bolillas, validar patrones y
 detectar uno o varios ganadores de forma automática.
@@ -7,16 +14,19 @@ detectar uno o varios ganadores de forma automática.
 ## Funciones incluidas
 
 - Importación múltiple de PDF con extracción directa de texto y OCR de respaldo.
-- Detección de cuadrículas 5×5, páginas de origen y archivos duplicados.
+- Detección de cuadrículas 5×5 y reconocimiento OCR de la numeración `Tab#`.
+- Edición manual del número de cada cartón y validación de duplicados.
 - Ingreso manual con centro libre, número de cartón y serie.
-- Bolillero manual y teclado visual del 1 al 90, sin números repetidos.
+- Bolillero manual y teclado visual del 1 al 75, sin números repetidos.
 - Motor incremental de validación para cartones activos.
-- 14 patrones predefinidos y editor visual de patrones personalizados.
+- Patrones simultáneos editables, eliminables y personalizables por cada usuario.
 - Pausa automática configurable cuando se detecta un ganador.
 - Historial de bolillas, cartones anulables, ganadores y auditoría.
-- Exportación de reportes a PDF, Excel y CSV.
+- Reporte PDF con bolillas, patrones y cartones ganadores completos.
 - Tema claro/oscuro, sonidos, diseño adaptable y recuperación automática.
-- Persistencia estructurada en D1 y almacenamiento de los PDF originales en R2.
+- Persistencia estructurada de partidas, membresías y administradores.
+- Procesamiento local de los PDF: los archivos originales no se almacenan.
+- Usuarios autorizados por membresía y vinculados a un solo dispositivo.
 
 ## Inicio local
 
@@ -47,7 +57,7 @@ npm run db:generate
 
 - `app/page.tsx`: interfaz y flujos de operación.
 - `app/api/state/route.ts`: API de partidas, cartones, bolillas y ganadores.
-- `app/api/files/route.ts`: almacenamiento y deduplicación de PDF.
+- `app/api/files/route.ts`: bloqueo explícito del almacenamiento de PDF.
 - `lib/bingo.ts`: patrones y motor de validación.
 - `lib/pdf-parser.ts`: extracción PDF, reconocimiento OCR y armado de cartones.
 - `db/schema.ts`: modelo de datos.
@@ -56,11 +66,9 @@ npm run db:generate
 
 ## Seguridad y datos
 
-Todas las consultas usan sentencias preparadas. El almacenamiento de archivos
-acepta únicamente PDF y comprueba su huella SHA-256 para evitar duplicados. Las
-acciones quedan asociadas al usuario autenticado del espacio de trabajo cuando
-la plataforma envía su identidad; en desarrollo se registran como
-`Operador local`.
+Todas las consultas usan sentencias preparadas y cada partida queda aislada por
+usuario. Los PDF se procesan únicamente en el navegador para extraer los
+cartones; no se envían ni se guardan en la plataforma.
 
 El OCR es una ayuda de reconocimiento: antes de iniciar una partida conviene
 revisar visualmente los cartones importados, especialmente cuando el escaneo
