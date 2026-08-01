@@ -14,9 +14,16 @@ import {
   detectGridRectangles,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  identifierFamilyFromOcrText,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("reconstruye la serie de una hoja aunque el OCR mezcle guiones y letras", () => {
+  const text = "PLAN PREMIO 17000 10000 N TABLA #87020 Tab#87020-1 Tab#87020-2";
+  assert.equal(identifierFamilyFromOcrText(text), "87020");
+  assert.equal(identifierFamilyFromOcrText("Tab#87O21-3"), "87021");
+});
 
 const baseGrid = [
   1, 16, 31, 46, 61,

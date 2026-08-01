@@ -1521,19 +1521,75 @@ function cropGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   return target.canvas;
 }
 
+export function identifierFamilyFromOcrText(text: string) {
+  const scores = new Map<string, number>();
+  const add = (value: string, score: number) => {
+    if (value.length < 5 || value.length > 10 || /^0+$/.test(value)) return;
+    scores.set(value, (scores.get(value) ?? 0) + score);
+  };
+  const normalized = text.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1");
+  for (const match of normalized.matchAll(/tab(?:la)?\D{0,12}(\d{5,10})/gi)) add(match[1], 8);
+  for (const match of normalized.matchAll(/(\d{5,10})\s*[-_]\s*([1-4])(?!\d)/g)) add(match[1], 5);
+  for (const match of normalized.matchAll(/(?<!\d)(\d{6,11})(?!\d)/g)) {
+    const joined = match[1];
+    if (/[1-4]$/.test(joined)) add(joined.slice(0, -1), 3);
+  }
+  for (const match of normalized.matchAll(/(?<!\d)(\d{5,8})(?!\d)/g)) add(match[1], 1);
+  return [...scores.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] ?? null;
+}
+
 async function recognizeGridIdentifiers(
   source: HTMLCanvasElement,
   rectangles: GridRectangle[],
   worker: OcrWorker,
 ) {
-  const identifiers: Identifier[] = [];
+  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789-#Tab",
-    tessedit_pageseg_mode: "7",
+    tessedit_char_whitelist: "0123456789-_#TabOoIl",
+    tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
-  for (const [index, rectangle] of rectangles.entries()) {
-    const margin = Math.max(18, rectangle.height * 0.16);
+
+  // En las hojas de cuatro cartones la serie aparece varias veces en el
+  // encabezado (p. ej. 87020, 87020-1 y 87020-2). Leer una sola franja amplia
+  // es más estable que depender de cuatro recortes pequeños.
+  const headerHeight = Math.max(1, Math.round(source.height * 0.42));
+  const pageHeader = makeCanvas(source.width, headerHeight);
+  let family: string | null = null;
+  if (pageHeader) {
+    pageHeader.context.drawImage(source, 0, 0, source.width, headerHeight, 0, 0, source.width, headerHeight);
+    binarizeNumbers(pageHeader.canvas, pageHeader.context);
+    const result = await worker.recognize(pageHeader.canvas, {}, { text: true });
+    family = identifierFamilyFromOcrText(result.data.text ?? "");
+  }
+
+  if (!family) {
+    const texts: string[] = [];
+    for (const rectangle of ordered) {
+      const margin = Math.max(28, rectangle.height * 0.25);
+      const top = Math.max(0, rectangle.y - margin);
+      const height = Math.max(1, rectangle.y - top);
+      const target = makeCanvas(rectangle.width * 2, height * 2);
+      if (!target) continue;
+      target.context.drawImage(source, rectangle.x, top, rectangle.width, height, 0, 0, target.canvas.width, target.canvas.height);
+      binarizeNumbers(target.canvas, target.context);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      texts.push(result.data.text ?? "");
+    }
+    family = identifierFamilyFromOcrText(texts.join("\n"));
+  }
+
+  const identifiers: Identifier[] = family
+    ? ordered.map((rectangle, index) => ({
+        value: `${family}-${index + 1}`,
+        x: rectangle.x + rectangle.width / 2,
+        y: source.height - rectangle.y,
+      }))
+    : [];
+
+  /* istanbul ignore next -- defensive fallback for nonstandard single-card sheets */
+  if (!identifiers.length) for (const [index, rectangle] of ordered.entries()) {
+    const margin = Math.max(28, rectangle.height * 0.25);
     const top = Math.max(0, rectangle.y - margin);
     const height = Math.max(1, rectangle.y - top);
     const target = makeCanvas(rectangle.width * 2, height * 2);
@@ -1541,7 +1597,7 @@ async function recognizeGridIdentifiers(
     target.context.drawImage(source, rectangle.x, top, rectangle.width, height, 0, 0, target.canvas.width, target.canvas.height);
     binarizeNumbers(target.canvas, target.context);
     const result = await worker.recognize(target.canvas, {}, { text: true });
-    const text = (result.data.text ?? "").replace(/\s+/g, " ");
+    const text = (result.data.text ?? "").replace(/\s+/g, " ").replace(/[Oo]/g, "0").replace(/[Il|]/g, "1");
     const separated = text.match(/(\d{5,12})\s*[-_]\s*(\d{1,3})/);
     let value = separated ? `${separated[1]}-${separated[2]}` : "";
     if (!value) {
