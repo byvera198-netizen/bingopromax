@@ -155,10 +155,10 @@ function BingoGrid({
   showPending?: boolean;
   onCellClick?: (index: number) => void;
 }) {
-  if (grid?.length === 5) {
+  if (grid && grid.length !== 25) {
     return (
       <div className={`compact-card-grid ${compact ? "compact" : ""} ${showPending ? "" : "hide-pending"}`}>
-        <span className="compact-card-title">SABROSITO</span>
+        <span className="compact-card-title">{grid.length === 5 ? "SABROSITO" : "CARTÓN ESPECIAL"}</span>
         <div className="compact-number-grid">
           {grid.map((value, index) => {
             const marked = Boolean(called?.has(value));
@@ -1255,7 +1255,12 @@ export default function GameConsole() {
         const card = state.cards.find((item) => item.id === winner.cardId);
         const pattern = availablePatterns.find((item) => item.id === winner.patternId) ??
           (card ? specialCardPatternForGrid(card.grid) : null);
-        const blockHeight = card?.grid.length === 5 ? 28 : 58;
+        const compactRows = card && card.grid.length !== 25
+          ? Math.ceil(card.grid.length / 5)
+          : 5;
+        const blockHeight = card?.grid.length !== 25
+          ? 20 + compactRows * 8
+          : 58;
         if (y + blockHeight > 282) {
           pdf.addPage();
           y = 20;
@@ -1267,13 +1272,16 @@ export default function GameConsole() {
         y += 5;
         if (card && pattern) {
           const numberSheetForm = numberSheetFormForGrid(card.grid);
-          const columns = card.grid.length === 5 ? 5 : 5;
-          const rows = card.grid.length === 5 ? 1 : 5;
+          const columns = 5;
+          const rows = card.grid.length === 25
+            ? 5
+            : Math.ceil(card.grid.length / columns);
           const cellSize = 8;
           for (let row = 0; row < rows; row += 1) {
             for (let column = 0; column < columns; column += 1) {
               const index = row * columns + column;
               const value = card.grid[index];
+              if (value === undefined) continue;
               const target = pattern.cells.includes(index);
               const marked = value > 0
                 ? called.has(value)

@@ -309,6 +309,40 @@ export function numberSheetFormForGrid(grid: number[]): NumberSheetForm | null {
 
 export function specialCardPatternForGrid(grid: number[]) {
   if (grid.length === 5) return COMPACT_CARD_PATTERN;
+  if (grid.length >= 6 && grid.length < 25) {
+    const cells = range(0, grid.length - 1);
+    const metadata: Record<number, { id: string; name: string; variants?: number[][] }> = {
+      6: { id: "keke-keke-completo", name: "Keke Keke completo" },
+      7: { id: "leche-completo", name: "Leche completo" },
+      8: { id: "bom-bom-completo", name: "Bom Bom completo" },
+      9: { id: "yapa-completo", name: "Yapa completo" },
+      10: { id: "loco-completo", name: "Loco completo" },
+      16: {
+        id: "linea-completa",
+        name: "Línea completa",
+        variants: [
+          [2, 3, 4, 5, 6],
+          [9, 10, 11, 12, 13],
+          [0, 3, 7, 10, 14],
+          [1, 5, 8, 12, 15],
+        ],
+      },
+    };
+    const special = metadata[grid.length] ?? {
+      id: `carton-especial-${grid.length}`,
+      name: "Cartón especial completo",
+    };
+    return {
+      id: special.id,
+      name: special.name,
+      description: "Todos los números impresos del cartón especial.",
+      color: "#d7ff3f",
+      category: "Especial",
+      difficulty: "Especial",
+      cells,
+      variants: special.variants ?? [cells],
+    } satisfies BingoPattern;
+  }
   const form = numberSheetFormForGrid(grid);
   return form ? NUMBER_SHEET_PATTERNS[form] : null;
 }
@@ -387,7 +421,10 @@ export function winningPatternsForCard(
 
 export function validateCardGrid(grid: number[]) {
   const errors: string[] = [];
-  if (grid.length !== 25) errors.push("La cuadrícula debe tener 25 casillas.");
+  const isSpecialCard = grid.length >= 5 && grid.length < 25;
+  if (grid.length !== 25 && !isSpecialCard) {
+    errors.push("La cuadrícula debe tener 25 casillas o corresponder a un cartón especial.");
+  }
   const nonFree = grid.filter((number) => number !== 0);
   if (nonFree.some((number) => !Number.isInteger(number) || number < 1 || number > 75)) {
     errors.push("Los números deben estar entre 1 y 75.");

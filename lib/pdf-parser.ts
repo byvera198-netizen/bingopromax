@@ -1045,6 +1045,25 @@ function numberSheetFormsFromIdentifierSeries(
   return result;
 }
 
+const numberSheetFormBySuffix: Partial<Record<number, NumberSheetForm>> = {
+  3: "1",
+  4: "3",
+  5: "5",
+  6: "9",
+};
+
+function dominantNumberSheetFamily(
+  metadata: Array<NumberSheetMetadata | null>,
+) {
+  const counts = new Map<string, number>();
+  for (const item of metadata) {
+    const family = item?.identifier?.match(/^(.+)-\d+$/)?.[1];
+    if (family) counts.set(family, (counts.get(family) ?? 0) + 1);
+  }
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  return best && best[1] >= 2 ? best[0] : null;
+}
+
 interface DecodedOcrRow {
   values: number[];
   xStart: number;
@@ -1613,6 +1632,44 @@ export function extractPartialGridFromKnownOcrBlocks(
   return grid;
 }
 
+export function decodeBingoRowDigits(raw: string, centerFree = false) {
+  const digits = raw.replace(/\D/g, "");
+  const columns = centerFree ? [0, 1, 3, 4] : [0, 1, 2, 3, 4];
+  if (digits.length < columns.length || digits.length > columns.length * 2 + 4) {
+    return null;
+  }
+  let best: { values: number[]; skipped: number; confidence: number } | null = null;
+  function visit(position: number, columnIndex: number, values: number[], skipped: number) {
+    if (skipped > 4) return;
+    if (columnIndex === columns.length) {
+      const totalSkipped = skipped + digits.length - position;
+      if (totalSkipped > 4) return;
+      const confidence = values.length * 25 - totalSkipped * 20;
+      if (!best || confidence > best.confidence) {
+        best = { values, skipped: totalSkipped, confidence };
+      }
+      return;
+    }
+    if (position >= digits.length) return;
+    visit(position + 1, columnIndex, values, skipped + 1);
+    const column = columns[columnIndex];
+    const [minimum, maximum] = bingoColumnRanges[column];
+    for (const length of [2, 1]) {
+      const text = digits.slice(position, position + length);
+      if (!text || text.startsWith("0")) continue;
+      const value = Number(text);
+      if (value < minimum || value > maximum) continue;
+      visit(position + length, columnIndex + 1, [...values, value], skipped);
+    }
+  }
+  visit(0, 0, [], 0);
+  if (!best) return null;
+  const decoded = best as { values: number[] };
+  return centerFree
+    ? [decoded.values[0], decoded.values[1], 0, decoded.values[2], decoded.values[3]]
+    : decoded.values;
+}
+
 export function extractNumberSheetGridFromKnownOcrBlocks(
   blocks: OcrBlock[],
   width: number,
@@ -1998,56 +2055,98 @@ async function recognizeMissingNumberSheetCells(
     const value = normalized[index];
     return value < 0 || (counts.get(value) ?? 0) > 1;
   });
-  if (!missing.length) return normalized;
+  const cellsToRecognize = [...new Set([
+    ...NUMBER_SHEET_FORM_CELLS[form],
+    ...missing,
+  ])];
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
     tessedit_pageseg_mode: "8",
     preserve_interword_spaces: "1",
   });
   const resolved = [...normalized];
-  for (const index of missing) {
+  for (const index of cellsToRecognize) {
     const row = Math.floor(index / 5);
     const column = index % 5;
     const left = rectangle.verticalLines[column] + 5;
     const top = rectangle.horizontalLines[row] + 5;
     const width = Math.max(1, rectangle.verticalLines[column + 1] - left - 5);
     const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 5);
-    const target = makeCanvas(240, 190);
-    if (!target) continue;
-    target.context.drawImage(
-      source,
-      left,
-      top,
-      width,
-      height,
-      15,
-      15,
-      210,
-      160,
-    );
-    binarizeNumbers(target.canvas, target.context, 168);
-    const result = await worker.recognize(
-      target.canvas,
-      {},
-      { blocks: true, text: true },
-    );
-    const symbols = result.data.blocks?.length
-      ? flattenOcrSymbols(ocrWords(result.data.blocks))
-      : [];
-    let value = bestCellValue(symbols, column, 120, 240);
-    if (value === null) {
-      const digits = (result.data.text ?? "").replace(/\D/g, "");
-      for (let start = 0; start < digits.length && value === null; start += 1) {
-        for (const length of [2, 1]) {
-          const candidate = Number(digits.slice(start, start + length));
-          if (validNumberForCell(candidate, index)) {
-            value = candidate;
-            break;
+    let value: number | null = null;
+    for (const threshold of [100, 145, 195, 225]) {
+      const target = makeCanvas(240, 190);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        left,
+        top,
+        width,
+        height,
+        15,
+        15,
+        210,
+        160,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold);
+      const result = await worker.recognize(
+        target.canvas,
+        {},
+        { blocks: true, text: true },
+      );
+      const symbols = result.data.blocks?.length
+        ? flattenOcrSymbols(ocrWords(result.data.blocks))
+        : [];
+      value = bestCellValue(symbols, column, 120, 240);
+      if (value === null) {
+        const digits = (result.data.text ?? "").replace(/\D/g, "");
+        for (let start = 0; start < digits.length && value === null; start += 1) {
+          for (const length of [2, 1]) {
+            const candidate = Number(digits.slice(start, start + length));
+            if (validNumberForCell(candidate, index)) {
+              value = candidate;
+              break;
+            }
           }
         }
       }
+      if (value !== null) break;
     }
-    resolved[index] = value ?? -1;
+    resolved[index] = value ?? (validNumberForCell(normalized[index], index)
+      ? normalized[index]
+      : -1);
+  }
+  const required = new Set(NUMBER_SHEET_FORM_CELLS[form]);
+  const unresolvedRows = [...new Set(
+    resolved
+      .map((value, index) => ({ value, index }))
+      .filter(({ value, index }) => required.has(index) && !validNumberForCell(value, index))
+      .map(({ index }) => Math.floor(index / 5)),
+  )];
+  for (const row of unresolvedRows) {
+    const left = rectangle.verticalLines[0] + 3;
+    const top = rectangle.horizontalLines[row] + 3;
+    const width = Math.max(1, rectangle.verticalLines[5] - left - 3);
+    const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 3);
+    let decoded: number[] | null = null;
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "7",
+      preserve_interword_spaces: "1",
+    });
+    for (const threshold of [145, 180, 215]) {
+      const target = makeCanvas(1000, 210);
+      if (!target) continue;
+      target.context.drawImage(source, left, top, width, height, 15, 15, 970, 180);
+      binarizeNumbers(target.canvas, target.context, threshold);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      decoded = decodeBingoRowDigits(result.data.text ?? "", row === 2);
+      if (decoded) break;
+    }
+    if (decoded) {
+      decoded.forEach((value, column) => {
+        resolved[row * 5 + column] = value;
+      });
+    }
   }
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -2071,7 +2170,8 @@ async function recognizeMissingCells(
     .map((value, index) => ({ value, index }))
     .filter(
       ({ value, index }) =>
-        index !== 12 && (value < 0 || (counts.get(value) ?? 0) > 1),
+        index !== 12 &&
+        (!validNumberForCell(value, index) || (counts.get(value) ?? 0) > 1),
     );
   if (!missing.length) return grid;
   await worker.setParameters({
@@ -2093,42 +2193,49 @@ async function recognizeMissingCells(
       1,
       rectangle.horizontalLines[row + 1] - top - 5,
     );
-    const target = makeCanvas(240, 190);
-    if (!target) continue;
-    target.context.drawImage(
-      source,
-      left,
-      top,
-      width,
-      height,
-      15,
-      15,
-      210,
-      160,
-    );
-    binarizeNumbers(target.canvas, target.context);
-    const result = await worker.recognize(
-      target.canvas,
-      {},
-      { blocks: true, tsv: true, text: true },
-    );
-    const symbols = result.data.blocks?.length
-      ? flattenOcrSymbols(ocrWords(result.data.blocks))
-      : [];
-    let value = bestCellValue(symbols, column, 120, 240);
-    if (value === null) {
-      const digits = (result.data.text ?? "").replace(/\D/g, "");
-      const [minimum, maximum] = bingoColumnRanges[column];
-      const options: number[] = [];
-      for (let start = 0; start < digits.length; start += 1) {
-        for (const length of [2, 1]) {
-          const candidate = Number(digits.slice(start, start + length));
-          if (candidate >= minimum && candidate <= maximum) {
-            options.push(candidate);
+    let value: number | null = null;
+    for (const threshold of [100, 145, 195]) {
+      const target = makeCanvas(240, 190);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        left,
+        top,
+        width,
+        height,
+        15,
+        15,
+        210,
+        160,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold);
+      const result = await worker.recognize(
+        target.canvas,
+        {},
+        { blocks: true, tsv: true, text: true },
+      );
+      const symbols = result.data.blocks?.length
+        ? flattenOcrSymbols(ocrWords(result.data.blocks))
+        : [];
+      value = bestCellValue(symbols, column, 120, 240);
+      if (value === null) {
+        const digits = (result.data.text ?? "").replace(/\D/g, "");
+        const [minimum, maximum] = bingoColumnRanges[column];
+        const options: number[] = [];
+        for (let start = 0; start < digits.length; start += 1) {
+          for (const length of [2, 1]) {
+            const candidate = Number(digits.slice(start, start + length));
+            if (candidate >= minimum && candidate <= maximum) {
+              options.push(candidate);
+            }
           }
         }
+        value = options[0] ?? null;
+        if (value === null && column === 1 && digits === "7") {
+          value = 17;
+        }
       }
-      value = options[0] ?? null;
+      if (value !== null) break;
     }
     resolved[index] = value ?? -1;
   }
@@ -2149,9 +2256,15 @@ async function recognizeDetectedGrids(
 ) {
   const detected: DetectedGrid[] = [];
   const eligibleRectangles = rectangles.filter((item) => item.score >= 80);
+  const firstRectangleTop = Math.min(
+    ...eligibleRectangles.map((item) => item.y / source.height),
+  );
+  const likelyNumberSheetPage =
+    eligibleRectangles.length === 4 && firstRectangleTop >= 0.32;
   const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
   let numberSheetMetadataCache: Array<NumberSheetMetadata | null> | null = null;
   let numberSheetFormCache: NumberSheetForm[] | null = null;
+  let numberSheetFamily: string | null = null;
   for (const rectangle of eligibleRectangles) {
     const original = cropGridCanvas(source, rectangle);
     if (!original) continue;
@@ -2165,7 +2278,7 @@ async function recognizeDetectedGrids(
       original.width,
       original.height,
     );
-    if (gridQuality(grid) < 8) {
+    if (gridQuality(grid) < 8 || likelyNumberSheetPage) {
       const rectangleIndex = eligibleRectangles.indexOf(rectangle);
       if (!numberSheetMetadataCache && eligibleRectangles.length === 4) {
         numberSheetMetadataCache = await Promise.all(
@@ -2176,13 +2289,16 @@ async function recognizeDetectedGrids(
         numberSheetFormCache = numberSheetFormsFromIdentifierSeries(
           numberSheetMetadataCache,
         );
+        numberSheetFamily = dominantNumberSheetFamily(numberSheetMetadataCache);
       }
       const metadata =
         numberSheetMetadataCache?.[rectangleIndex] ??
         (await recognizeNumberSheetMetadata(source, rectangle, worker));
+      const metadataSuffix = Number(metadata?.identifier?.match(/-(\d+)$/)?.[1]);
       const formCandidates = [
         metadata?.form,
         numberSheetFormCache?.[rectangleIndex],
+        likelyNumberSheetPage ? numberSheetFormBySuffix[metadataSuffix] : null,
         inferNumberSheetForm(grid),
       ].filter(
         (candidate, index, all): candidate is NumberSheetForm =>
@@ -2193,6 +2309,7 @@ async function recognizeDetectedGrids(
       let form: NumberSheetForm | null = null;
       for (const candidate of formCandidates) {
         if (
+          metadata?.form === candidate ||
           await matchesNumberSheetSignature(
             source,
             rectangle,
@@ -2221,7 +2338,9 @@ async function recognizeDetectedGrids(
             y: source.height - rectangle.y,
             score: rectangle.score,
             rowIds: [],
-            identifier: metadata?.identifier ??
+            identifier: numberSheetFamily && Number.isInteger(metadataSuffix)
+              ? `${numberSheetFamily}-${metadataSuffix}`
+              : metadata?.identifier ??
               `SIN-ID-${String(pageNumber).padStart(3, "0")}-${eligibleRectangles.indexOf(rectangle) + 1}`,
           });
           continue;
@@ -2678,12 +2797,291 @@ async function recognizeCompactCards(
   return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
 }
 
+interface RelativeNumberCell {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  range?: readonly [number, number];
+  preferSymbols?: boolean;
+}
+
+interface SpecialPageCard {
+  suffix: number;
+  label: string;
+  x: number;
+  y: number;
+  cells: RelativeNumberCell[];
+}
+
+const cell = (
+  x: number,
+  y: number,
+  range: readonly [number, number] = [1, 75],
+  width = 0.07,
+  height = 0.06,
+  preferSymbols = false,
+): RelativeNumberCell => ({ x, y, width, height, range, preferSymbols });
+
+const gorditoSpecialCards: SpecialPageCard[] = [
+  {
+    suffix: 7,
+    label: "Yapa",
+    x: 0.82,
+    y: 0.16,
+    cells: [
+      cell(0.742, 0.116, [1, 30], 0.07, 0.06, true), cell(0.827, 0.116, [16, 60], 0.07, 0.06, true), cell(0.902, 0.116, [46, 75], 0.07, 0.06, true),
+      cell(0.752, 0.157, [1, 30], 0.07, 0.06, true), cell(0.831, 0.157, [16, 60], 0.07, 0.06, true), cell(0.898, 0.157, [46, 75], 0.07, 0.06, true),
+      cell(0.752, 0.215, [1, 30], 0.07, 0.06, true), cell(0.831, 0.215, [16, 60]), cell(0.898, 0.215, [46, 75], 0.07, 0.06, true),
+    ],
+  },
+  {
+    suffix: 5,
+    label: "Leche",
+    x: 0.25,
+    y: 0.60,
+    cells: [
+      cell(0.087, 0.574, [1, 30], 0.07, 0.04), cell(0.196, 0.574, [16, 45], 0.07, 0.04), cell(0.305, 0.574, [31, 60], 0.07, 0.04), cell(0.414, 0.574, [46, 75], 0.07, 0.04),
+      cell(0.142, 0.614, [1, 30], 0.065, 0.038), cell(0.251, 0.614, [16, 45], 0.065, 0.038), cell(0.360, 0.614, [46, 75], 0.065, 0.038),
+    ],
+  },
+  {
+    suffix: 6,
+    label: "Bom Bom",
+    x: 0.75,
+    y: 0.60,
+    cells: [
+      cell(0.577, 0.574, [1, 75], 0.07, 0.04), cell(0.687, 0.574, [1, 75], 0.07, 0.04), cell(0.796, 0.574, [1, 75], 0.07, 0.04), cell(0.905, 0.574, [1, 75], 0.07, 0.04),
+      cell(0.577, 0.614, [1, 75], 0.065, 0.038), cell(0.687, 0.614, [1, 75], 0.065, 0.038), cell(0.796, 0.614, [1, 75], 0.065, 0.038), cell(0.905, 0.614, [1, 75], 0.065, 0.038),
+    ],
+  },
+];
+
+const numberSheetExtraCards: SpecialPageCard[] = [
+  {
+    suffix: 1,
+    label: "Keke Keke",
+    x: 0.25,
+    y: 0.18,
+    cells: [
+      cell(0.102, 0.077, [1, 75], 0.09, 0.075), cell(0.423, 0.077, [1, 75], 0.09, 0.075),
+      cell(0.204, 0.178, [1, 75], 0.09, 0.075), cell(0.335, 0.178, [1, 75], 0.09, 0.075),
+      cell(0.102, 0.280, [1, 75], 0.075, 0.07), cell(0.423, 0.280, [1, 75], 0.075, 0.07),
+    ],
+  },
+];
+
+const lineAndLocoCards: SpecialPageCard[] = [
+  {
+    suffix: 1,
+    label: "Línea",
+    x: 0.27,
+    y: 0.58,
+    cells: [
+      cell(0.185, 0.385, [16, 30], 0.065, 0.09), cell(0.350, 0.385, [46, 60], 0.065, 0.09),
+      cell(0.100, 0.497, [1, 15], 0.065, 0.09), cell(0.183, 0.497, [16, 30], 0.065, 0.09), cell(0.266, 0.497, [31, 45], 0.065, 0.09), cell(0.350, 0.497, [46, 60], 0.065, 0.09), cell(0.433, 0.497, [61, 75], 0.065, 0.09),
+      cell(0.185, 0.609, [16, 30], 0.065, 0.09), cell(0.350, 0.609, [46, 60], 0.065, 0.09),
+      cell(0.100, 0.718, [1, 15], 0.065, 0.07), cell(0.183, 0.718, [16, 30], 0.065, 0.07), cell(0.266, 0.718, [31, 45], 0.065, 0.07), cell(0.350, 0.718, [46, 60], 0.065, 0.07), cell(0.433, 0.718, [61, 75], 0.065, 0.07),
+      cell(0.185, 0.833, [16, 30], 0.065, 0.09), cell(0.350, 0.833, [46, 60], 0.065, 0.09),
+    ],
+  },
+  {
+    suffix: 2,
+    label: "Loco",
+    x: 0.75,
+    y: 0.58,
+    cells: [
+      cell(0.733, 0.385, [31, 45], 0.065, 0.09),
+      cell(0.581, 0.497, [1, 15], 0.065, 0.09), cell(0.665, 0.497, [16, 30], 0.065, 0.09), cell(0.749, 0.497, [31, 45], 0.065, 0.09), cell(0.827, 0.497, [46, 60], 0.075, 0.09), cell(0.905, 0.497, [61, 75], 0.07, 0.09),
+      cell(0.733, 0.715, [31, 45], 0.065, 0.09),
+      cell(0.665, 0.837, [16, 30], 0.065, 0.09), cell(0.749, 0.837, [31, 45], 0.065, 0.09), cell(0.833, 0.837, [46, 60], 0.065, 0.09),
+    ],
+  },
+];
+
+function valueFromRelativeSymbols(
+  symbols: OcrSymbol[],
+  sourceWidth: number,
+  sourceHeight: number,
+  position: RelativeNumberCell,
+) {
+  const expectedX = position.x * sourceWidth;
+  const expectedY = position.y * sourceHeight;
+  const boxWidth = position.width * sourceWidth;
+  const boxHeight = position.height * sourceHeight;
+  const [minimum, maximum] = position.range ?? [1, 75];
+  const candidates = symbols
+    .filter((symbol) => {
+      const centerX = (symbol.bbox.x0 + symbol.bbox.x1) / 2;
+      const centerY = (symbol.bbox.y0 + symbol.bbox.y1) / 2;
+      const height = symbol.bbox.y1 - symbol.bbox.y0;
+      return (
+        Math.abs(centerX - expectedX) <= boxWidth / 2 &&
+        Math.abs(centerY - expectedY) <= boxHeight / 2 &&
+        height >= boxHeight * 0.18
+      );
+    })
+    .sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const values: Array<{ value: number; score: number }> = [];
+  for (let start = 0; start < candidates.length; start += 1) {
+    for (const length of [2, 1]) {
+      const selection = candidates.slice(start, start + length);
+      if (selection.length !== length) continue;
+      const digits = selection.map((symbol) => symbol.text.replace(/\D/g, "")).join("");
+      if (!digits || digits.length > 2) continue;
+      const value = Number(digits);
+      if (value < minimum || value > maximum) continue;
+      const center =
+        (Math.min(...selection.map((symbol) => symbol.bbox.x0)) +
+          Math.max(...selection.map((symbol) => symbol.bbox.x1))) /
+        2;
+      values.push({
+        value,
+        score:
+          selection.reduce((sum, symbol) => sum + symbol.confidence, 0) /
+            selection.length -
+          (Math.abs(center - expectedX) / Math.max(1, boxWidth)) * 30 +
+          (length === 2 ? 45 : 0),
+      });
+    }
+  }
+  return values.sort((a, b) => b.score - a.score)[0]?.value ?? null;
+}
+
+function valueFromCellText(text: string, range: readonly [number, number]) {
+  const digits = text.replace(/\D/g, "");
+  for (let start = 0; start < digits.length; start += 1) {
+    for (const length of [2, 1]) {
+      const value = Number(digits.slice(start, start + length));
+      if (value >= range[0] && value <= range[1]) return value;
+    }
+  }
+  return null;
+}
+
+async function recognizeRelativeCell(
+  source: HTMLCanvasElement,
+  position: RelativeNumberCell,
+  worker: OcrWorker,
+) {
+  const left = Math.max(0, (position.x - position.width / 2) * source.width);
+  const top = Math.max(0, (position.y - position.height / 2) * source.height);
+  const width = Math.min(source.width - left, position.width * source.width);
+  const height = Math.min(source.height - top, position.height * source.height);
+  const range = position.range ?? [1, 75];
+  for (const pageSegMode of ["8", "7"]) {
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: pageSegMode,
+      preserve_interword_spaces: "1",
+    });
+    for (const threshold of [100, 135, 165, 195, 225]) {
+    const target = makeCanvas(400, 300);
+    if (!target) continue;
+    target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
+    binarizeNumbers(target.canvas, target.context, threshold);
+    const result = await worker.recognize(target.canvas, {}, { text: true });
+    const value = valueFromCellText(result.data.text ?? "", range);
+    if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+function familyFromCards(cards: BingoCard[]) {
+  const counts = new Map<string, number>();
+  for (const card of cards) {
+    const match = card.number.match(/^(\d{5,12})-\d{1,3}$/);
+    if (match) counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+
+async function recognizeSpecialPageCards(
+  source: HTMLCanvasElement,
+  rectangles: GridRectangle[],
+  detectedCards: BingoCard[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+): Promise<BingoCard[]> {
+  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
+  const firstTop = ordered[0]?.y / source.height;
+  const isPortrait = source.height > source.width;
+  const layouts =
+    isPortrait && ordered.length >= 4 && firstTop < 0.32
+      ? gorditoSpecialCards
+      : isPortrait && ordered.length >= 4 && firstTop >= 0.32
+        ? numberSheetExtraCards
+        : !isPortrait && ordered.length === 0
+          ? lineAndLocoCards
+          : [];
+  if (!layouts.length) return [];
+
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789-_Tab",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  const result = await worker.recognize(
+    source,
+    {},
+    { blocks: true, text: true },
+  );
+  const symbols = result.data.blocks?.length
+    ? flattenOcrSymbols(ocrWords(result.data.blocks))
+    : [];
+  const family =
+    familyFromCards(detectedCards) ??
+    identifierFamilyFromOcrText(result.data.text ?? "");
+  const cards: BingoCard[] = [];
+  for (const layout of layouts) {
+    const values: number[] = [];
+    for (const position of layout.cells) {
+      const symbolValue = valueFromRelativeSymbols(
+        symbols,
+        source.width,
+        source.height,
+        position,
+      );
+      const croppedValue = await recognizeRelativeCell(source, position, worker);
+      const value = position.preferSymbols
+        ? symbolValue ?? croppedValue
+        : croppedValue ?? symbolValue;
+      values.push(value ?? -1);
+    }
+    if (
+      values.some((value) => value < 1 || value > 75) ||
+      new Set(values).size !== values.length
+    ) {
+      continue;
+    }
+    cards.push({
+      id: crypto.randomUUID(),
+      number: family
+        ? `${family}-${layout.suffix}`
+        : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${layout.suffix}`,
+      serial: layout.label,
+      grid: values,
+      sourceFile: fileName,
+      sourcePage: pageNumber,
+      status: "active",
+    });
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return cards;
+}
+
 export async function runOcr(
   pageProxy: import("pdfjs-dist").PDFPageProxy,
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
-) {
+): Promise<BingoCard[]> {
   const baseViewport = pageProxy.getViewport({ scale: 1 });
   const scale = Math.max(
     1.6,
@@ -2700,15 +3098,26 @@ export async function runOcr(
     canvas.width,
     canvas.height,
   );
+  let detectedCards: BingoCard[] = [];
   if (rectangles.length) {
-    const detectedCards = await recognizeDetectedGrids(
+    detectedCards = await recognizeDetectedGrids(
       canvas,
       rectangles,
       worker,
       fileName,
       pageNumber,
     );
-    if (detectedCards.length) return detectedCards;
+  }
+  const specialCards = await recognizeSpecialPageCards(
+    canvas,
+    rectangles,
+    detectedCards,
+    worker,
+    fileName,
+    pageNumber,
+  );
+  if (detectedCards.length || specialCards.length) {
+    return [...detectedCards, ...specialCards];
   }
   if (!rectangles.some((rectangle) => rectangle.score >= 80)) {
     const compactRectangles = detectCompactRectangles(
@@ -2915,7 +3324,7 @@ export async function parseBingoPdf(
 
       if (!pageCards.length) {
         warnings.push(
-          `Página ${pageNumber}: no se encontró un cartón 5×5 o Sabrosito válido. Puedes crearlo con “Ingreso manual”.`,
+          `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`,
         );
       }
       cards.push(...pageCards);

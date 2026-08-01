@@ -8,6 +8,8 @@ import {
   numberSheetFormForGrid,
   patternForCard,
   referenceCatalogPatterns,
+  specialCardPatternForGrid,
+  validateCardGrid,
   winningPatternsForCard,
   type BingoCard,
   type BingoPattern,
@@ -16,6 +18,7 @@ import {
   assignSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
+  decodeBingoRowDigits,
   compactIdentifierFamily,
   extractNumberSheetGridFromKnownOcrBlocks,
   extractGridFromKnownOcrBlocks,
@@ -25,6 +28,24 @@ import {
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("reconstruye filas BINGO cuando el OCR entrega los dígitos unidos", () => {
+  assert.deepEqual(decodeBingoRowDigits("316335270"), [3, 16, 33, 52, 70]);
+  assert.deepEqual(decodeBingoRowDigits("1235764", true), [1, 23, 0, 57, 64]);
+});
+
+test("acepta cartones especiales y hojas de números sin tratarlos como 5×5 normales", () => {
+  const special = [7, 70, 27, 41, 10, 71];
+  assert.equal(validateCardGrid(special).length, 0);
+  assert.equal(specialCardPatternForGrid(special)?.id, "keke-keke-completo");
+
+  const numberSheet = Array(25).fill(0);
+  const values = [1, 25, 40, 56, 72, 8, 9, 27, 55, 64, 74, 5, 16, 36, 46, 68];
+  const cells = [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24];
+  cells.forEach((cell, index) => { numberSheet[cell] = values[index]; });
+  assert.equal(numberSheetFormForGrid(numberSheet), "5");
+  assert.equal(validateCardGrid(numberSheet).length, 0);
+});
 
 test("reconstruye la serie compacta aunque el OCR confunda ceros y cincos", () => {
   assert.equal(
