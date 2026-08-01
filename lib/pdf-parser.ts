@@ -2780,6 +2780,13 @@ function formatSequentialNumber(
   return `${parts.prefix}${String(value).padStart(parts.width, "0")}`;
 }
 
+function fallbackNumberFromPdf(card: BingoCard, offset: number) {
+  const fileName = card.sourceFile.replace(/\.pdf$/i, "").trim() || "PDF";
+  const detectedPosition = card.number.match(/-(\d+)$/)?.[1];
+  const position = detectedPosition ?? String(offset + 1);
+  return `${fileName}-P${String(card.sourcePage).padStart(3, "0")}-${position}`;
+}
+
 export function assignSequentialCardNumbers(cards: BingoCard[]) {
   const resolved = cards.map((card) => ({ ...card }));
   const used = new Set(
@@ -2802,26 +2809,37 @@ export function assignSequentialCardNumbers(cards: BingoCard[]) {
     }
     const end = index;
     const count = end - start;
-    const previous = start > 0 ? resolved[start - 1].number : null;
-    const next = end < resolved.length ? resolved[end].number : null;
+    const previousCard = start > 0 ? resolved[start - 1] : null;
+    const nextCard = end < resolved.length ? resolved[end] : null;
+    const previous = previousCard?.number ?? null;
+    const next = nextCard?.number ?? null;
     const previousParts = previous ? sequentialNumberParts(previous) : null;
     const nextParts = next ? sequentialNumberParts(next) : null;
+    const sourcePage = resolved[start].sourcePage;
     const contiguousGap =
       previousParts &&
       nextParts &&
       previousParts.prefix === nextParts.prefix &&
       nextParts.value - previousParts.value === count + 1;
+    const preferNext =
+      nextParts &&
+      nextParts.value > count &&
+      (!previousParts ||
+        (nextCard?.sourcePage === sourcePage &&
+          previousCard?.sourcePage !== sourcePage));
 
     for (let offset = 0; offset < count; offset += 1) {
       let candidate = contiguousGap
         ? formatSequentialNumber(previousParts, offset + 1)
-        : previousParts
-          ? formatSequentialNumber(previousParts, offset + 1)
-          : nextParts && nextParts.value > count
+        : preferNext
             ? formatSequentialNumber(nextParts, offset - count)
-            : null;
+            : previousParts
+              ? formatSequentialNumber(previousParts, offset + 1)
+              : nextParts && nextParts.value > count
+                ? formatSequentialNumber(nextParts, offset - count)
+                : null;
       if (!candidate) {
-        candidate = `AUTO-P${String(resolved[start + offset].sourcePage).padStart(3, "0")}-${offset + 1}`;
+        candidate = fallbackNumberFromPdf(resolved[start + offset], offset);
       }
       const baseCandidate = candidate;
       let collision = 2;

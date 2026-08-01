@@ -258,6 +258,24 @@ test("completa la numeración ilegible con la secuencia de los cartones vecinos"
   );
 });
 
+test("prioriza el cartón posterior de la misma página y conserva el nombre del PDF como respaldo", () => {
+  const cards: BingoCard[] = [
+    { id: "1", number: "999-9", serial: "", grid: baseGrid, sourceFile: "Anterior.pdf", sourcePage: 1, status: "active" },
+    { id: "2", number: "SIN-ID-002-1", serial: "", grid: [...baseGrid], sourceFile: "Nuevo lote.pdf", sourcePage: 2, status: "active" },
+    { id: "3", number: "SIN-ID-002-2", serial: "", grid: [...baseGrid], sourceFile: "Nuevo lote.pdf", sourcePage: 2, status: "active" },
+    { id: "4", number: "1000-3", serial: "", grid: [...baseGrid], sourceFile: "Nuevo lote.pdf", sourcePage: 2, status: "active" },
+  ];
+  assert.deepEqual(
+    assignSequentialCardNumbers(cards).map((card) => card.number),
+    ["999-9", "1000-1", "1000-2", "1000-3"],
+  );
+
+  const withoutReferences = assignSequentialCardNumbers([
+    { id: "5", number: "SIN-ID-004-7", serial: "", grid: [...baseGrid], sourceFile: "New Doc 07-30-2026.pdf", sourcePage: 4, status: "active" },
+  ]);
+  assert.equal(withoutReferences[0].number, "New Doc 07-30-2026-P004-7");
+});
+
 test("rechaza una cuadrícula OCR que mezcla las columnas BINGO", () => {
   const mixed = [
     41, 32, 11, 8, 15,
