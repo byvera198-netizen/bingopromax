@@ -1010,11 +1010,7 @@ export default function GameConsole() {
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const unidentified = parsed.cards.filter((card) => card.number.startsWith("SIN-ID-"));
-        if (unidentified.length) {
-          warnings.push(`${file.name}: ${unidentified.length} cartón(es) fueron omitidos porque no se pudo leer su numeración impresa.`);
-        }
-        const identifiedCards = parsed.cards.filter((card) => !card.number.startsWith("SIN-ID-"));
+        const identifiedCards = parsed.cards;
         const uniqueCards = identifiedCards
           .filter((card) => !signatures.has(card.grid.join(",")))
           .map((card, index) => {

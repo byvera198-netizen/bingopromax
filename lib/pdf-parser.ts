@@ -2761,6 +2761,81 @@ export async function runOcr(
   );
 }
 
+function sequentialNumberParts(number: string) {
+  const match = number.trim().match(/^(.*?)(\d+)$/);
+  if (!match) return null;
+  return {
+    prefix: match[1],
+    value: Number(match[2]),
+    width: match[2].length,
+  };
+}
+
+function formatSequentialNumber(
+  parts: { prefix: string; value: number; width: number },
+  offset: number,
+) {
+  const value = parts.value + offset;
+  if (value < 0) return null;
+  return `${parts.prefix}${String(value).padStart(parts.width, "0")}`;
+}
+
+export function assignSequentialCardNumbers(cards: BingoCard[]) {
+  const resolved = cards.map((card) => ({ ...card }));
+  const used = new Set(
+    cards
+      .filter((card) => !card.number.startsWith("SIN-ID-"))
+      .map((card) => card.number.toLowerCase()),
+  );
+  let index = 0;
+  while (index < resolved.length) {
+    if (!resolved[index].number.startsWith("SIN-ID-")) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (
+      index < resolved.length &&
+      resolved[index].number.startsWith("SIN-ID-")
+    ) {
+      index += 1;
+    }
+    const end = index;
+    const count = end - start;
+    const previous = start > 0 ? resolved[start - 1].number : null;
+    const next = end < resolved.length ? resolved[end].number : null;
+    const previousParts = previous ? sequentialNumberParts(previous) : null;
+    const nextParts = next ? sequentialNumberParts(next) : null;
+    const contiguousGap =
+      previousParts &&
+      nextParts &&
+      previousParts.prefix === nextParts.prefix &&
+      nextParts.value - previousParts.value === count + 1;
+
+    for (let offset = 0; offset < count; offset += 1) {
+      let candidate = contiguousGap
+        ? formatSequentialNumber(previousParts, offset + 1)
+        : previousParts
+          ? formatSequentialNumber(previousParts, offset + 1)
+          : nextParts && nextParts.value > count
+            ? formatSequentialNumber(nextParts, offset - count)
+            : null;
+      if (!candidate) {
+        candidate = `AUTO-P${String(resolved[start + offset].sourcePage).padStart(3, "0")}-${offset + 1}`;
+      }
+      const baseCandidate = candidate;
+      let collision = 2;
+      while (used.has(candidate.toLowerCase())) {
+        candidate = `${baseCandidate}-${collision}`;
+        collision += 1;
+      }
+      resolved[start + offset].number = candidate;
+      used.add(candidate.toLowerCase());
+    }
+  }
+  return resolved;
+}
+
 export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
@@ -2839,7 +2914,17 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  return { cards, pages: pageCount, warnings };
+  const numberedCards = assignSequentialCardNumbers(cards);
+  const recoveredNumbers = cards.filter((card, index) =>
+    card.number.startsWith("SIN-ID-") &&
+    !numberedCards[index].number.startsWith("SIN-ID-"),
+  ).length;
+  if (recoveredNumbers) {
+    warnings.push(
+      `${recoveredNumbers} cartón(es) recibieron numeración secuencial porque su número impreso no pudo leerse.`,
+    );
+  }
+  return { cards: numberedCards, pages: pageCount, warnings };
 }
 
 export async function fileChecksum(file: File) {

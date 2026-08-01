@@ -13,6 +13,7 @@ import {
   type BingoPattern,
 } from "../lib/bingo";
 import {
+  assignSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
   compactIdentifierFamily,
@@ -241,6 +242,20 @@ test("nunca acepta texto OCR como número de cartón", () => {
   const cards = extractCardsFromTextItems(items, "escaneo.pdf", 1);
   assert.equal(cards.length, 1);
   assert.match(cards[0].number, /^SIN-ID-/);
+});
+
+test("completa la numeración ilegible con la secuencia de los cartones vecinos", () => {
+  const cards: BingoCard[] = [
+    { id: "1", number: "87021-1", serial: "", grid: baseGrid, sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+    { id: "2", number: "SIN-ID-001-2", serial: "", grid: [...baseGrid], sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+    { id: "3", number: "SIN-ID-001-3", serial: "", grid: [...baseGrid], sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+    { id: "4", number: "87021-4", serial: "", grid: [...baseGrid], sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+  ];
+
+  assert.deepEqual(
+    assignSequentialCardNumbers(cards).map((card) => card.number),
+    ["87021-1", "87021-2", "87021-3", "87021-4"],
+  );
 });
 
 test("rechaza una cuadrícula OCR que mezcla las columnas BINGO", () => {
