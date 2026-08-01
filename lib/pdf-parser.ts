@@ -1,6 +1,11 @@
 "use client";
 
-import type { BingoCard } from "./bingo";
+import {
+  NUMBER_SHEET_FORM_CELLS,
+  numberSheetFormForGrid,
+  type BingoCard,
+  type NumberSheetForm,
+} from "./bingo";
 
 export interface PdfTextItem {
   str: string;
@@ -34,6 +39,7 @@ interface DetectedGrid {
   y: number;
   score: number;
   rowIds: string[];
+  identifier?: string;
 }
 
 interface Identifier {
@@ -107,6 +113,7 @@ export interface GridRectangle {
   verticalLines: number[];
   horizontalLines: number[];
   score: number;
+  nextHorizontalLine?: number;
 }
 
 export interface CompactRectangle {
@@ -286,7 +293,13 @@ export function detectGridRectangles(
   }
 
   const selected: GridRectangle[] = [];
-  for (const rectangle of rectangles.sort((a, b) => b.score - a.score)) {
+  // En hojas con dos cartones contiguos puede aparecer una secuencia falsa que
+  // empieza en la segunda columna del cartón izquierdo y termina en el borde
+  // del derecho. Elegir primero la cuadrícula más a la izquierda conserva los
+  // cinco límites reales del cartón antes de descartar solapamientos.
+  for (const rectangle of rectangles.sort(
+    (a, b) => a.y - b.y || a.x - b.x || b.score - a.score,
+  )) {
     const duplicate = selected.some((other) => {
       const intersectionWidth = Math.max(
         0,
@@ -303,11 +316,65 @@ export function detectGridRectangles(
         rectangle.width * rectangle.height,
         other.width * other.height,
       );
-      return intersection / Math.max(1, smallerArea) > 0.38;
+      return intersection / Math.max(1, smallerArea) > 0.25;
     });
     if (!duplicate) selected.push(rectangle);
   }
-  return selected.sort((a, b) => a.y - b.y || a.x - b.x);
+  const ordered = selected.sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const rectangle of ordered) {
+    const rightNeighbor = ordered
+      .filter(
+        (candidate) =>
+          candidate.x > rectangle.x &&
+          Math.abs(candidate.y - rectangle.y) <= rectangle.height * 0.08,
+      )
+      .sort((a, b) => a.x - b.x)[0];
+    if (!rightNeighbor || rectangle.x + rectangle.width <= rightNeighbor.x) {
+      continue;
+    }
+    const spacing = median(
+      rectangle.verticalLines
+        .slice(1)
+        .map((position, index) => position - rectangle.verticalLines[index]),
+    );
+    const expected = rectangle.verticalLines[0] - spacing;
+    const predecessor = vertical
+      .filter(
+        (line) =>
+          line.position < rectangle.verticalLines[0] &&
+          Math.abs(line.position - expected) <= spacing * 0.18,
+      )
+      .sort(
+        (a, b) =>
+          Math.abs(a.position - expected) - Math.abs(b.position - expected),
+      )[0];
+    if (!predecessor) continue;
+    rectangle.verticalLines = [
+      predecessor.position,
+      ...rectangle.verticalLines.slice(0, 5),
+    ];
+    rectangle.x = predecessor.position;
+    rectangle.width = rectangle.verticalLines[5] - rectangle.verticalLines[0];
+  }
+  for (const rectangle of ordered) {
+    const spacing = median(
+      rectangle.horizontalLines
+        .slice(1)
+        .map((position, index) => position - rectangle.horizontalLines[index]),
+    );
+    const expected = rectangle.horizontalLines[5] + spacing;
+    rectangle.nextHorizontalLine = horizontal
+      .filter(
+        (line) =>
+          line.position > rectangle.horizontalLines[5] &&
+          Math.abs(line.position - expected) <= spacing * 0.18,
+      )
+      .sort(
+        (a, b) =>
+          Math.abs(a.position - expected) - Math.abs(b.position - expected),
+      )[0]?.position;
+  }
+  return ordered;
 }
 
 export function detectCompactRectangles(
@@ -800,17 +867,19 @@ function cardsFromDetectedGrids(
 
   const usedIdentifiers = new Set<Identifier>();
   return orderedGrids.map((detected, index) => {
-    const identifier = orderedIdentifiers
-      .filter((candidate) => !usedIdentifiers.has(candidate))
-      .sort((a, b) => {
-        const distanceA = Math.abs(a.x - detected.x) + Math.abs(a.y - detected.y);
-        const distanceB = Math.abs(b.x - detected.x) + Math.abs(b.y - detected.y);
-        return distanceA - distanceB;
-      })[0];
+    const identifier = detected.identifier
+      ? undefined
+      : orderedIdentifiers
+          .filter((candidate) => !usedIdentifiers.has(candidate))
+          .sort((a, b) => {
+            const distanceA = Math.abs(a.x - detected.x) + Math.abs(a.y - detected.y);
+            const distanceB = Math.abs(b.x - detected.x) + Math.abs(b.y - detected.y);
+            return distanceA - distanceB;
+          })[0];
     if (identifier) usedIdentifiers.add(identifier);
     return {
       id: crypto.randomUUID(),
-      number: identifier?.value ?? missingIdentifier(index),
+      number: detected.identifier ?? identifier?.value ?? missingIdentifier(index),
       serial: "",
       grid: detected.grid,
       sourceFile: fileName,
@@ -852,6 +921,129 @@ const bingoColumnRanges = [
   [46, 60],
   [61, 75],
 ] as const;
+
+function validNumberForCell(value: number, index: number) {
+  const [minimum, maximum] = bingoColumnRanges[index % 5];
+  return Number.isInteger(value) && value >= minimum && value <= maximum;
+}
+
+export function normalizeNumberSheetGrid(
+  grid: number[],
+  form: NumberSheetForm,
+) {
+  const required = new Set(NUMBER_SHEET_FORM_CELLS[form]);
+  return Array.from({ length: 25 }, (_, index) => {
+    if (!required.has(index)) return 0;
+    const value = grid[index] ?? -1;
+    return validNumberForCell(value, index) ? value : -1;
+  });
+}
+
+function isPlausibleNumberSheetGrid(
+  grid: number[],
+  form: NumberSheetForm,
+) {
+  const required = NUMBER_SHEET_FORM_CELLS[form];
+  const values = required.map((index) => grid[index]);
+  return (
+    numberSheetFormForGrid(grid) === form &&
+    values.every((value, index) => validNumberForCell(value, required[index])) &&
+    new Set(values).size === values.length
+  );
+}
+
+function inferNumberSheetForm(grid: number[]): NumberSheetForm | null {
+  const recognized = grid
+    .map((value, index) => ({ value, index }))
+    .filter(({ value, index }) => validNumberForCell(value, index));
+  if (recognized.length < 6) return null;
+  return (
+    (Object.entries(NUMBER_SHEET_FORM_CELLS) as Array<[NumberSheetForm, number[]]>)
+      .map(([form, cells]) => {
+        const required = new Set(cells);
+        const matches = recognized.filter(({ index }) => required.has(index)).length;
+        const outside = recognized.length - matches;
+        return {
+          form,
+          matches,
+          outside,
+          score: matches / cells.length + matches / recognized.length - outside * 0.08,
+        };
+      })
+      .filter(({ matches, outside }) => matches >= 6 && outside <= 3)
+      .sort((a, b) => b.score - a.score)[0]?.form ?? null
+  );
+}
+
+interface NumberSheetMetadata {
+  form: NumberSheetForm | null;
+  identifier: string | null;
+}
+
+export function numberSheetMetadataFromOcrText(
+  text: string,
+): NumberSheetMetadata | null {
+  const rawLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const form = rawLines
+    .map((line) => {
+      const explicit = line.match(/(?:form\w*|#)\D*([1359])/i)?.[1];
+      const digits = line.replace(/\D/g, "");
+      return (explicit ?? (/^[1359]$/.test(digits) ? digits : null)) as NumberSheetForm | null;
+    })
+    .find((value): value is NumberSheetForm => value !== null) ?? null;
+  const normalized = text
+    .replace(/[Oo]/g, "0")
+    .replace(/[Il|]/g, "1");
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const separated = normalized.match(/(\d{5,12})\s*[-_]\s*(\d{1,3})/);
+  let identifier = separated ? `${separated[1]}-${separated[2]}` : null;
+  if (!identifier) {
+    const joined = lines
+      .map((line) => line.replace(/\D/g, ""))
+      .filter((digits) => digits.length >= 6 && digits.length <= 13)
+      .sort((a, b) => b.length - a.length)[0];
+    if (joined && /[3-9]$/.test(joined)) {
+      identifier = `${joined.slice(0, -1)}-${joined.slice(-1)}`;
+    }
+  }
+  return form || identifier ? { form, identifier } : null;
+}
+
+function numberSheetFormsFromIdentifierSeries(
+  metadata: Array<NumberSheetMetadata | null>,
+) {
+  if (metadata.length !== 4) return null;
+  const parsed = metadata.map((item, index) => {
+    const match = item?.identifier?.match(/^(.+)-(\d+)$/);
+    return match
+      ? { index, family: match[1], suffix: Number(match[2]) }
+      : null;
+  });
+  if (parsed.some((item) => !item)) return null;
+  const entries = parsed.filter(
+    (item): item is NonNullable<typeof item> => item !== null,
+  );
+  if (
+    new Set(entries.map((item) => item.family)).size !== 1 ||
+    new Set(entries.map((item) => item.suffix)).size !== 4
+  ) {
+    return null;
+  }
+  const forms: NumberSheetForm[] = ["1", "3", "5", "9"];
+  const result = Array<NumberSheetForm>(4);
+  entries
+    .sort((a, b) => a.suffix - b.suffix)
+    .forEach((item, order) => {
+      result[item.index] = forms[order];
+    });
+  return result;
+}
 
 interface DecodedOcrRow {
   values: number[];
@@ -1421,6 +1613,18 @@ export function extractPartialGridFromKnownOcrBlocks(
   return grid;
 }
 
+export function extractNumberSheetGridFromKnownOcrBlocks(
+  blocks: OcrBlock[],
+  width: number,
+  height: number,
+  form: NumberSheetForm,
+) {
+  return normalizeNumberSheetGrid(
+    extractPartialGridFromKnownOcrBlocks(blocks, width, height),
+    form,
+  );
+}
+
 export function extractGridFromKnownOcrBlocks(
   blocks: OcrBlock[],
   width: number,
@@ -1617,6 +1821,44 @@ async function recognizeGridIdentifiers(
   return identifiers;
 }
 
+async function recognizeNumberSheetMetadata(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  worker: OcrWorker,
+) {
+  const left = rectangle.verticalLines[2] + 3;
+  const top = rectangle.horizontalLines[2] + 3;
+  const width = Math.max(1, rectangle.verticalLines[3] - left - 3);
+  const height = Math.max(1, rectangle.horizontalLines[3] - top - 3);
+  const target = makeCanvas(420, 300);
+  if (!target) return null;
+  target.context.drawImage(
+    source,
+    left,
+    top,
+    width,
+    height,
+    10,
+    10,
+    400,
+    280,
+  );
+  binarizeNumbers(target.canvas, target.context, 168);
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789-_",
+    tessedit_pageseg_mode: "6",
+    preserve_interword_spaces: "1",
+  });
+  const result = await worker.recognize(target.canvas, {}, { text: true });
+  const metadata = numberSheetMetadataFromOcrText(result.data.text ?? "");
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return metadata;
+}
+
 function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   const cellWidth = 150;
   const cellHeight = 120;
@@ -1650,6 +1892,169 @@ function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   }
   binarizeNumbers(target.canvas, target.context);
   return target.canvas;
+}
+
+const numberSheetSignatureCells = [5, 6, 7, 8, 9, 15, 16, 17, 18];
+
+async function matchesNumberSheetSignature(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  grid: number[],
+  form: NumberSheetForm,
+  worker: OcrWorker,
+) {
+  const expected = new Set(
+    NUMBER_SHEET_FORM_CELLS[form].filter((index) =>
+      numberSheetSignatureCells.includes(index),
+    ),
+  );
+  let outside = 0;
+  let matches = 0;
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  const orderedCells = [
+    ...numberSheetSignatureCells.filter((index) => !expected.has(index)),
+    ...numberSheetSignatureCells.filter((index) => expected.has(index)),
+  ];
+  for (const index of orderedCells) {
+    let value = validNumberForCell(grid[index] ?? -1, index)
+      ? grid[index]
+      : null;
+    if (value === null) {
+      const row = Math.floor(index / 5);
+      const column = index % 5;
+      const left = rectangle.verticalLines[column] + 5;
+      const top = rectangle.horizontalLines[row] + 5;
+      const width = Math.max(1, rectangle.verticalLines[column + 1] - left - 5);
+      const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 5);
+      const target = makeCanvas(240, 190);
+      if (target) {
+        target.context.drawImage(
+          source,
+          left,
+          top,
+          width,
+          height,
+          15,
+          15,
+          210,
+          160,
+        );
+        binarizeNumbers(target.canvas, target.context, 168);
+        const result = await worker.recognize(
+          target.canvas,
+          {},
+          { blocks: true, text: true },
+        );
+        const symbols = result.data.blocks?.length
+          ? flattenOcrSymbols(ocrWords(result.data.blocks))
+          : [];
+        value = bestCellValue(symbols, column, 120, 240);
+        if (value === null) {
+          const digits = (result.data.text ?? "").replace(/\D/g, "");
+          for (let start = 0; start < digits.length && value === null; start += 1) {
+            for (const length of [2, 1]) {
+              const candidate = Number(digits.slice(start, start + length));
+              if (validNumberForCell(candidate, index)) {
+                value = candidate;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (value === null) continue;
+    if (expected.has(index)) matches += 1;
+    else outside += 1;
+    if (outside > 1) break;
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  const requiredMatches = expected.size === 3 ? 2 : expected.size;
+  return outside <= 1 && matches >= requiredMatches;
+}
+
+async function recognizeMissingNumberSheetCells(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  grid: number[],
+  form: NumberSheetForm,
+  worker: OcrWorker,
+) {
+  const normalized = normalizeNumberSheetGrid(grid, form);
+  const counts = new Map<number, number>();
+  NUMBER_SHEET_FORM_CELLS[form]
+    .map((index) => normalized[index])
+    .filter((value) => value > 0)
+    .forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
+  const missing = NUMBER_SHEET_FORM_CELLS[form].filter((index) => {
+    const value = normalized[index];
+    return value < 0 || (counts.get(value) ?? 0) > 1;
+  });
+  if (!missing.length) return normalized;
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  const resolved = [...normalized];
+  for (const index of missing) {
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const left = rectangle.verticalLines[column] + 5;
+    const top = rectangle.horizontalLines[row] + 5;
+    const width = Math.max(1, rectangle.verticalLines[column + 1] - left - 5);
+    const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 5);
+    const target = makeCanvas(240, 190);
+    if (!target) continue;
+    target.context.drawImage(
+      source,
+      left,
+      top,
+      width,
+      height,
+      15,
+      15,
+      210,
+      160,
+    );
+    binarizeNumbers(target.canvas, target.context, 168);
+    const result = await worker.recognize(
+      target.canvas,
+      {},
+      { blocks: true, text: true },
+    );
+    const symbols = result.data.blocks?.length
+      ? flattenOcrSymbols(ocrWords(result.data.blocks))
+      : [];
+    let value = bestCellValue(symbols, column, 120, 240);
+    if (value === null) {
+      const digits = (result.data.text ?? "").replace(/\D/g, "");
+      for (let start = 0; start < digits.length && value === null; start += 1) {
+        for (const length of [2, 1]) {
+          const candidate = Number(digits.slice(start, start + length));
+          if (validNumberForCell(candidate, index)) {
+            value = candidate;
+            break;
+          }
+        }
+      }
+    }
+    resolved[index] = value ?? -1;
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return normalizeNumberSheetGrid(resolved, form);
 }
 
 async function recognizeMissingCells(
@@ -1743,8 +2148,10 @@ async function recognizeDetectedGrids(
   pageNumber: number,
 ) {
   const detected: DetectedGrid[] = [];
-  const eligibleRectangles = rectangles.filter((item) => item.score >= 85);
+  const eligibleRectangles = rectangles.filter((item) => item.score >= 80);
   const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
+  let numberSheetMetadataCache: Array<NumberSheetMetadata | null> | null = null;
+  let numberSheetFormCache: NumberSheetForm[] | null = null;
   for (const rectangle of eligibleRectangles) {
     const original = cropGridCanvas(source, rectangle);
     if (!original) continue;
@@ -1758,6 +2165,69 @@ async function recognizeDetectedGrids(
       original.width,
       original.height,
     );
+    if (gridQuality(grid) < 8) {
+      const rectangleIndex = eligibleRectangles.indexOf(rectangle);
+      if (!numberSheetMetadataCache && eligibleRectangles.length === 4) {
+        numberSheetMetadataCache = await Promise.all(
+          eligibleRectangles.map((candidate) =>
+            recognizeNumberSheetMetadata(source, candidate, worker),
+          ),
+        );
+        numberSheetFormCache = numberSheetFormsFromIdentifierSeries(
+          numberSheetMetadataCache,
+        );
+      }
+      const metadata =
+        numberSheetMetadataCache?.[rectangleIndex] ??
+        (await recognizeNumberSheetMetadata(source, rectangle, worker));
+      const formCandidates = [
+        metadata?.form,
+        numberSheetFormCache?.[rectangleIndex],
+        inferNumberSheetForm(grid),
+      ].filter(
+        (candidate, index, all): candidate is NumberSheetForm =>
+          candidate !== null &&
+          candidate !== undefined &&
+          all.indexOf(candidate) === index,
+      );
+      let form: NumberSheetForm | null = null;
+      for (const candidate of formCandidates) {
+        if (
+          await matchesNumberSheetSignature(
+            source,
+            rectangle,
+            grid,
+            candidate,
+            worker,
+          )
+        ) {
+          form = candidate;
+          break;
+        }
+      }
+      if (form) {
+        let numberSheetGrid = normalizeNumberSheetGrid(grid, form);
+        numberSheetGrid = await recognizeMissingNumberSheetCells(
+          source,
+          rectangle,
+          numberSheetGrid,
+          form,
+          worker,
+        );
+        if (isPlausibleNumberSheetGrid(numberSheetGrid, form)) {
+          detected.push({
+            grid: numberSheetGrid,
+            x: rectangle.x + rectangle.width / 2,
+            y: source.height - rectangle.y,
+            score: rectangle.score,
+            rowIds: [],
+            identifier: metadata?.identifier ??
+              `SIN-ID-${String(pageNumber).padStart(3, "0")}-${eligibleRectangles.indexOf(rectangle) + 1}`,
+          });
+          continue;
+        }
+      }
+    }
     const missingCount = grid.filter((value) => value < 0).length;
     if (
       gridQuality(grid) < 8 &&
@@ -1783,13 +2253,80 @@ async function recognizeDetectedGrids(
     if (gridQuality(grid) < 8) {
       grid = await recognizeMissingCells(source, rectangle, grid, worker);
     }
+    if (gridQuality(grid) < 8 && rectangle.nextHorizontalLine) {
+      const shiftedRectangle: GridRectangle = {
+        ...rectangle,
+        y: rectangle.horizontalLines[1],
+        height: rectangle.nextHorizontalLine - rectangle.horizontalLines[1],
+        horizontalLines: [
+          ...rectangle.horizontalLines.slice(1),
+          rectangle.nextHorizontalLine,
+        ],
+      };
+      const shifted = cropGridCanvas(source, shiftedRectangle);
+      if (shifted) {
+        const shiftedResult = await worker.recognize(
+          shifted,
+          {},
+          { blocks: true, tsv: true, text: true },
+        );
+        let shiftedGrid = extractPartialGridFromKnownOcrBlocks(
+          shiftedResult.data.blocks ?? [],
+          shifted.width,
+          shifted.height,
+        );
+        if (gridQuality(shiftedGrid) < 8) {
+          shiftedGrid = await recognizeMissingCells(
+            source,
+            shiftedRectangle,
+            shiftedGrid,
+            worker,
+          );
+        }
+        if (gridQuality(shiftedGrid) >= 8) {
+          grid = shiftedGrid;
+          rectangle.y = shiftedRectangle.y;
+          rectangle.height = shiftedRectangle.height;
+          rectangle.horizontalLines = shiftedRectangle.horizontalLines;
+        }
+      }
+    }
     if (gridQuality(grid) < 8) continue;
+    const centerMetadata = await recognizeNumberSheetMetadata(
+      source,
+      rectangle,
+      worker,
+    );
     detected.push({
       grid,
       x: rectangle.x + rectangle.width / 2,
       y: source.height - rectangle.y,
       score: rectangle.score,
       rowIds: [],
+      identifier: centerMetadata?.identifier ?? undefined,
+    });
+  }
+  const identifierParts = detected.flatMap((item) => {
+    const match = item.identifier?.match(/^(\d{5,12})-(\d{1,3})$/);
+    return match ? [{ family: match[1], suffix: match[2] }] : [];
+  });
+  const familyCounts = new Map<string, number>();
+  identifierParts.forEach(({ family }) =>
+    familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1),
+  );
+  const canonicalFamily = [...familyCounts.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0].length - b[0].length,
+  )[0];
+  if (canonicalFamily && canonicalFamily[1] >= 2) {
+    detected.forEach((item) => {
+      const match = item.identifier?.match(/^(\d{5,12})-(\d{1,3})$/);
+      if (!match || match[1] === canonicalFamily[0]) return;
+      if (
+        match[1].includes(canonicalFamily[0]) ||
+        canonicalFamily[0].includes(match[1])
+      ) {
+        item.identifier = `${canonicalFamily[0]}-${match[2]}`;
+      }
     });
   }
   return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
@@ -2173,7 +2710,7 @@ export async function runOcr(
     );
     if (detectedCards.length) return detectedCards;
   }
-  if (!rectangles.some((rectangle) => rectangle.score >= 85)) {
+  if (!rectangles.some((rectangle) => rectangle.score >= 80)) {
     const compactRectangles = detectCompactRectangles(
       pixels.data,
       canvas.width,

@@ -5,6 +5,7 @@ import {
   BUILTIN_PATTERNS,
   cardProgress,
   isWinningCard,
+  numberSheetFormForGrid,
   patternForCard,
   referenceCatalogPatterns,
   winningPatternsForCard,
@@ -15,9 +16,11 @@ import {
   detectCompactRectangles,
   detectGridRectangles,
   compactIdentifierFamily,
+  extractNumberSheetGridFromKnownOcrBlocks,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
   identifierFamilyFromOcrText,
+  numberSheetMetadataFromOcrText,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -335,6 +338,113 @@ test("un cartón Sabrosito gana al completar sus cinco números", () => {
     progress: 0.8,
   });
   assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
+});
+
+test("una hoja de números gana únicamente al completar su forma impresa", () => {
+  const grid = [
+    0, 0, 37, 0, 0,
+    0, 25, 38, 0, 0,
+    15, 0, 0, 0, 0,
+    0, 0, 44, 0, 0,
+    9, 22, 34, 53, 63,
+  ];
+  const card: BingoCard = {
+    id: "forma-1",
+    number: "24146-3",
+    serial: "",
+    grid,
+    sourceFile: "hoja-numeros.pdf",
+    sourcePage: 13,
+    status: "active",
+  };
+  const activePattern = BUILTIN_PATTERNS[0];
+  const required = grid.filter((value) => value > 0);
+  const incomplete = new Set(required.slice(0, -1));
+  const complete = new Set(required);
+
+  assert.equal(numberSheetFormForGrid(grid), "1");
+  assert.equal(patternForCard(card, activePattern).id, "forma-1-completa");
+  assert.equal(isWinningCard(card, incomplete, activePattern), false);
+  assert.equal(isWinningCard(card, complete, activePattern), true);
+  assert.deepEqual(
+    winningPatternsForCard(card, complete, BUILTIN_PATTERNS).map((pattern) => pattern.id),
+    ["forma-1-completa"],
+  );
+});
+
+test("identifica las cuatro formas especiales 1, 3, 5 y 9", () => {
+  const layouts = {
+    "1": [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
+    "3": [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    "5": [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    "9": [0, 1, 2, 3, 4, 5, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  } as const;
+
+  for (const [form, cells] of Object.entries(layouts)) {
+    const required = new Set<number>(cells);
+    const grid = baseGrid.map((value, index) => required.has(index) ? value : 0);
+    assert.equal(numberSheetFormForGrid(grid), form);
+  }
+});
+
+test("conserva el número impreso y la forma leídos en la casilla central", () => {
+  assert.deepEqual(numberSheetMetadataFromOcrText("1\n24146-3"), {
+    form: "1",
+    identifier: "24146-3",
+  });
+  assert.deepEqual(numberSheetMetadataFromOcrText("FORMA #9\n24146_6"), {
+    form: "9",
+    identifier: "24146-6",
+  });
+});
+
+test("ignora marcas de agua fuera de las casillas de una Forma #3", () => {
+  const expected = [
+    14, 25, 45, 59, 74,
+    0, 0, 0, 0, 65,
+    15, 22, 0, 57, 62,
+    0, 0, 0, 0, 71,
+    13, 17, 33, 51, 69,
+  ];
+  const noisy = [...expected];
+  noisy[5] = 7;
+  noisy[6] = 20;
+  noisy[7] = 40;
+  noisy[8] = 55;
+  const words: OcrBlock["paragraphs"][number]["lines"][number]["words"] = [];
+  noisy.forEach((value, index) => {
+    if (!value) return;
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const text = String(value);
+    const symbols = [...text].map((digit, digitIndex) => ({
+      text: digit,
+      confidence: 98,
+      bbox: {
+        x0: column * 100 + 32 + digitIndex * 18,
+        y0: row * 100 + 24,
+        x1: column * 100 + 47 + digitIndex * 18,
+        y1: row * 100 + 78,
+      },
+    }));
+    words.push({
+      text,
+      confidence: 98,
+      bbox: {
+        x0: symbols[0].bbox.x0,
+        y0: symbols[0].bbox.y0,
+        x1: symbols[symbols.length - 1].bbox.x1,
+        y1: symbols[0].bbox.y1,
+      },
+      symbols,
+    });
+  });
+  const blocks: OcrBlock[] = [{ paragraphs: [{ lines: [{ words }] }] }];
+
+  assert.deepEqual(
+    extractNumberSheetGridFromKnownOcrBlocks(blocks, 500, 500, "3"),
+    expected,
+  );
 });
 
 test("separa dos cuadrículas escaneadas por sus líneas", () => {

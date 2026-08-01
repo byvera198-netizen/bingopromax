@@ -264,16 +264,66 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
   variants: [[0, 1, 2, 3, 4]],
 };
 
+export type NumberSheetForm = "1" | "3" | "5" | "9";
+
+export const NUMBER_SHEET_FORM_CELLS: Record<NumberSheetForm, number[]> = {
+  "1": [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
+  "3": [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  "5": [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  "9": [0, 1, 2, 3, 4, 5, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+};
+
+export const NUMBER_SHEET_PATTERNS: Record<NumberSheetForm, BingoPattern> =
+  Object.fromEntries(
+    (Object.entries(NUMBER_SHEET_FORM_CELLS) as Array<[NumberSheetForm, number[]]>).map(
+      ([form, cells]) => [
+        form,
+        {
+          id: `forma-${form}-completa`,
+          name: `Forma #${form} completa`,
+          description: `Todos los números impresos de la Forma #${form}.`,
+          color: "#d7ff3f",
+          category: "Hoja de números",
+          difficulty: "Especial",
+          cells,
+          variants: [cells],
+        } satisfies BingoPattern,
+      ],
+    ),
+  ) as Record<NumberSheetForm, BingoPattern>;
+
+export function numberSheetFormForGrid(grid: number[]): NumberSheetForm | null {
+  if (grid.length !== 25) return null;
+  const filled = grid
+    .map((value, index) => ({ value, index }))
+    .filter(({ value }) => value > 0)
+    .map(({ index }) => index);
+  return (
+    (Object.entries(NUMBER_SHEET_FORM_CELLS) as Array<[NumberSheetForm, number[]]>).find(
+      ([, cells]) =>
+        cells.length === filled.length &&
+        cells.every((cell, index) => cell === filled[index]),
+    )?.[0] ?? null
+  );
+}
+
+export function specialCardPatternForGrid(grid: number[]) {
+  if (grid.length === 5) return COMPACT_CARD_PATTERN;
+  const form = numberSheetFormForGrid(grid);
+  return form ? NUMBER_SHEET_PATTERNS[form] : null;
+}
+
 export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
-  return card.grid.length === 5 ? COMPACT_CARD_PATTERN : activePattern;
+  return specialCardPatternForGrid(card.grid) ?? activePattern;
 }
 
 export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
-  return card.grid.length === 5
-    ? activePatterns.filter((pattern) => pattern.id === COMPACT_CARD_PATTERN.id)
+  const specialPattern = specialCardPatternForGrid(card.grid);
+  return specialPattern
+    ? [specialPattern]
     : activePatterns.filter((pattern) => pattern.id !== COMPACT_CARD_PATTERN.id);
 }
 

@@ -50,8 +50,10 @@ import {
   COMPACT_CARD_PATTERN,
   cardProgress,
   formatDuration,
+  numberSheetFormForGrid,
   patternsForCard,
   referenceCatalogPatterns,
+  specialCardPatternForGrid,
   validateCardGrid,
   winningPatternsForCard,
   type AppState,
@@ -176,24 +178,43 @@ function BingoGrid({
       </div>
     );
   }
+  const numberSheetForm = numberSheetFormForGrid(grid ?? []);
   return (
     <div className={`bingo-grid ${compact ? "compact" : ""} ${editable ? "editable" : ""} ${showPending ? "" : "hide-pending"}`}>
       {BINGO.map((letter) => <span className="bingo-head" key={letter}>{letter}</span>)}
       {Array.from({ length: 25 }, (_, index) => {
         const value = grid?.[index] ?? index + 1;
-        const isFree = grid?.[index] === 0;
-        const marked = Boolean(isFree || (grid && called?.has(value)));
+        const isEmpty = grid?.[index] === 0;
+        const isFree = Boolean(isEmpty && !numberSheetForm && index === 12);
+        const isFormLabel = Boolean(isEmpty && numberSheetForm && index === 12);
+        const marked = Boolean(isFree || (grid && value > 0 && called?.has(value)));
         const target = Boolean(pattern?.cells.includes(index) || selected.includes(index));
         return (
           <button
-            className={`bingo-cell ${marked ? "marked" : ""} ${target ? "target" : ""}`}
+            className={`bingo-cell ${marked ? "marked" : ""} ${target ? "target" : ""} ${isFormLabel ? "sheet-form-label" : ""}`}
             disabled={!editable}
             key={index}
             onClick={() => onCellClick?.(index)}
             type="button"
-            aria-label={editable ? `Casilla ${index + 1}` : isFree ? "Casilla libre" : `Número ${value}`}
+            aria-label={editable
+              ? `Casilla ${index + 1}`
+              : isFree
+                ? "Casilla libre"
+                : isFormLabel
+                  ? `Forma ${numberSheetForm}`
+                  : isEmpty
+                    ? "Casilla vacía"
+                    : `Número ${value}`}
           >
-            {editable ? (selected.includes(index) ? <Check size={16} /> : "") : isFree ? "LIBRE" : value}
+            {editable
+              ? (selected.includes(index) ? <Check size={16} /> : "")
+              : isFree
+                ? "LIBRE"
+                : isFormLabel
+                  ? `FORMA #${numberSheetForm}`
+                  : isEmpty
+                    ? ""
+                    : value}
           </button>
         );
       })}
@@ -628,7 +649,7 @@ export default function GameConsole() {
             card.status === "active" &&
             (pattern.id === COMPACT_CARD_PATTERN.id
               ? card.grid.length === 5
-              : card.grid.length !== 5),
+              : card.grid.length === 25 && !numberSheetFormForGrid(card.grid)),
         );
         const nearest = compatibleCards.reduce(
           (best, card) =>
@@ -1236,7 +1257,8 @@ export default function GameConsole() {
     } else {
       for (const winner of state.winners) {
         const card = state.cards.find((item) => item.id === winner.cardId);
-        const pattern = availablePatterns.find((item) => item.id === winner.patternId);
+        const pattern = availablePatterns.find((item) => item.id === winner.patternId) ??
+          (card ? specialCardPatternForGrid(card.grid) : null);
         const blockHeight = card?.grid.length === 5 ? 28 : 58;
         if (y + blockHeight > 282) {
           pdf.addPage();
@@ -1248,6 +1270,7 @@ export default function GameConsole() {
         pdf.text(new Date(winner.validatedAt).toLocaleString("es-EC"), 128, y);
         y += 5;
         if (card && pattern) {
+          const numberSheetForm = numberSheetFormForGrid(card.grid);
           const columns = card.grid.length === 5 ? 5 : 5;
           const rows = card.grid.length === 5 ? 1 : 5;
           const cellSize = 8;
@@ -1256,11 +1279,20 @@ export default function GameConsole() {
               const index = row * columns + column;
               const value = card.grid[index];
               const target = pattern.cells.includes(index);
-              const marked = value === 0 || called.has(value);
+              const marked = value > 0
+                ? called.has(value)
+                : !numberSheetForm && index === 12;
               pdf.setFillColor(target ? 215 : marked ? 220 : 245, target ? 255 : marked ? 235 : 245, target ? 63 : marked ? 220 : 245);
               pdf.rect(16 + column * cellSize, y + row * cellSize, cellSize, cellSize, "FD");
               pdf.setTextColor(target ? 20 : 45, 50, 45);
-              pdf.text(value === 0 ? "L" : String(value), 20 + column * cellSize, y + 5.2 + row * cellSize, { align: "center" });
+              const label = value === 0
+                ? numberSheetForm && index === 12
+                  ? `F${numberSheetForm}`
+                  : numberSheetForm
+                    ? ""
+                    : "L"
+                : String(value);
+              pdf.text(label, 20 + column * cellSize, y + 5.2 + row * cellSize, { align: "center" });
             }
           }
           pdf.setTextColor(0, 0, 0);
@@ -1839,7 +1871,10 @@ export default function GameConsole() {
                   <div className="winning-cards-grid">
                     {state.winners.map((winner) => {
                       const card = state.cards.find((item) => item.id === winner.cardId);
-                      const pattern = [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId);
+                      const pattern = card
+                        ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
+                          specialCardPatternForGrid(card.grid)
+                        : null;
                       if (!card || !pattern) return null;
                       return (
                         <article className="winning-card-report" key={winner.id}>
@@ -2008,9 +2043,12 @@ export default function GameConsole() {
               <div className="winner-card-previews">
                 {winnerModal.map((winner) => {
                   const card = state.cards.find((item) => item.id === winner.cardId);
-                  const pattern = [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId);
+                  const pattern = card
+                    ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
+                      specialCardPatternForGrid(card.grid)
+                    : null;
                   if (!card) return null;
-                  return <article key={`card-${winner.id}`}><strong>Tab#{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern} /></article>;
+                  return <article key={`card-${winner.id}`}><strong>Tab#{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
                 })}
               </div>
               <div className="winner-actions">
