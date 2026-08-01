@@ -228,6 +228,31 @@ export const BUILTIN_PATTERNS: BingoPattern[] = patternPresets.map((preset) => {
   };
 });
 
+export function referenceCatalogPatterns(
+  customPatterns: BingoPattern[],
+  removedPatternIds: string[],
+) {
+  const removed = new Set(removedPatternIds);
+  const usedCustomIds = new Set<string>();
+  const normalizeName = (value: string) =>
+    value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
+  return BUILTIN_PATTERNS.flatMap((reference) => {
+    if (!removed.has(reference.id)) return [reference];
+
+    const replacement = customPatterns.find(
+      (pattern) =>
+        !usedCustomIds.has(pattern.id) &&
+        (pattern.id.startsWith(`custom-${reference.id}-`) ||
+          normalizeName(pattern.name) === normalizeName(reference.name)),
+    );
+
+    if (!replacement) return [];
+    usedCustomIds.add(replacement.id);
+    return [replacement];
+  });
+}
+
 export const COMPACT_CARD_PATTERN: BingoPattern = {
   id: "sabrosito-completo",
   name: "Sabrosito completo",

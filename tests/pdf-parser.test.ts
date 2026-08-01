@@ -6,6 +6,7 @@ import {
   cardProgress,
   isWinningCard,
   patternForCard,
+  referenceCatalogPatterns,
   winningPatternsForCard,
   type BingoCard,
   type BingoPattern,
@@ -109,6 +110,31 @@ test("conserva exactamente el catálogo de patrones de referencia", () => {
     ],
   );
   assert.ok(BUILTIN_PATTERNS.every((pattern) => pattern.category === "Personalizado"));
+});
+
+test("oculta patrones ajenos al catálogo y conserva los reemplazos editados", () => {
+  const reference = BUILTIN_PATTERNS[0];
+  const replacement: BingoPattern = {
+    ...reference,
+    id: `custom-${reference.id}-prueba`,
+    name: "Letra E editada",
+    custom: true,
+  };
+  const unrelated: BingoPattern = {
+    ...reference,
+    id: "custom-piramide-antigua",
+    name: "Pirámide",
+    custom: true,
+  };
+
+  const catalog = referenceCatalogPatterns(
+    [unrelated, replacement],
+    [reference.id],
+  );
+
+  assert.equal(catalog.length, BUILTIN_PATTERNS.length);
+  assert.equal(catalog[0].id, replacement.id);
+  assert.equal(catalog.some((pattern) => pattern.id === unrelated.id), false);
 });
 
 function rowText(grid: number[], row: number) {

@@ -51,6 +51,7 @@ import {
   cardProgress,
   formatDuration,
   patternsForCard,
+  referenceCatalogPatterns,
   validateCardGrid,
   winningPatternsForCard,
   type AppState,
@@ -592,22 +593,33 @@ export default function GameConsole() {
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
   const availablePatterns = useMemo(
     () => [
-      ...BUILTIN_PATTERNS.filter((pattern) => !state?.removedPatternIds?.includes(pattern.id)),
-      ...(state?.customPatterns ?? []),
-      ...(state?.cards.some((card) => card.grid.length === 5)
-        ? [COMPACT_CARD_PATTERN]
-        : []),
+      ...referenceCatalogPatterns(
+        state?.customPatterns ?? [],
+        state?.removedPatternIds ?? [],
+      ),
+      ...(state?.customPatterns ?? []).filter((pattern) =>
+        pattern.id.startsWith("custom-user-"),
+      ),
     ],
-    [state?.cards, state?.customPatterns, state?.removedPatternIds],
+    [state?.customPatterns, state?.removedPatternIds],
   );
-  const allPatterns = useMemo(
+  const gamePatterns = useMemo(
     () =>
       availablePatterns.filter(
         (pattern) => !state?.disabledPatternIds.includes(pattern.id),
       ),
     [availablePatterns, state?.disabledPatternIds],
   );
-  const gamePatterns = allPatterns;
+  const allPatterns = useMemo(
+    () => [
+      ...gamePatterns,
+      ...(state?.cards.some((card) => card.grid.length === 5) &&
+      !state?.disabledPatternIds.includes(COMPACT_CARD_PATTERN.id)
+        ? [COMPACT_CARD_PATTERN]
+        : []),
+    ],
+    [gamePatterns, state?.cards, state?.disabledPatternIds],
+  );
   const patternStatuses = useMemo(
     () =>
       gamePatterns.map((pattern) => {
@@ -1029,7 +1041,9 @@ export default function GameConsole() {
       return;
     }
     const pattern: BingoPattern = {
-      id: editingPatternId || `custom-${crypto.randomUUID()}`,
+      id: editingPatternId || (replacingPatternId
+        ? `custom-${replacingPatternId}-${crypto.randomUUID()}`
+        : `custom-user-${crypto.randomUUID()}`),
       name: patternName.trim(),
       description: patternDescription.trim() || "Patrón personalizado",
       color: patternColor,
@@ -1777,7 +1791,7 @@ export default function GameConsole() {
                   <span className="eyebrow"><Zap size={14} /> VERIFICACIÓN SIMULTÁNEA</span>
                   <h3>{gamePatterns.length} patrones habilitados</h3>
                   <p>Solo las figuras habilitadas se verifican con cada bolilla. Los cambios afectan únicamente al juego actual.</p>
-                  <div><b>{BUILTIN_PATTERNS.length} oficiales</b><b>{state.customPatterns.length} personalizados</b><b>{state.disabledPatternIds.length} inhabilitados</b></div>
+                  <div><b>{BUILTIN_PATTERNS.length} oficiales</b><b>{availablePatterns.filter((pattern) => pattern.custom).length} personalizados</b><b>{state.disabledPatternIds.length} inhabilitados</b></div>
                 </div>
                 <div className="pattern-stack-preview">
                   {gamePatterns.slice(0, 4).map((pattern) => <PatternMini key={pattern.id} pattern={pattern} />)}
