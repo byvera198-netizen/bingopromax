@@ -8,6 +8,7 @@ import {
   patternForCard,
   winningPatternsForCard,
   type BingoCard,
+  type BingoPattern,
 } from "../lib/bingo";
 import {
   detectCompactRectangles,
@@ -68,6 +69,47 @@ const baseGrid = [
   4, 19, 34, 49, 64,
   5, 20, 35, 50, 65,
 ];
+
+const horizontalPattern: BingoPattern = {
+  id: "linea-horizontal-prueba",
+  name: "Línea horizontal de prueba",
+  description: "Valida una fila completa.",
+  color: "#d7ff3f",
+  category: "Prueba",
+  difficulty: "Fácil",
+  cells: [0, 1, 2, 3, 4],
+  variants: [[0, 1, 2, 3, 4]],
+};
+
+const verticalPattern: BingoPattern = {
+  id: "linea-vertical-prueba",
+  name: "Línea vertical de prueba",
+  description: "Valida una columna completa.",
+  color: "#77e8c9",
+  category: "Prueba",
+  difficulty: "Fácil",
+  cells: [0, 5, 10, 15, 20],
+  variants: [[0, 5, 10, 15, 20]],
+};
+
+test("conserva exactamente el catálogo de patrones de referencia", () => {
+  assert.equal(BUILTIN_PATTERNS.length, 36);
+  assert.deepEqual(
+    BUILTIN_PATTERNS.map((pattern) => pattern.name),
+    [
+      "Letra E", "Letra D", "Letra C", "Letra B",
+      "Letra A", "Número 10", "Número 9", "Número 8",
+      "Número 4", "Número 3", "Número 2", "Número 1",
+      "Letra H", "Letra T", "Letra X", "X",
+      "Letra W", "Letra V", "Letra U", "Letra S",
+      "Letra R", "Letra Q", "Letra P", "Letra O",
+      "Letra N", "Letra M", "Letra L", "Letra K",
+      "Letra J", "Letra I", "Letra G", "Letra F",
+      "Letra O", "Tabla llena", "Letra Z", "Letra Y",
+    ],
+  );
+  assert.ok(BUILTIN_PATTERNS.every((pattern) => pattern.category === "Personalizado"));
+});
 
 function rowText(grid: number[], row: number) {
   return grid
@@ -197,10 +239,8 @@ test("un cartón ganador permanece elegible para un patrón distinto", () => {
     sourcePage: 0,
     status: "active",
   };
-  const horizontal = BUILTIN_PATTERNS.find((pattern) => pattern.id === "linea-horizontal");
-  const vertical = BUILTIN_PATTERNS.find((pattern) => pattern.id === "linea-vertical");
-  assert.ok(horizontal);
-  assert.ok(vertical);
+  const horizontal = horizontalPattern;
+  const vertical = verticalPattern;
 
   const called = new Set([1, 16, 31, 46, 61]);
   assert.equal(isWinningCard(card, called, horizontal), true);
@@ -221,14 +261,8 @@ test("todos los patrones se evalúan simultáneamente sin repetir victorias", ()
     sourcePage: 0,
     status: "active",
   };
-  const horizontal = BUILTIN_PATTERNS.find(
-    (pattern) => pattern.id === "linea-horizontal",
-  );
-  const vertical = BUILTIN_PATTERNS.find(
-    (pattern) => pattern.id === "linea-vertical",
-  );
-  assert.ok(horizontal);
-  assert.ok(vertical);
+  const horizontal = horizontalPattern;
+  const vertical = verticalPattern;
 
   const called = new Set([1, 16, 31, 46, 61, 2, 3, 4, 5]);
   const firstPass = winningPatternsForCard(
@@ -240,16 +274,16 @@ test("todos los patrones se evalúan simultáneamente sin repetir victorias", ()
     card,
     called,
     [horizontal, vertical],
-    new Set(["linea-horizontal"]),
+    new Set([horizontal.id]),
   );
 
   assert.deepEqual(
     firstPass.map((pattern) => pattern.id),
-    ["linea-horizontal", "linea-vertical"],
+    [horizontal.id, vertical.id],
   );
   assert.deepEqual(
     secondPass.map((pattern) => pattern.id),
-    ["linea-vertical"],
+    [vertical.id],
   );
 });
 

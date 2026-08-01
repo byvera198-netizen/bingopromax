@@ -113,9 +113,6 @@ export interface AppState {
 const range = (start: number, end: number) =>
   Array.from({ length: end - start + 1 }, (_, index) => start + index);
 const rows = range(0, 4).map((row) => range(row * 5, row * 5 + 4));
-const columns = range(0, 4).map((column) => range(0, 4).map((row) => row * 5 + column));
-const mainDiagonal = [0, 6, 12, 18, 24];
-const secondaryDiagonal = [4, 8, 12, 16, 20];
 const frame = range(0, 24).filter((cell) => {
   const row = Math.floor(cell / 5);
   const column = cell % 5;
@@ -168,166 +165,68 @@ const cellsFromGlyph = (glyph: string[]) =>
     ),
   );
 
-const alphanumericPatterns: BingoPattern[] = Object.entries(glyphs)
-  .filter(([name]) => !["H", "T", "X"].includes(name))
-  .map(([name, glyph], index) => {
-    const cells = cellsFromGlyph(glyph);
-    const letter = /^[A-Z]$/.test(name);
-    return {
-      id: `patron-${name.toLowerCase()}`,
-      name: letter ? `Letra ${name}` : `Número ${name}`,
-      description: `Figura con forma de ${name} en la cuadrícula 5×5.`,
-      color: ["#d7ff3f", "#77e8c9", "#ffc857", "#79b8ff", "#d6a6ff"][index % 5],
-      category: letter ? "Letras" : "Números",
-      difficulty: cells.length >= 15 ? "Máxima" : cells.length >= 11 ? "Alta" : "Media",
-      cells,
-      variants: [cells],
-    };
-  });
+interface PatternPreset {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  difficulty: string;
+  glyph?: keyof typeof glyphs;
+  cells?: number[];
+}
 
-export const BUILTIN_PATTERNS: BingoPattern[] = [
-  {
-    id: "linea-horizontal",
-    name: "Línea horizontal",
-    description: "Cualquier fila completa del cartón.",
-    color: "#d7ff3f",
-    category: "Líneas",
-    difficulty: "Fácil",
-    cells: rows[2],
-    variants: rows,
-  },
-  {
-    id: "linea-vertical",
-    name: "Línea vertical",
-    description: "Cualquier columna completa del cartón.",
-    color: "#77e8c9",
-    category: "Líneas",
-    difficulty: "Fácil",
-    cells: columns[2],
-    variants: columns,
-  },
-  {
-    id: "diagonal-principal",
-    name: "Diagonal principal",
-    description: "De la esquina superior izquierda a la inferior derecha.",
-    color: "#ffc857",
-    category: "Diagonales",
-    difficulty: "Media",
-    cells: mainDiagonal,
-    variants: [mainDiagonal],
-  },
-  {
-    id: "diagonal-secundaria",
-    name: "Diagonal secundaria",
-    description: "De la esquina superior derecha a la inferior izquierda.",
-    color: "#ff8f70",
-    category: "Diagonales",
-    difficulty: "Media",
-    cells: secondaryDiagonal,
-    variants: [secondaryDiagonal],
-  },
-  {
-    id: "dos-diagonales",
-    name: "Dos diagonales",
-    description: "Las dos diagonales completas.",
-    color: "#d6a6ff",
-    category: "Figuras",
-    difficulty: "Alta",
-    cells: [...new Set([...mainDiagonal, ...secondaryDiagonal])],
-    variants: [[...new Set([...mainDiagonal, ...secondaryDiagonal])]],
-  },
-  {
-    id: "cuatro-esquinas",
-    name: "Cuatro esquinas",
-    description: "Las cuatro esquinas del cartón.",
-    color: "#79b8ff",
-    category: "Figuras",
-    difficulty: "Fácil",
-    cells: [0, 4, 20, 24],
-    variants: [[0, 4, 20, 24]],
-  },
-  {
-    id: "marco",
-    name: "Marco",
-    description: "Todo el borde exterior.",
-    color: "#ffc857",
-    category: "Figuras",
-    difficulty: "Alta",
-    cells: frame,
-    variants: [frame],
-  },
-  {
-    id: "letra-x",
-    name: "Letra X",
-    description: "Las dos diagonales forman una X.",
-    color: "#ff7f96",
-    category: "Letras",
-    difficulty: "Alta",
-    cells: [...new Set([...mainDiagonal, ...secondaryDiagonal])],
-    variants: [[...new Set([...mainDiagonal, ...secondaryDiagonal])]],
-  },
-  {
-    id: "letra-t",
-    name: "Letra T",
-    description: "Fila superior y columna central.",
-    color: "#a6c8ff",
-    category: "Letras",
-    difficulty: "Alta",
-    cells: [...new Set([...rows[0], ...columns[2]])],
-    variants: [[...new Set([...rows[0], ...columns[2]])]],
-  },
-  {
-    id: "letra-h",
-    name: "Letra H",
-    description: "Columnas laterales y fila central.",
-    color: "#77e8c9",
-    category: "Letras",
-    difficulty: "Alta",
-    cells: [...new Set([...columns[0], ...columns[4], ...rows[2]])],
-    variants: [[...new Set([...columns[0], ...columns[4], ...rows[2]])]],
-  },
-  {
-    id: "diamante",
-    name: "Diamante",
-    description: "Silueta de diamante alrededor del centro.",
-    color: "#62d5ff",
-    category: "Figuras",
-    difficulty: "Media",
-    cells: [2, 6, 8, 10, 14, 16, 18, 22],
-    variants: [[2, 6, 8, 10, 14, 16, 18, 22]],
-  },
-  {
-    id: "cruz",
-    name: "Cruz",
-    description: "Fila y columna centrales.",
-    color: "#d7ff3f",
-    category: "Figuras",
-    difficulty: "Media",
-    cells: [...new Set([...rows[2], ...columns[2]])],
-    variants: [[...new Set([...rows[2], ...columns[2]])]],
-  },
-  {
-    id: "piramide",
-    name: "Pirámide",
-    description: "Figura escalonada con base completa.",
-    color: "#ffc857",
-    category: "Figuras",
-    difficulty: "Alta",
-    cells: [2, 6, 8, 10, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
-    variants: [[2, 6, 8, 10, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]],
-  },
-  ...alphanumericPatterns,
-  {
-    id: "blackout",
-    name: "Tabla llena",
-    description: "Todos los números de la tabla.",
-    color: "#ff8f70",
-    category: "Especial",
-    difficulty: "Máxima",
-    cells: range(0, 24),
-    variants: [range(0, 24)],
-  },
+const patternPresets: PatternPreset[] = [
+  { id: "patron-e", name: "Letra E", description: "Figura con forma de E", color: "#d6a6ff", difficulty: "Alta", glyph: "E" },
+  { id: "patron-d", name: "Letra D", description: "Figura con forma de D", color: "#79b8ff", difficulty: "Alta", glyph: "D" },
+  { id: "patron-c", name: "Letra C", description: "Figura con forma de C", color: "#ffc857", difficulty: "Alta", glyph: "C" },
+  { id: "patron-b", name: "Letra B", description: "Figura con forma de B", color: "#77e8c9", difficulty: "Media", glyph: "B" },
+  { id: "patron-a", name: "Letra A", description: "Figura con forma de A", color: "#d7ff3f", difficulty: "Alta", glyph: "A" },
+  { id: "patron-10", name: "Número 10", description: "Figura con forma de 10", color: "#d6a6ff", difficulty: "Alta", glyph: "10" },
+  { id: "patron-9", name: "Número 9", description: "Figura con forma de 9", color: "#79b8ff", difficulty: "Alta", glyph: "9" },
+  { id: "patron-8", name: "Número 8", description: "Figura con forma de 8", color: "#ffc857", difficulty: "Media", glyph: "8" },
+  { id: "patron-4", name: "Número 4", description: "Figura con forma de 4", color: "#79b8ff", difficulty: "Media", glyph: "4" },
+  { id: "patron-3", name: "Número 3", description: "Figura con forma de 3", color: "#ffc857", difficulty: "Alta", glyph: "3" },
+  { id: "patron-2", name: "Número 2", description: "Figura con forma de 2", color: "#77e8c9", difficulty: "Alta", glyph: "2" },
+  { id: "patron-1", name: "Número 1", description: "Número 1", color: "#d7ff3f", difficulty: "Media", glyph: "1" },
+  { id: "letra-h", name: "Letra H", description: "Columnas laterales y fila central.", color: "#77e8c9", difficulty: "Media", glyph: "H" },
+  { id: "letra-t", name: "Letra T", description: "Fila superior y columna central.", color: "#a6c8ff", difficulty: "Media", glyph: "T" },
+  { id: "letra-x", name: "Letra X", description: "Las dos diagonales forman una X.", color: "#ff7f96", difficulty: "Media", glyph: "X" },
+  { id: "patron-x", name: "X", description: "Letra X", color: "#d6a6ff", difficulty: "Media", glyph: "X" },
+  { id: "patron-w", name: "Letra W", description: "Figura con forma de W", color: "#d7ff3f", difficulty: "Media", glyph: "W" },
+  { id: "patron-v", name: "Letra V", description: "Figura con forma de V", color: "#d6a6ff", difficulty: "Media", glyph: "V" },
+  { id: "patron-u", name: "Letra U", description: "Figura con forma de U", color: "#79b8ff", difficulty: "Media", glyph: "U" },
+  { id: "patron-s", name: "Letra S", description: "Figura con forma de S", color: "#ffc857", difficulty: "Media", glyph: "S" },
+  { id: "patron-r", name: "Letra R", description: "Figura con forma de R", color: "#77e8c9", difficulty: "Alta", glyph: "R" },
+  { id: "patron-q", name: "Letra Q", description: "Figura con forma de Q", color: "#d7ff3f", difficulty: "Alta", glyph: "Q" },
+  { id: "patron-p", name: "Letra P", description: "Figura con forma de P", color: "#d6a6ff", difficulty: "Alta", glyph: "P" },
+  { id: "patron-o", name: "Letra O", description: "Figura con forma de O", color: "#79b8ff", difficulty: "Media", glyph: "O" },
+  { id: "patron-n", name: "Letra N", description: "Figura con forma de N", color: "#ffc857", difficulty: "Media", glyph: "N" },
+  { id: "patron-m", name: "Letra M", description: "Figura con forma de M", color: "#77e8c9", difficulty: "Media", glyph: "M" },
+  { id: "patron-l", name: "Letra L", description: "Figura con forma de L", color: "#d7ff3f", difficulty: "Media", glyph: "L" },
+  { id: "patron-k", name: "Letra K", description: "Figura con forma de K", color: "#d6a6ff", difficulty: "Media", glyph: "K" },
+  { id: "patron-j", name: "Letra J", description: "Figura con forma de J", color: "#79b8ff", difficulty: "Media", glyph: "J" },
+  { id: "patron-i", name: "Letra I", description: "Figura con forma de I", color: "#ffc857", difficulty: "Media", glyph: "I" },
+  { id: "patron-g", name: "Letra G", description: "Figura con forma de G", color: "#77e8c9", difficulty: "Alta", glyph: "G" },
+  { id: "patron-f", name: "Letra F", description: "Figura con forma de F", color: "#d7ff3f", difficulty: "Media", glyph: "F" },
+  { id: "marco", name: "Letra O", description: "Letra O", color: "#ffc857", difficulty: "Alta", cells: frame },
+  { id: "blackout", name: "Tabla llena", description: "Tabla llena", color: "#ff8f70", difficulty: "Alta", cells: range(0, 24) },
+  { id: "patron-z", name: "Letra Z", description: "Figura con forma de Z", color: "#ffc857", difficulty: "Media", glyph: "Z" },
+  { id: "patron-y", name: "Letra Y", description: "Figura con forma de Y", color: "#77e8c9", difficulty: "Fácil", glyph: "Y" },
 ];
+
+export const BUILTIN_PATTERNS: BingoPattern[] = patternPresets.map((preset) => {
+  const cells = preset.cells ?? cellsFromGlyph(glyphs[preset.glyph!]);
+  return {
+    id: preset.id,
+    name: preset.name,
+    description: preset.description,
+    color: preset.color,
+    category: "Personalizado",
+    difficulty: preset.difficulty,
+    cells,
+    variants: [cells],
+  };
+});
 
 export const COMPACT_CARD_PATTERN: BingoPattern = {
   id: "sabrosito-completo",
