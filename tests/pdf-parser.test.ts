@@ -12,12 +12,48 @@ import {
 import {
   detectCompactRectangles,
   detectGridRectangles,
+  compactIdentifierFamily,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
   identifierFamilyFromOcrText,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("reconstruye la serie compacta aunque el OCR confunda ceros y cincos", () => {
+  assert.equal(
+    compactIdentifierFamily(
+      [
+        "09556341",
+        "995563-2",
+        "055503-3",
+        "995503-4",
+        "995543-5",
+        "995503 0",
+        "995583-7",
+        "",
+      ],
+      "055504",
+    ),
+    "055503",
+  );
+  assert.equal(
+    compactIdentifierFamily(
+      [
+        "0955041",
+        "955504-2",
+        "055504-3",
+        "995504-4",
+        "995544-5",
+        "995504 0",
+        "995504-7",
+        "",
+      ],
+      "055504",
+    ),
+    "055504",
+  );
+});
 
 test("reconstruye la serie de una hoja aunque el OCR mezcle guiones y letras", () => {
   const text = "PLAN PREMIO 17000 10000 N TABLA #87020 Tab#87020-1 Tab#87020-2";

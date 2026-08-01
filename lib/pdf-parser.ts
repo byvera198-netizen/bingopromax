@@ -1486,6 +1486,7 @@ function makeCanvas(width: number, height: number) {
 function binarizeNumbers(
   canvas: HTMLCanvasElement,
   context: CanvasRenderingContext2D,
+  threshold = 175,
 ) {
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   for (let offset = 0; offset < image.data.length; offset += 4) {
@@ -1494,7 +1495,7 @@ function binarizeNumbers(
     const blue = image.data[offset + 2];
     const luminance = red * 0.3 + green * 0.59 + blue * 0.11;
     const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
-    const ink = luminance < 175 && chroma < 58;
+    const ink = luminance < threshold && chroma < 58;
     const value = ink ? 0 : 255;
     image.data[offset] = value;
     image.data[offset + 1] = value;
@@ -1882,6 +1883,154 @@ async function recognizeCompactCell(
   );
 }
 
+export function compactIdentifierFamily(
+  readings: string[],
+  verticalReading = "",
+) {
+  const exactZeroPrefixed = readings.flatMap((text, index) => {
+    const normalized = text
+      .replace(/[Oo]/g, "0")
+      .replace(/[Il|]/g, "1")
+      .replace(/\s+/g, "")
+      .replace(/[^\d-]/g, "");
+    const match = normalized.match(
+      new RegExp(`^(0\\d{5})-${(index % 8) + 1}$`),
+    );
+    return match ? [match[1]] : [];
+  });
+  if (exactZeroPrefixed.length) {
+    return [...new Set(exactZeroPrefixed)].sort(
+      (a, b) =>
+        exactZeroPrefixed.filter((value) => value === b).length -
+        exactZeroPrefixed.filter((value) => value === a).length,
+    )[0];
+  }
+  const candidates = readings
+    .map((text, index) => {
+      const digits = text.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/\D/g, "");
+      if (digits.length < 6) return null;
+      const suffix = String((index % 8) + 1);
+      return digits.endsWith(suffix) ? digits.slice(0, -suffix.length) : digits;
+    })
+    .filter((value): value is string => Boolean(value));
+  const vertical = verticalReading.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/\D/g, "");
+  const lengths = [...candidates, vertical].filter(Boolean).map((value) => value.length);
+  if (!lengths.length) return null;
+  const modalLength = [...new Set(lengths)].sort(
+    (a, b) => lengths.filter((value) => value === b).length - lengths.filter((value) => value === a).length,
+  )[0];
+  const comparable = candidates.filter((value) => value.length === modalLength);
+  if (!comparable.length && vertical.length === modalLength) return vertical;
+  if (!comparable.length) return null;
+  const consensus = Array.from({ length: modalLength }, (_, position) => {
+    const counts = new Map<string, number>();
+    for (const value of comparable) counts.set(value[position], (counts.get(value[position]) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  });
+  if (vertical.length === modalLength) {
+    for (let index = 0; index < modalLength; index += 1) {
+      if (vertical[index] === "0" && /[689]/.test(consensus[index])) consensus[index] = "0";
+    }
+  }
+  return consensus.join("");
+}
+
+async function recognizeCompactIdentifiers(
+  source: HTMLCanvasElement,
+  rectangles: CompactRectangle[],
+  worker: OcrWorker,
+) {
+  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789-_",
+    tessedit_pageseg_mode: "7",
+    preserve_interword_spaces: "1",
+  });
+  const readings: string[] = [];
+  for (const rectangle of ordered) {
+    const target = makeCanvas(1440, 264);
+    if (!target) {
+      readings.push("");
+      continue;
+    }
+    target.context.drawImage(
+      source,
+      rectangle.x + rectangle.width * 0.288,
+      rectangle.y + rectangle.height * 0.412,
+      rectangle.width * 0.447,
+      rectangle.height * 0.13,
+      0,
+      0,
+      target.canvas.width,
+      target.canvas.height,
+    );
+    binarizeNumbers(target.canvas, target.context, 225);
+    const result = await worker.recognize(target.canvas, {}, { text: true });
+    readings.push(result.data.text ?? "");
+  }
+
+  let verticalReading = "";
+  const firstRow = ordered.slice(0, 2).sort((a, b) => a.x - b.x);
+  if (firstRow.length === 2) {
+    const gapLeft = firstRow[0].x + firstRow[0].width;
+    const gapRight = firstRow[1].x;
+    const gapWidth = gapRight - gapLeft;
+    const gapHeight = Math.min(firstRow[0].height, firstRow[1].height);
+    if (gapWidth > 4 && gapHeight > 20) {
+      const gap = makeCanvas(Math.ceil(gapWidth), Math.ceil(gapHeight));
+      if (gap) {
+        gap.context.drawImage(
+          source,
+          gapLeft,
+          Math.min(firstRow[0].y, firstRow[1].y),
+          gapWidth,
+          gapHeight,
+          0,
+          0,
+          gap.canvas.width,
+          gap.canvas.height,
+        );
+        const orientationReadings: string[] = [];
+        for (const direction of [1, -1]) {
+          const rotated = makeCanvas(gap.canvas.height, gap.canvas.width);
+          const target = makeCanvas(gap.canvas.height * 4, gap.canvas.width * 4);
+          if (!rotated || !target) continue;
+          if (direction === 1) {
+            rotated.context.translate(rotated.canvas.width, 0);
+            rotated.context.rotate(Math.PI / 2);
+          } else {
+            rotated.context.translate(0, rotated.canvas.height);
+            rotated.context.rotate(-Math.PI / 2);
+          }
+          rotated.context.drawImage(gap.canvas, 0, 0);
+          target.context.drawImage(
+            rotated.canvas,
+            0,
+            0,
+            target.canvas.width,
+            target.canvas.height,
+          );
+          binarizeNumbers(target.canvas, target.context, 210);
+          const result = await worker.recognize(target.canvas, {}, { text: true });
+          orientationReadings.push(result.data.text ?? "");
+        }
+        verticalReading = orientationReadings.sort(
+          (a, b) => b.replace(/\D/g, "").length - a.replace(/\D/g, "").length,
+        )[0] ?? "";
+      }
+    }
+  }
+
+  const family = compactIdentifierFamily(readings, verticalReading);
+  return family
+    ? ordered.map((rectangle, index) => ({
+        value: `${family}-${index + 1}`,
+        x: rectangle.x + rectangle.width / 2,
+        y: source.height - rectangle.y,
+      }))
+    : [];
+}
+
 async function recognizeCompactCards(
   source: HTMLCanvasElement,
   rectangles: CompactRectangle[],
@@ -1890,6 +2039,7 @@ async function recognizeCompactCards(
   pageNumber: number,
 ) {
   if (rectangles.length < 2) return [];
+  const identifiers = await recognizeCompactIdentifiers(source, rectangles, worker);
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
     tessedit_pageseg_mode: "8",
@@ -1988,10 +2138,10 @@ async function recognizeCompactCards(
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
-  return cardsFromDetectedGrids(detected, fileName, pageNumber);
+  return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
 }
 
-async function runOcr(
+export async function runOcr(
   pageProxy: import("pdfjs-dist").PDFPageProxy,
   worker: OcrWorker,
   fileName: string,
