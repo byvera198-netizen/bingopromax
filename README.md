@@ -2,7 +2,7 @@
 
 ## Abrir la aplicación
 
-### [▶ Abrir Bingo Control Pro Ecuador](https://bingo-control-pro-ecuador.eemite.chatgpt.site)
+### [▶ Abrir Bingo Control Pro](https://bingo-control-pro-online.yesisol.chatgpt.site)
 
 Esta página de GitHub conserva el código fuente y la documentación. La aplicación
 funcional se abre desde el botón anterior.
