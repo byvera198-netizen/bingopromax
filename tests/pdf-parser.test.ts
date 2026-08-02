@@ -23,6 +23,7 @@ import {
   extractNumberSheetGridFromKnownOcrBlocks,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  identifierFamilyConsensus,
   identifierFamilyFromOcrText,
   identifiersForDetectedGrids,
   numberSheetMetadataFromOcrText,
@@ -85,6 +86,10 @@ test("acepta cartones especiales y hojas de números sin tratarlos como 5×5 nor
 
 test("reconstruye la serie compacta aunque el OCR confunda ceros y cincos", () => {
   assert.equal(
+    compactIdentifierFamily(["", "90", "", "", "", "", "2", "-8"], "3 0064544"),
+    "064544",
+  );
+  assert.equal(
     compactIdentifierFamily(
       [
         "09556341",
@@ -122,6 +127,13 @@ test("reconstruye la serie de una hoja aunque el OCR mezcle guiones y letras", (
   const text = "PLAN PREMIO 17000 10000 N TABLA #87020 Tab#87020-1 Tab#87020-2";
   assert.equal(identifierFamilyFromOcrText(text), "87020");
   assert.equal(identifierFamilyFromOcrText("Tab#87O21-3"), "87021");
+});
+
+test("recupera la familia de cuatro cartones aunque el OCR confunda 9 con 0", () => {
+  assert.equal(
+    identifierFamilyConsensus(["04238", "04238", "94238", "494238"]),
+    "94238",
+  );
 });
 
 test("numera en secuencia los dos cartones independientes de una hoja horizontal", () => {

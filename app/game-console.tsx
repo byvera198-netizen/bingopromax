@@ -65,7 +65,7 @@ import {
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { fileChecksum, parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import { parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
@@ -86,17 +86,27 @@ function deviceId() {
 }
 
 async function api<T>(body: Record<string, unknown>): Promise<T> {
-  const authorization = await authorizationHeaders();
-  const response = await fetch("/api/state", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-device-id": deviceId(),
-      ...authorization,
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json()) as T & { error?: string };
+  const send = async (forceRefresh = false) => {
+    const authorization = await authorizationHeaders(forceRefresh);
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-device-id": deviceId(),
+        ...authorization,
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json()) as T & { error?: string; access?: AccessState };
+    return { response, payload };
+  };
+  let { response, payload } = await send();
+  if (
+    (response.status === 401 || response.status === 403) &&
+    (!payload.access || (payload.access.role === "anonymous" && !payload.access.email))
+  ) {
+    ({ response, payload } = await send(true));
+  }
   if (!response.ok) throw new Error(payload.error || "No se pudo completar la operación.");
   return payload;
 }
@@ -419,12 +429,23 @@ export default function GameConsole() {
       setError("");
     }
     try {
-      const authorization = await authorizationHeaders();
-      const response = await fetch("/api/state", {
-        cache: "no-store",
-        headers: { "x-device-id": deviceId(), ...authorization },
-      });
-      const payload = (await response.json()) as AppState & { error?: string; access?: AccessState };
+      const load = async (forceRefresh = false) => {
+        const authorization = await authorizationHeaders(forceRefresh);
+        const response = await fetch("/api/state", {
+          cache: "no-store",
+          headers: { "x-device-id": deviceId(), ...authorization },
+        });
+        const payload = (await response.json()) as AppState & { error?: string; access?: AccessState };
+        return { response, payload };
+      };
+      let { response, payload } = await load();
+      if (
+        response.status === 403 &&
+        payload.access?.role === "anonymous" &&
+        !payload.access.email
+      ) {
+        ({ response, payload } = await load(true));
+      }
       if (response.status === 403 && payload.access) {
         setAccess(payload.access);
         setState(null);
@@ -501,18 +522,19 @@ export default function GameConsole() {
   };
 
   const requestMembership = async () => {
-    if (!access?.email || !membershipName.trim()) {
+    if (!membershipName.trim()) {
       setError("Escribe tu nombre para enviar la solicitud.");
       return;
     }
+    const memberEmail = access?.email || authUser?.email || "";
     try {
       const result = await api<{ adminEmail: string; subject: string; accessCode: string }>({
         action: "requestMembership",
-        email: access.email,
         name: membershipName.trim(),
       });
-      window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(`Nueva solicitud de acceso a Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${access.email}\nCódigo de acceso: ${result.accessCode}\n\nLa duración de la membresía será definida por el administrador.`)}`, "_self");
-      setAccess({ ...access, role: "pending", reason: "Solicitud enviada. Espera la aprobación del administrador." });
+      window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(`Nueva solicitud de acceso a Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${memberEmail}\nCódigo de acceso: ${result.accessCode}\n\nLa duración de la membresía será definida por el administrador.`)}`, "_blank");
+      setAccess({ ...access!, email: memberEmail, role: "pending", reason: "Solicitud enviada. Espera la aprobación del administrador." });
+      setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo enviar la solicitud.");
     }
@@ -572,7 +594,6 @@ export default function GameConsole() {
         window.location.hash.includes("type=recovery") ||
         new URLSearchParams(window.location.search).get("mode") === "reset";
       if (recovery) setAuthMode("update");
-      if (session) void refresh();
     };
     void bootstrapAuth();
     const {
@@ -580,14 +601,25 @@ export default function GameConsole() {
     } = supabase.auth.onAuthStateChange((event, session) => {
       setAuthUser(session?.user ?? null);
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
-      if (session) void refresh();
-      else {
+      if (!session) {
         setState(null);
         setAccess(null);
       }
     });
     return () => subscription.unsubscribe();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!authReady || !authUser) return;
+    const timer = window.setTimeout(() => void refresh(), 0);
+    return () => window.clearTimeout(timer);
+  }, [authReady, authUser, refresh]);
+
+  useEffect(() => {
+    if (!authUser || membershipName.trim()) return;
+    const registeredName = String(authUser.user_metadata?.name ?? "").trim();
+    if (registeredName) setMembershipName(registeredName);
+  }, [authUser, membershipName]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -999,31 +1031,25 @@ export default function GameConsole() {
     }
     setProcessingFiles(true);
     const warnings: string[] = [];
-    const signatures = new Set(state.cards.map((card) => card.grid.join(",")));
     const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
     let imported = 0;
     let duplicateCount = 0;
     try {
       for (const file of files) {
-        const checksum = await fileChecksum(file);
         const parsed = await parseBingoPdf(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
         const identifiedCards = parsed.cards;
-        const uniqueCards = identifiedCards
-          .filter((card) => !signatures.has(card.grid.join(",")))
-          .map((card, index) => {
-            signatures.add(card.grid.join(","));
-            let number = card.number;
-            if (usedNumbers.has(number.toLowerCase())) {
-              number = `${number}-${checksum.slice(0, 6).toUpperCase()}${index ? `-${index + 1}` : ""}`;
-            }
-            while (usedNumbers.has(number.toLowerCase())) number = `${number}-2`;
-            usedNumbers.add(number.toLowerCase());
-            return { ...card, number };
-          });
-        duplicateCount += identifiedCards.length - uniqueCards.length;
+        const uniqueCards = identifiedCards.filter((card) => {
+          const number = card.number.toLowerCase();
+          if (usedNumbers.has(number)) {
+            duplicateCount += 1;
+            return false;
+          }
+          usedNumbers.add(number);
+          return true;
+        });
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
           continue;
@@ -1426,7 +1452,8 @@ export default function GameConsole() {
     const pending = access.membership?.status === "pending";
     const awaitingCode = access.membership?.status === "approved" && !access.membership.activationVerified;
     const canRequest = !access.membership || access.membership.status === "rejected" || access.membership.status === "expired";
-    const whatsappMessage = encodeURIComponent(`Hola, solicito ${access.membership?.status === "expired" ? "renovar" : "activar"} mi cuenta de Bingo Control Pro.\nCorreo: ${access.email}`);
+    const membershipEmail = access.email || authUser?.email || "";
+    const whatsappMessage = encodeURIComponent(`Hola, solicito ${access.membership?.status === "expired" ? "renovar" : "activar"} mi cuenta de Bingo Control Pro.\nCorreo: ${membershipEmail}`);
     return (
       <main className="membership-screen">
         <section className="membership-card">
@@ -1437,7 +1464,7 @@ export default function GameConsole() {
           <span className="eyebrow"><ShieldCheck size={14} /> ACCESO POR MEMBRESÍA</span>
           <h1>{awaitingCode ? "Ingresa tu código de acceso" : pending ? "Tu acceso está en revisión" : "Solicita tu acceso"}</h1>
           <p>{access.reason || "El administrador debe aprobar tu cuenta antes de ingresar."}</p>
-          <div className="membership-email"><UserRound size={17} /><span>{access.email}</span></div>
+          <div className="membership-email"><UserRound size={17} /><span>{membershipEmail || "Correo de la sesión no disponible"}</span></div>
           {canRequest && (
             <div className="form-stack">
               <label>Nombre completo<input onChange={(event) => setMembershipName(event.target.value)} placeholder="Tu nombre" value={membershipName} /></label>

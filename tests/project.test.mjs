@@ -45,6 +45,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.doesNotMatch(page, /Archivo CSV/);
   assert.match(page, /updatePattern/);
   assert.match(page, /deleteMembershipUser/);
+  assert.match(page, /authorizationHeaders\(forceRefresh\)/);
+  assert.match(page, /membershipEmail = access\.email \|\| authUser\?\.email/);
   assert.match(route, /addAdmin/);
   assert.match(route, /approveMembership/);
   assert.match(route, /x-device-id/);

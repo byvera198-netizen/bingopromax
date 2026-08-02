@@ -316,7 +316,7 @@ export function detectGridRectangles(
         rectangle.width * rectangle.height,
         other.width * other.height,
       );
-      return intersection / Math.max(1, smallerArea) > 0.25;
+      return intersection / Math.max(1, smallerArea) > 0.12;
     });
     if (!duplicate) selected.push(rectangle);
   }
@@ -1748,6 +1748,7 @@ function binarizeNumbers(
   canvas: HTMLCanvasElement,
   context: CanvasRenderingContext2D,
   threshold = 175,
+  maxChroma = 58,
 ) {
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   for (let offset = 0; offset < image.data.length; offset += 4) {
@@ -1756,7 +1757,7 @@ function binarizeNumbers(
     const blue = image.data[offset + 2];
     const luminance = red * 0.3 + green * 0.59 + blue * 0.11;
     const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
-    const ink = luminance < threshold && chroma < 58;
+    const ink = luminance < threshold && chroma < maxChroma;
     const value = ink ? 0 : 255;
     image.data[offset] = value;
     image.data[offset + 1] = value;
@@ -1800,6 +1801,37 @@ export function identifierFamilyFromOcrText(text: string) {
   return [...scores.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] ?? null;
 }
 
+export function identifierFamilyConsensus(families: string[]) {
+  const valid = families.filter((family) => /^\d{5,12}$/.test(family));
+  if (!valid.length) return null;
+  const lengths = valid.map((family) => family.length);
+  const modalLength = [...new Set(lengths)].sort(
+    (a, b) =>
+      lengths.filter((length) => length === b).length -
+        lengths.filter((length) => length === a).length ||
+      a - b,
+  )[0];
+  const comparable = valid.filter((family) => family.length === modalLength);
+  const consensus = Array.from({ length: modalLength }, (_, position) => {
+    const counts = new Map<string, number>();
+    for (const family of comparable) {
+      counts.set(family[position], (counts.get(family[position]) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  });
+  if (modalLength === 5 && consensus[0] === "0") {
+    const nonZero = comparable.map((family) => family[0]).filter((digit) => digit !== "0");
+    if (nonZero.length) {
+      consensus[0] = [...new Set(nonZero)].sort(
+        (a, b) =>
+          nonZero.filter((digit) => digit === b).length -
+          nonZero.filter((digit) => digit === a).length,
+      )[0];
+    }
+  }
+  return consensus.join("");
+}
+
 export function identifiersForDetectedGrids(
   family: string,
   count: number,
@@ -1812,6 +1844,47 @@ export function identifiersForDetectedGrids(
     );
   }
   return Array.from({ length: count }, (_, index) => `${family}-${index + 1}`);
+}
+
+async function recognizePortraitPageFamily(
+  source: HTMLCanvasElement,
+  worker: OcrWorker,
+) {
+  const left = source.width * 0.815;
+  const top = source.height * 0.012;
+  const width = source.width * 0.15;
+  const height = source.height * 0.032;
+  const readings: string[] = [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "7",
+    preserve_interword_spaces: "1",
+  });
+  for (const threshold of [100, 135, 165]) {
+    const target = makeCanvas(1200, 300);
+    if (!target) continue;
+    target.context.drawImage(
+      source,
+      left,
+      top,
+      width,
+      height,
+      0,
+      0,
+      target.canvas.width,
+      target.canvas.height,
+    );
+    binarizeNumbers(target.canvas, target.context, threshold);
+    const result = await worker.recognize(target.canvas, {}, { text: true });
+    const reading = (result.data.text ?? "").replace(/\D/g, "");
+    if (/^\d{5,12}$/.test(reading)) readings.push(reading);
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return identifierFamilyConsensus(readings);
 }
 
 async function recognizeGridIdentifiers(
@@ -2281,12 +2354,21 @@ async function recognizeDetectedGrids(
   pageNumber: number,
 ) {
   const detected: DetectedGrid[] = [];
-  const eligibleRectangles = rectangles.filter((item) => item.score >= 80);
+  const isFourCardPortraitSheet =
+    source.height > source.width &&
+    rectangles.length === 4 &&
+    rectangles.every((item) => item.score >= 65);
+  const eligibleRectangles = isFourCardPortraitSheet
+    ? rectangles
+    : rectangles.filter((item) => item.score >= 80);
   const firstRectangleTop = Math.min(
     ...eligibleRectangles.map((item) => item.y / source.height),
   );
   const likelyNumberSheetPage =
     eligibleRectangles.length === 4 && firstRectangleTop >= 0.32;
+  const printedPortraitFamily = isFourCardPortraitSheet && !likelyNumberSheetPage
+    ? await recognizePortraitPageFamily(source, worker)
+    : null;
   const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
   let numberSheetMetadataCache: Array<NumberSheetMetadata | null> | null = null;
   let numberSheetFormCache: NumberSheetForm[] | null = null;
@@ -2466,7 +2548,32 @@ async function recognizeDetectedGrids(
   const canonicalFamily = [...familyCounts.entries()].sort(
     (a, b) => b[1] - a[1] || a[0].length - b[0].length,
   )[0];
-  if (canonicalFamily && canonicalFamily[1] >= 2) {
+  const detectedPortraitFamily = identifierFamilyConsensus(
+    identifierParts.map((item) => item.family),
+  );
+  const printedFamilyMatchesDetected =
+    printedPortraitFamily &&
+    detectedPortraitFamily &&
+    printedPortraitFamily.length === detectedPortraitFamily.length &&
+    [...printedPortraitFamily].filter(
+      (digit, index) => digit !== detectedPortraitFamily[index],
+    ).length <= 2;
+  const portraitFamily =
+    source.height > source.width && eligibleRectangles.length === 4
+      ? printedPortraitFamily && (!detectedPortraitFamily || printedFamilyMatchesDetected)
+        ? printedPortraitFamily
+        : detectedPortraitFamily
+      : null;
+  if (portraitFamily) {
+    detected.forEach((item) => {
+      const match = item.identifier?.match(/^(\d{5,12})-(\d{1,3})$/);
+      if (match) item.identifier = `${portraitFamily}-${match[2]}`;
+    });
+    identifiers.forEach((item) => {
+      const match = item.value.match(/^(\d{5,12})-(\d{1,3})$/);
+      if (match) item.value = `${portraitFamily}-${match[2]}`;
+    });
+  } else if (canonicalFamily && canonicalFamily[1] >= 2) {
     detected.forEach((item) => {
       const match = item.identifier?.match(/^(\d{5,12})-(\d{1,3})$/);
       if (!match || match[1] === canonicalFamily[0]) return;
@@ -2600,6 +2707,8 @@ export function compactIdentifierFamily(
     })
     .filter((value): value is string => Boolean(value));
   const vertical = verticalReading.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/\D/g, "");
+  const verticalTail = vertical.match(/(0\d{5})$/)?.[1] ?? null;
+  if (!candidates.length && verticalTail) return verticalTail;
   const lengths = [...candidates, vertical].filter(Boolean).map((value) => value.length);
   if (!lengths.length) return null;
   const modalLength = [...new Set(lengths)].sort(
@@ -2860,9 +2969,9 @@ const gorditoSpecialCards: SpecialPageCard[] = [
     x: 0.82,
     y: 0.16,
     cells: [
-      cell(0.742, 0.116, [1, 30], 0.07, 0.06, true), cell(0.827, 0.116, [16, 60], 0.07, 0.06, true), cell(0.902, 0.116, [46, 75], 0.07, 0.06, true),
-      cell(0.752, 0.157, [1, 30], 0.07, 0.06, true), cell(0.831, 0.157, [16, 60], 0.07, 0.06, true), cell(0.898, 0.157, [46, 75], 0.07, 0.06, true),
-      cell(0.752, 0.215, [1, 30], 0.07, 0.06, true), cell(0.831, 0.215, [16, 60], 0.06, 0.04), cell(0.898, 0.215, [46, 75]),
+      cell(0.760, 0.113, [1, 30], 0.055, 0.045, true), cell(0.835, 0.113, [16, 60], 0.055, 0.045, true), cell(0.910, 0.113, [46, 75], 0.055, 0.045, true),
+      cell(0.763, 0.170, [1, 30], 0.055, 0.045, true), cell(0.837, 0.170, [16, 60], 0.055, 0.045, true), cell(0.912, 0.170, [46, 75], 0.055, 0.045, true),
+      cell(0.764, 0.223, [1, 30], 0.055, 0.045, true), cell(0.839, 0.223, [16, 60], 0.055, 0.045, true), cell(0.912, 0.223, [46, 75], 0.055, 0.045, true),
     ],
   },
   {
@@ -3023,6 +3132,7 @@ async function recognizeRelativeCell(
   const width = Math.min(source.width - left, position.width * source.width);
   const height = Math.min(source.height - top, position.height * source.height);
   const range = position.range ?? [1, 75];
+  const readings: Array<{ value: number; confidence: number }> = [];
   for (const pageSegMode of ["8", "7"]) {
     await worker.setParameters({
       tessedit_char_whitelist: "0123456789",
@@ -3030,16 +3140,33 @@ async function recognizeRelativeCell(
       preserve_interword_spaces: "1",
     });
     for (const threshold of [100, 135, 165, 195, 225]) {
-    const target = makeCanvas(400, 300);
-    if (!target) continue;
-    target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
-    binarizeNumbers(target.canvas, target.context, threshold);
-    const result = await worker.recognize(target.canvas, {}, { text: true });
-    const value = valueFromCellText(result.data.text ?? "", range);
-    if (value !== null) return value;
+      const target = makeCanvas(400, 300);
+      if (!target) continue;
+      target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
+      binarizeNumbers(
+        target.canvas,
+        target.context,
+        threshold,
+        position.preferSymbols ? 256 : 58,
+      );
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const value = valueFromCellText(result.data.text ?? "", range);
+      if (value !== null) {
+        readings.push({ value, confidence: result.data.confidence ?? 0 });
+      }
     }
   }
-  return null;
+  const grouped = new Map<number, { count: number; confidence: number }>();
+  for (const reading of readings) {
+    const current = grouped.get(reading.value) ?? { count: 0, confidence: 0 };
+    grouped.set(reading.value, {
+      count: current.count + 1,
+      confidence: Math.max(current.confidence, reading.confidence),
+    });
+  }
+  return [...grouped.entries()].sort(
+    (a, b) => b[1].confidence - a[1].confidence || b[1].count - a[1].count,
+  )[0]?.[0] ?? null;
 }
 
 function familyFromCards(cards: BingoCard[]) {
@@ -3099,9 +3226,7 @@ async function recognizeSpecialPageCards(
         position,
       );
       const croppedValue = await recognizeRelativeCell(source, position, worker);
-      const value = position.preferSymbols
-        ? symbolValue ?? croppedValue
-        : croppedValue ?? symbolValue;
+      const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
     }
     if (

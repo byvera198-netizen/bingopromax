@@ -17,9 +17,13 @@ export const supabase = createClient(
   },
 );
 
-export async function authorizationHeaders(): Promise<Record<string, string>> {
+export async function authorizationHeaders(
+  forceRefresh = false,
+): Promise<Record<string, string>> {
   const {
     data: { session },
-  } = await supabase.auth.getSession();
+  } = forceRefresh
+    ? await supabase.auth.refreshSession()
+    : await supabase.auth.getSession();
   return session ? { Authorization: `Bearer ${session.access_token}` } : {};
 }
