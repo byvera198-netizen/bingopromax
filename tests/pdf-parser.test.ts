@@ -15,9 +15,11 @@ import {
   type BingoPattern,
 } from "../lib/bingo";
 import {
+  assignApplicationCardNumbers,
   assignSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
+  decodeYapaRowDigits,
   decodeBingoRowDigits,
   compactIdentifierFamily,
   extractNumberSheetGridFromKnownOcrBlocks,
@@ -26,12 +28,38 @@ import {
   identifierFamilyConsensus,
   identifierFamilyFromOcrText,
   identifiersForDetectedGrids,
+  isSupportedBingoImportFile,
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
   reconcileTwoCardPageNumbers,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("asigna numeración propia consecutiva a todos los formatos importados", () => {
+  const cards = [
+    { id: "a", number: "94238-1", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" as const },
+    { id: "b", number: "064544-1", serial: "Sabrosito", grid: [1, 20, 34, 52, 70], sourceFile: "foto.jpg", sourcePage: 1, status: "active" as const },
+    { id: "c", number: "SIN-ID-001-1", serial: "Forma #3", grid: Array(25).fill(0), sourceFile: "forma.png", sourcePage: 1, status: "active" as const },
+  ];
+  assert.deepEqual(
+    assignApplicationCardNumbers(cards, 7).map((card) => card.number),
+    ["7", "8", "9"],
+  );
+});
+
+test("acepta PDF e imágenes compatibles para importación y cámara", () => {
+  assert.equal(isSupportedBingoImportFile({ name: "cartones.pdf", type: "application/pdf" }), true);
+  assert.equal(isSupportedBingoImportFile({ name: "foto.JPG", type: "" }), true);
+  assert.equal(isSupportedBingoImportFile({ name: "captura.webp", type: "image/webp" }), true);
+  assert.equal(isSupportedBingoImportFile({ name: "notas.txt", type: "text/plain" }), false);
+});
+
+test("separa las tres cifras de una fila Yapa aunque el OCR las una", () => {
+  assert.deepEqual(decodeYapaRowDigits("1040 62"), [10, 40, 62]);
+  assert.deepEqual(decodeYapaRowDigits("224365"), [22, 43, 65]);
+  assert.deepEqual(decodeYapaRowDigits("234574"), [23, 45, 74]);
+});
 
 test("conserva el orden visual de los cartones y juegos especiales del PDF", () => {
   const makeCard = (number: string, serial = ""): BingoCard => ({

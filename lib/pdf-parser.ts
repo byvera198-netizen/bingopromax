@@ -95,7 +95,7 @@ type OcrWorker = {
 export interface PdfParseProgress {
   page: number;
   pages: number;
-  stage: "Leyendo texto" | "Aplicando OCR" | "Validando";
+  stage: "Leyendo texto" | "Decodificando imagen" | "Aplicando OCR" | "Validando";
   percent: number;
 }
 
@@ -3133,26 +3133,58 @@ async function recognizeRelativeCell(
   const height = Math.min(source.height - top, position.height * source.height);
   const range = position.range ?? [1, 75];
   const readings: Array<{ value: number; confidence: number }> = [];
-  for (const pageSegMode of ["8", "7"]) {
-    await worker.setParameters({
-      tessedit_char_whitelist: "0123456789",
-      tessedit_pageseg_mode: pageSegMode,
-      preserve_interword_spaces: "1",
-    });
-    for (const threshold of [100, 135, 165, 195, 225]) {
-      const target = makeCanvas(400, 300);
-      if (!target) continue;
-      target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
-      binarizeNumbers(
-        target.canvas,
-        target.context,
-        threshold,
-        position.preferSymbols ? 256 : 58,
-      );
-      const result = await worker.recognize(target.canvas, {}, { text: true });
-      const value = valueFromCellText(result.data.text ?? "", range);
-      if (value !== null) {
-        readings.push({ value, confidence: result.data.confidence ?? 0 });
+  for (const maxChroma of position.preferSymbols ? [256, 58] : [58]) {
+    for (const pageSegMode of ["8", "7"]) {
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: pageSegMode,
+        preserve_interword_spaces: "1",
+      });
+      for (const threshold of [100, 135, 165, 195, 225]) {
+        const target = makeCanvas(400, 300);
+        if (!target) continue;
+        target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
+        binarizeNumbers(target.canvas, target.context, threshold, maxChroma);
+        const result = await worker.recognize(target.canvas, {}, { text: true });
+        const value = valueFromCellText(result.data.text ?? "", range);
+        if (value !== null) {
+          readings.push({ value, confidence: result.data.confidence ?? 0 });
+        }
+      }
+    }
+    if (readings.length) break;
+  }
+  if (!readings.length) {
+    const insetLeft = left + width * 0.14;
+    const insetTop = top + height * 0.14;
+    const insetWidth = width * 0.72;
+    const insetHeight = height * 0.72;
+    for (const pageSegMode of ["8", "7"]) {
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: pageSegMode,
+        preserve_interword_spaces: "1",
+      });
+      for (const threshold of [100, 135, 165, 195, 225]) {
+        const target = makeCanvas(420, 280);
+        if (!target) continue;
+        target.context.drawImage(
+          source,
+          insetLeft,
+          insetTop,
+          insetWidth,
+          insetHeight,
+          0,
+          0,
+          target.canvas.width,
+          target.canvas.height,
+        );
+        binarizeNumbers(target.canvas, target.context, threshold, 58);
+        const result = await worker.recognize(target.canvas, {}, { text: true });
+        const value = valueFromCellText(result.data.text ?? "", range);
+        if (value !== null) {
+          readings.push({ value, confidence: result.data.confidence ?? 0 });
+        }
       }
     }
   }
@@ -3176,6 +3208,115 @@ function familyFromCards(cards: BingoCard[]) {
     if (match) counts.set(match[1], (counts.get(match[1]) ?? 0) + 1);
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
+
+function repairAscendingSpecialColumns(
+  values: number[],
+  candidates: number[][],
+) {
+  if (values.length !== 9 || candidates.length !== 9) return values;
+  const repaired = [...values];
+  for (let column = 0; column < 3; column += 1) {
+    const positions = [column, column + 3, column + 6];
+    const options = positions.map((position) => candidates[position]);
+    let best: { values: number[]; score: number } | null = null;
+    for (const first of options[0]) {
+      for (const second of options[1]) {
+        for (const third of options[2]) {
+          if (!(first < second && second < third)) continue;
+          const selection = [first, second, third];
+          const score = selection.reduce(
+            (total, value, index) =>
+              total + (value === values[positions[index]] ? 2 : 0),
+            0,
+          );
+          if (!best || score > best.score) best = { values: selection, score };
+        }
+      }
+    }
+    if (best) positions.forEach((position, index) => { repaired[position] = best!.values[index]; });
+  }
+  return repaired;
+}
+
+function validYapaGrid(values: number[]) {
+  return (
+    values.length === 9 &&
+    new Set(values).size === 9 &&
+    values.every((value, index) => {
+      const column = index % 3;
+      const range = column === 0 ? [1, 30] : column === 1 ? [16, 60] : [46, 75];
+      return value >= range[0] && value <= range[1];
+    }) &&
+    [0, 1, 2].every(
+      (column) => values[column] < values[column + 3] && values[column + 3] < values[column + 6],
+    )
+  );
+}
+
+export function decodeYapaRowDigits(text: string) {
+  const digits = text.replace(/\D/g, "");
+  const ranges = [[1, 30], [16, 60], [46, 75]] as const;
+  const candidates: number[][] = [];
+  const visit = (column: number, offset: number, values: number[]) => {
+    if (column === ranges.length) {
+      if (offset === digits.length) candidates.push(values);
+      return;
+    }
+    for (const length of [1, 2]) {
+      const chunk = digits.slice(offset, offset + length);
+      if (chunk.length !== length || (chunk.length > 1 && chunk.startsWith("0"))) continue;
+      const value = Number(chunk);
+      const [minimum, maximum] = ranges[column];
+      if (value < minimum || value > maximum) continue;
+      visit(column + 1, offset + length, [...values, value]);
+    }
+  };
+  visit(0, 0, []);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+async function recognizeYapaGridCrop(
+  source: HTMLCanvasElement,
+  worker: OcrWorker,
+) {
+  const left = source.width * 0.725;
+  const top = source.height * 0.087;
+  const width = source.width * 0.22;
+  const height = source.height * 0.16;
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789 ",
+    tessedit_pageseg_mode: "6",
+    preserve_interword_spaces: "1",
+  });
+  for (const maxChroma of [58, 256]) {
+    for (const threshold of [100, 135, 165, 195, 225]) {
+      const target = makeCanvas(900, 720);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        left,
+        top,
+        width,
+        height,
+        0,
+        0,
+        target.canvas.width,
+        target.canvas.height,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold, maxChroma);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const rows = (result.data.text ?? "")
+        .split(/\r?\n/)
+        .map((row) => decodeYapaRowDigits(row))
+        .filter((row): row is number[] => Boolean(row));
+      const values = rows.length === 3
+        ? rows.flat()
+        : numberMatches(result.data.text ?? "").map((match) => Number(match[0]));
+      if (validYapaGrid(values)) return values;
+    }
+  }
+  return null;
 }
 
 async function recognizeSpecialPageCards(
@@ -3217,8 +3358,12 @@ async function recognizeSpecialPageCards(
     identifierFamilyFromOcrText(result.data.text ?? "");
   const cards: BingoCard[] = [];
   for (const layout of layouts) {
-    const values: number[] = [];
-    for (const position of layout.cells) {
+    const directValues = layout.label === "Yapa"
+      ? await recognizeYapaGridCrop(source, worker)
+      : null;
+    let values: number[] = directValues ? [...directValues] : [];
+    const candidates: number[][] = [];
+    for (const position of directValues ? [] : layout.cells) {
       const symbolValue = valueFromRelativeSymbols(
         symbols,
         source.width,
@@ -3228,7 +3373,13 @@ async function recognizeSpecialPageCards(
       const croppedValue = await recognizeRelativeCell(source, position, worker);
       const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
+      candidates.push(
+        [...new Set([croppedValue, symbolValue])].filter(
+          (candidate): candidate is number => candidate !== null,
+        ),
+      );
     }
+    if (layout.label === "Yapa" && !directValues) values = repairAscendingSpecialColumns(values, candidates);
     if (
       values.some((value) => value < 1 || value > 75) ||
       new Set(values).size !== values.length
@@ -3255,22 +3406,14 @@ async function recognizeSpecialPageCards(
   return cards;
 }
 
-export async function runOcr(
-  pageProxy: import("pdfjs-dist").PDFPageProxy,
+export async function runOcrCanvas(
+  canvas: HTMLCanvasElement,
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
 ): Promise<BingoCard[]> {
-  const baseViewport = pageProxy.getViewport({ scale: 1 });
-  const scale = Math.max(
-    1.6,
-    Math.min(2.5, 2300 / Math.max(baseViewport.width, baseViewport.height)),
-  );
-  const viewport = pageProxy.getViewport({ scale });
-  const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-  if (!target) return [];
-  const { canvas, context } = target;
-  await pageProxy.render({ canvas, canvasContext: context, viewport }).promise;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return [];
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
   const rectangles = detectGridRectangles(
     pixels.data,
@@ -3347,6 +3490,86 @@ export async function runOcr(
     fileName,
     pageNumber,
   );
+}
+
+export async function runOcr(
+  pageProxy: import("pdfjs-dist").PDFPageProxy,
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+): Promise<BingoCard[]> {
+  const baseViewport = pageProxy.getViewport({ scale: 1 });
+  const scale = Math.max(
+    1.6,
+    Math.min(2.5, 2300 / Math.max(baseViewport.width, baseViewport.height)),
+  );
+  const viewport = pageProxy.getViewport({ scale });
+  const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+  if (!target) return [];
+  await pageProxy.render({ canvas: target.canvas, canvasContext: target.context, viewport }).promise;
+  return runOcrCanvas(target.canvas, worker, fileName, pageNumber);
+}
+
+function imageExtension(fileName: string) {
+  return fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+}
+
+export function isSupportedBingoImportFile(file: Pick<File, "name" | "type">) {
+  const extension = imageExtension(file.name);
+  return (
+    file.type === "application/pdf" ||
+    extension === "pdf" ||
+    file.type.startsWith("image/") ||
+    ["png", "jpg", "jpeg", "webp", "bmp", "gif", "avif", "heic", "heif"].includes(extension)
+  );
+}
+
+async function canvasFromImageFile(file: File) {
+  let source: CanvasImageSource;
+  let width = 0;
+  let height = 0;
+  let release = () => undefined;
+  try {
+    const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+    source = bitmap;
+    width = bitmap.width;
+    height = bitmap.height;
+    release = () => bitmap.close();
+  } catch {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.decoding = "async";
+    image.src = objectUrl;
+    try {
+      await image.decode();
+    } catch {
+      URL.revokeObjectURL(objectUrl);
+      throw new Error("El dispositivo no pudo decodificar este formato de imagen.");
+    }
+    source = image;
+    width = image.naturalWidth;
+    height = image.naturalHeight;
+    release = () => URL.revokeObjectURL(objectUrl);
+  }
+  if (!width || !height) {
+    release();
+    throw new Error("La imagen no contiene dimensiones válidas.");
+  }
+  const longestSide = Math.max(width, height);
+  const scale = longestSide < 1800
+    ? Math.min(2.5, 1800 / longestSide)
+    : Math.min(1, 2600 / longestSide);
+  const target = makeCanvas(
+    Math.max(1, Math.round(width * scale)),
+    Math.max(1, Math.round(height * scale)),
+  );
+  if (!target) {
+    release();
+    throw new Error("No se pudo preparar la imagen para reconocimiento.");
+  }
+  target.context.drawImage(source, 0, 0, target.canvas.width, target.canvas.height);
+  release();
+  return target.canvas;
 }
 
 function sequentialNumberParts(number: string) {
@@ -3571,16 +3794,57 @@ export async function parseBingoPdf(
   });
   const reconciledCards = reconcileTwoCardPageNumbers(cards);
   const numberedCards = assignSequentialCardNumbers(reconciledCards);
-  const recoveredNumbers = cards.filter((card, index) =>
-    card.number.startsWith("SIN-ID-") &&
-    !numberedCards[index].number.startsWith("SIN-ID-"),
-  ).length;
-  if (recoveredNumbers) {
+  return { cards: numberedCards, pages: pageCount, warnings };
+}
+
+export async function parseBingoImage(
+  file: File,
+  onProgress: (progress: PdfParseProgress) => void,
+): Promise<PdfParseResult> {
+  onProgress({ page: 1, pages: 1, stage: "Decodificando imagen", percent: 8 });
+  const canvas = await canvasFromImageFile(file);
+  onProgress({ page: 1, pages: 1, stage: "Aplicando OCR", percent: 30 });
+  const worker = await createOcrWorker();
+  const warnings: string[] = [];
+  let cards: BingoCard[] = [];
+  try {
+    cards = await runOcrCanvas(canvas, worker, file.name, 1);
+  } catch (error) {
     warnings.push(
-      `${recoveredNumbers} cartón(es) recibieron numeración secuencial porque su número impreso no pudo leerse.`,
+      `La imagen no pudo reconocerse (${error instanceof Error ? error.message : "error desconocido"}).`,
+    );
+  } finally {
+    await worker.terminate().catch(() => undefined);
+  }
+  if (!cards.length) {
+    warnings.push(
+      "No se encontró un formato de bingo válido. Procura que la fotografía esté derecha, enfocada y muestre el cartón completo.",
     );
   }
-  return { cards: numberedCards, pages: pageCount, warnings };
+  onProgress({ page: 1, pages: 1, stage: "Validando", percent: 100 });
+  return { cards: assignSequentialCardNumbers(cards), pages: 1, warnings };
+}
+
+export async function parseBingoImportFile(
+  file: File,
+  onProgress: (progress: PdfParseProgress) => void,
+) {
+  if (!isSupportedBingoImportFile(file)) {
+    throw new Error(`${file.name} no es un PDF ni una imagen compatible.`);
+  }
+  return file.type === "application/pdf" || imageExtension(file.name) === "pdf"
+    ? parseBingoPdf(file, onProgress)
+    : parseBingoImage(file, onProgress);
+}
+
+export function assignApplicationCardNumbers(
+  cards: BingoCard[],
+  firstNumber = 1,
+) {
+  return cards.map((card, index) => ({
+    ...card,
+    number: String(firstNumber + index),
+  }));
 }
 
 export async function fileChecksum(file: File) {

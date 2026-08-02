@@ -29,7 +29,7 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   const bingo = await read("lib/bingo.ts");
   const parser = await read("lib/pdf-parser.ts");
 
-  assert.match(page, /parseBingoPdf/);
+  assert.match(page, /parseBingoImportFile/);
   assert.match(page, /saveManualCard/);
   assert.match(page, /registerBall/);
   assert.match(page, /recordWinners/);
@@ -47,6 +47,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /deleteMembershipUser/);
   assert.match(page, /authorizationHeaders\(forceRefresh\)/);
   assert.match(page, /membershipEmail = access\.email \|\| authUser\?\.email/);
+  assert.match(page, /capture="environment"/);
+  assert.match(page, /assignApplicationCardNumbers/);
   assert.match(route, /addAdmin/);
   assert.match(route, /approveMembership/);
   assert.match(route, /x-device-id/);

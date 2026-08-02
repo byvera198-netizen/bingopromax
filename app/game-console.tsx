@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Award,
+  Camera,
   Check,
   ChevronRight,
   CircleGauge,
@@ -65,7 +66,12 @@ import {
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import {
+  assignApplicationCardNumbers,
+  isSupportedBingoImportFile,
+  parseBingoImportFile,
+  type PdfParseProgress,
+} from "@/lib/pdf-parser";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
@@ -109,6 +115,20 @@ async function api<T>(body: Record<string, unknown>): Promise<T> {
   }
   if (!response.ok) throw new Error(payload.error || "No se pudo completar la operación.");
   return payload;
+}
+
+function importedCardFingerprint(card: Pick<BingoCard, "grid" | "serial" | "sourceFile" | "sourcePage">) {
+  return [
+    card.sourceFile.trim().toLowerCase(),
+    card.sourcePage,
+    card.serial.trim().toLowerCase(),
+    card.grid.join(","),
+  ].join("|");
+}
+
+function applicationCardNumber(number: string) {
+  const match = number.trim().match(/^(?:tab\s*#?\s*)?(\d+)$/i);
+  return match ? Number(match[1]) : 0;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -290,7 +310,7 @@ function CardPreview({
       <header>
         <div>
           <span>Tabla</span>
-          <strong>Tab#{card.number}</strong>
+          <strong>Tab #{card.number}</strong>
         </div>
         <div className="ticket-actions">
           {onEditNumber && <button className="icon-button small" title="Editar número del cartón" type="button" onClick={() => onEditNumber(card)}><PencilLine size={15} /></button>}
@@ -416,6 +436,7 @@ export default function GameConsole() {
   const [membershipMonths, setMembershipMonths] = useState<Record<string, number>>({});
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -1024,34 +1045,34 @@ export default function GameConsole() {
 
   const processFiles = async (files: File[]) => {
     if (!state || !files.length) return;
-    const invalid = files.find((file) => file.type !== "application/pdf" && !file.name.endsWith(".pdf"));
+    const invalid = files.find((file) => !isSupportedBingoImportFile(file));
     if (invalid) {
-      notify(`${invalid.name} no es un archivo PDF.`, "warning");
+      notify(`${invalid.name} no es un PDF ni una imagen compatible.`, "warning");
       return;
     }
     setProcessingFiles(true);
     const warnings: string[] = [];
-    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
+    const existingFingerprints = new Set(state.cards.map(importedCardFingerprint));
+    let nextCardNumber = Math.max(0, ...state.cards.map((card) => applicationCardNumber(card.number))) + 1;
     let imported = 0;
     let duplicateCount = 0;
     try {
       for (const file of files) {
-        const parsed = await parseBingoPdf(file, (progress) =>
+        const parsed = await parseBingoImportFile(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const identifiedCards = parsed.cards;
-        const uniqueCards = identifiedCards.filter((card) => {
-          const number = card.number.toLowerCase();
-          if (usedNumbers.has(number)) {
+        const newCards = parsed.cards.filter((card) => {
+          if (existingFingerprints.has(importedCardFingerprint(card))) {
             duplicateCount += 1;
             return false;
           }
-          usedNumbers.add(number);
           return true;
         });
+        const uniqueCards = assignApplicationCardNumbers(newCards, nextCardNumber);
+        nextCardNumber += uniqueCards.length;
         if (!uniqueCards.length) {
-          warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
+          warnings.push(`${file.name}: todos los cartones ya estaban cargados en esta partida.`);
           continue;
         }
         const result = await api<{ accepted: number; duplicates: number }>({
@@ -1075,6 +1096,7 @@ export default function GameConsole() {
       setProcessingFiles(false);
       setPdfProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
     }
   };
 
@@ -1122,7 +1144,7 @@ export default function GameConsole() {
 
   const editCardNumber = async (card: BingoCard) => {
     if (!state) return;
-    const value = window.prompt("Número del cartón:", card.number)?.trim().replace(/^Tab#?/i, "");
+    const value = window.prompt("Número del cartón:", card.number)?.trim().replace(/^Tab\s*#?\s*/i, "");
     if (!value || value === card.number) return;
     try {
       await api({ action: "updateCardNumber", gameId: state.game.id, cardId: card.id, number: value });
@@ -1131,7 +1153,7 @@ export default function GameConsole() {
         cards: state.cards.map((item) => item.id === card.id ? { ...item, number: value } : item),
         winners: state.winners.map((winner) => winner.cardId === card.id ? { ...winner, cardNumber: value } : winner),
       });
-      notify(`Cartón actualizado a Tab#${value}.`);
+      notify(`Cartón actualizado a Tab #${value}.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo cambiar el número del cartón.", "error");
     }
@@ -1763,15 +1785,23 @@ export default function GameConsole() {
           {view === "cards" && (
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
-                <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Cartones de la partida.</h2><p>Importa PDFs digitales o escaneados; también puedes completar una tabla manualmente.</p></div>
+                <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Cartones de la partida.</h2><p>Importa PDFs, imágenes o fotografías; también puedes completar una tabla manualmente.</p></div>
                 <button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button>
               </div>
               <input
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.bmp,.gif,.avif,.heic,.heif"
                 className="visually-hidden"
                 multiple
                 onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
                 ref={fileInputRef}
+                type="file"
+              />
+              <input
+                accept="image/*"
+                capture="environment"
+                className="visually-hidden"
+                onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
+                ref={cameraInputRef}
                 type="file"
               />
               <section
@@ -1785,15 +1815,18 @@ export default function GameConsole() {
                 {processingFiles ? (
                   <>
                     <span className="upload-icon"><LoaderCircle className="spin" size={29} /></span>
-                    <div><strong>{pdfProgress?.stage ?? "Preparando PDF"}</strong><p>{pdfProgress?.file} · página {pdfProgress?.page ?? 0} de {pdfProgress?.pages ?? 0}</p></div>
+                    <div><strong>{pdfProgress?.stage ?? "Preparando archivo"}</strong><p>{pdfProgress?.file} · página {pdfProgress?.page ?? 0} de {pdfProgress?.pages ?? 0}</p></div>
                     <div className="upload-progress"><i style={{ width: `${pdfProgress?.percent ?? 4}%` }} /></div>
                   </>
                 ) : (
                   <>
                     <span className="upload-icon"><UploadCloud size={29} /></span>
-                    <div><strong>Suelta aquí uno o varios archivos PDF</strong><p>Detectamos texto digital y usamos OCR cuando la página es una imagen.</p></div>
-                    <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar PDF</button>
-                    <small>PDF · múltiples páginas · hasta 4 o más cartones por hoja</small>
+                    <div><strong>Suelta aquí PDFs o imágenes de bingo</strong><p>Reconocemos tablas 5×5, Sabrosito y hojas de números; la aplicación asigna Tab #1, Tab #2 y continúa la secuencia.</p></div>
+                    <div className="upload-actions">
+                      <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar archivos</button>
+                      <button className="secondary-button" onClick={() => cameraInputRef.current?.click()} type="button"><Camera size={15} /> Usar cámara</button>
+                    </div>
+                    <small>PDF · PNG · JPG · WEBP · imágenes compatibles · cámara del dispositivo</small>
                   </>
                 )}
               </section>
@@ -1834,7 +1867,7 @@ export default function GameConsole() {
                 </div>
               ) : (
                 <EmptyState
-                  action={<div className="empty-actions"><button className="primary-button" onClick={() => fileInputRef.current?.click()} type="button"><UploadCloud size={16} /> Importar PDF</button><button className="secondary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={16} /> Crear manual</button></div>}
+                  action={<div className="empty-actions"><button className="primary-button" onClick={() => fileInputRef.current?.click()} type="button"><UploadCloud size={16} /> Importar archivos</button><button className="secondary-button" onClick={() => cameraInputRef.current?.click()} type="button"><Camera size={16} /> Cámara</button><button className="secondary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={16} /> Crear manual</button></div>}
                   icon={Grid3X3}
                   text={search ? "Prueba con otro número, serie o nombre de archivo." : "Los cartones aparecerán aquí después de importarlos o crearlos."}
                   title={search ? "No hay coincidencias" : "La colección está vacía"}
@@ -2079,7 +2112,7 @@ export default function GameConsole() {
                       specialCardPatternForGrid(card.grid)
                     : null;
                   if (!card) return null;
-                  return <article key={`card-${winner.id}`}><strong>Tab#{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
+                  return <article key={`card-${winner.id}`}><strong>Tab #{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
                 })}
               </div>
               <div className="winner-actions">
