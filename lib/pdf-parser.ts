@@ -1800,6 +1800,20 @@ export function identifierFamilyFromOcrText(text: string) {
   return [...scores.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] ?? null;
 }
 
+export function identifiersForDetectedGrids(
+  family: string,
+  count: number,
+  consecutiveFamilies = false,
+) {
+  if (consecutiveFamilies && /^\d+$/.test(family)) {
+    const first = Number(family);
+    return Array.from({ length: count }, (_, index) =>
+      `${String(first + index).padStart(family.length, "0")}-1`,
+    );
+  }
+  return Array.from({ length: count }, (_, index) => `${family}-${index + 1}`);
+}
+
 async function recognizeGridIdentifiers(
   source: HTMLCanvasElement,
   rectangles: GridRectangle[],
@@ -1841,13 +1855,20 @@ async function recognizeGridIdentifiers(
     family = identifierFamilyFromOcrText(texts.join("\n"));
   }
 
-  const identifiers: Identifier[] = family
-    ? ordered.map((rectangle, index) => ({
-        value: `${family}-${index + 1}`,
-        x: rectangle.x + rectangle.width / 2,
-        y: source.height - rectangle.y,
-      }))
+  const identifierValues = family
+    ? identifiersForDetectedGrids(
+        family,
+        ordered.length,
+        source.width > source.height && ordered.length === 2,
+      )
     : [];
+  const identifiers: Identifier[] = family
+      ? ordered.map((rectangle, index) => ({
+          value: identifierValues[index],
+          x: rectangle.x + rectangle.width / 2,
+          y: source.height - rectangle.y,
+        }))
+      : [];
 
   /* istanbul ignore next -- defensive fallback for nonstandard single-card sheets */
   if (!identifiers.length) for (const [index, rectangle] of ordered.entries()) {
@@ -2415,18 +2436,23 @@ async function recognizeDetectedGrids(
       }
     }
     if (gridQuality(grid) < 8) continue;
+    const rectangleIndex = eligibleRectangles.indexOf(rectangle);
     const centerMetadata = await recognizeNumberSheetMetadata(
       source,
       rectangle,
       worker,
     );
+    const headerIdentifier =
+      source.width > source.height && eligibleRectangles.length === 2
+        ? identifiers[rectangleIndex]?.value
+        : undefined;
     detected.push({
       grid,
       x: rectangle.x + rectangle.width / 2,
       y: source.height - rectangle.y,
       score: rectangle.score,
       rowIds: [],
-      identifier: centerMetadata?.identifier ?? undefined,
+      identifier: headerIdentifier ?? centerMetadata?.identifier ?? undefined,
     });
   }
   const identifierParts = detected.flatMap((item) => {
@@ -3291,6 +3317,55 @@ export function assignSequentialCardNumbers(cards: BingoCard[]) {
   return resolved;
 }
 
+export function reconcileTwoCardPageNumbers(cards: BingoCard[]) {
+  const pages = new Map<number, BingoCard[]>();
+  for (const card of cards) {
+    const pageCards = pages.get(card.sourcePage) ?? [];
+    pageCards.push(card);
+    pages.set(card.sourcePage, pageCards);
+  }
+  const orderedPages = [...pages.entries()].sort((a, b) => a[0] - b[0]);
+  if (
+    orderedPages.length < 2 ||
+    orderedPages.some(([, pageCards]) => pageCards.length !== 2)
+  ) {
+    return cards.map((card) => ({ ...card }));
+  }
+
+  const ordered = orderedPages.flatMap(([, pageCards]) => pageCards);
+  const parts = ordered.map((card) => card.number.match(/^(\d{5,12})-1$/));
+  if (parts.some((part) => !part)) {
+    return cards.map((card) => ({ ...card }));
+  }
+
+  const votes = new Map<string, { count: number; base: bigint; width: number }>();
+  parts.forEach((part, index) => {
+    const family = part![1];
+    const base = BigInt(family) - BigInt(index);
+    if (base < 0n) return;
+    const key = `${family.length}:${base}`;
+    const vote = votes.get(key);
+    votes.set(key, {
+      count: (vote?.count ?? 0) + 1,
+      base,
+      width: family.length,
+    });
+  });
+  const winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
+  if (!winner || winner.count < 4) {
+    return cards.map((card) => ({ ...card }));
+  }
+
+  const numbers = ordered.map((_, index) =>
+    `${String(winner.base + BigInt(index)).padStart(winner.width, "0")}-1`,
+  );
+  const replacements = new Map(ordered.map((card, index) => [card, numbers[index]]));
+  return cards.map((card) => ({
+    ...card,
+    number: replacements.get(card) ?? card.number,
+  }));
+}
+
 export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
@@ -3369,7 +3444,8 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  const numberedCards = assignSequentialCardNumbers(cards);
+  const reconciledCards = reconcileTwoCardPageNumbers(cards);
+  const numberedCards = assignSequentialCardNumbers(reconciledCards);
   const recoveredNumbers = cards.filter((card, index) =>
     card.number.startsWith("SIN-ID-") &&
     !numberedCards[index].number.startsWith("SIN-ID-"),

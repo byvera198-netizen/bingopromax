@@ -24,8 +24,10 @@ import {
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
   identifierFamilyFromOcrText,
+  identifiersForDetectedGrids,
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
+  reconcileTwoCardPageNumbers,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -120,6 +122,38 @@ test("reconstruye la serie de una hoja aunque el OCR mezcle guiones y letras", (
   const text = "PLAN PREMIO 17000 10000 N TABLA #87020 Tab#87020-1 Tab#87020-2";
   assert.equal(identifierFamilyFromOcrText(text), "87020");
   assert.equal(identifierFamilyFromOcrText("Tab#87O21-3"), "87021");
+});
+
+test("numera en secuencia los dos cartones independientes de una hoja horizontal", () => {
+  assert.deepEqual(
+    identifiersForDetectedGrids("162017", 2, true),
+    ["162017-1", "162018-1"],
+  );
+  assert.deepEqual(
+    identifiersForDetectedGrids("87020", 4),
+    ["87020-1", "87020-2", "87020-3", "87020-4"],
+  );
+});
+
+test("recupera identificadores dudosos usando la secuencia de hojas vecinas", () => {
+  const makeCard = (number: string, page: number): BingoCard => ({
+    id: `${page}-${number}`,
+    number,
+    serial: "",
+    grid: baseGrid,
+    sourceFile: "cartones.pdf",
+    sourcePage: page,
+    status: "active",
+  });
+  const cards = [
+    makeCard("162017-1", 1), makeCard("162018-1", 1),
+    makeCard("162019-1", 2), makeCard("162020-1", 2),
+    makeCard("16202-1", 3), makeCard("16203-1", 3),
+  ];
+  assert.deepEqual(
+    reconcileTwoCardPageNumbers(cards).map((card) => card.number),
+    ["162017-1", "162018-1", "162019-1", "162020-1", "162021-1", "162022-1"],
+  );
 });
 
 const baseGrid = [
