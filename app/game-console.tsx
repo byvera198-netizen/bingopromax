@@ -67,7 +67,6 @@ import {
   type Winner,
 } from "@/lib/bingo";
 import {
-  assignApplicationCardNumbers,
   isSupportedBingoImportFile,
   parseBingoImportFile,
   type PdfParseProgress,
@@ -124,11 +123,6 @@ function importedCardFingerprint(card: Pick<BingoCard, "grid" | "serial" | "sour
     card.serial.trim().toLowerCase(),
     card.grid.join(","),
   ].join("|");
-}
-
-function applicationCardNumber(number: string) {
-  const match = number.trim().match(/^(?:tab\s*#?\s*)?(\d+)$/i);
-  return match ? Number(match[1]) : 0;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -1053,7 +1047,6 @@ export default function GameConsole() {
     setProcessingFiles(true);
     const warnings: string[] = [];
     const existingFingerprints = new Set(state.cards.map(importedCardFingerprint));
-    let nextCardNumber = Math.max(0, ...state.cards.map((card) => applicationCardNumber(card.number))) + 1;
     let imported = 0;
     let duplicateCount = 0;
     try {
@@ -1069,8 +1062,7 @@ export default function GameConsole() {
           }
           return true;
         });
-        const uniqueCards = assignApplicationCardNumbers(newCards, nextCardNumber);
-        nextCardNumber += uniqueCards.length;
+        const uniqueCards = newCards;
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: todos los cartones ya estaban cargados en esta partida.`);
           continue;

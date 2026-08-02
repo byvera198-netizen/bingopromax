@@ -15,7 +15,6 @@ import {
   type BingoPattern,
 } from "../lib/bingo";
 import {
-  assignApplicationCardNumbers,
   assignSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
@@ -36,15 +35,16 @@ import {
   type PdfTextItem,
 } from "../lib/pdf-parser";
 
-test("asigna numeración propia consecutiva a todos los formatos importados", () => {
+test("conserva la numeración impresa y completa solo los cartones ilegibles", () => {
   const cards = [
     { id: "a", number: "94238-1", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" as const },
-    { id: "b", number: "064544-1", serial: "Sabrosito", grid: [1, 20, 34, 52, 70], sourceFile: "foto.jpg", sourcePage: 1, status: "active" as const },
-    { id: "c", number: "SIN-ID-001-1", serial: "Forma #3", grid: Array(25).fill(0), sourceFile: "forma.png", sourcePage: 1, status: "active" as const },
+    { id: "b", number: "SIN-ID-001-2", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" as const },
+    { id: "c", number: "SIN-ID-001-3", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" as const },
+    { id: "d", number: "94238-4", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" as const },
   ];
   assert.deepEqual(
-    assignApplicationCardNumbers(cards, 7).map((card) => card.number),
-    ["7", "8", "9"],
+    assignSequentialCardNumbers(cards).map((card) => card.number),
+    ["94238-1", "94238-2", "94238-3", "94238-4"],
   );
 });
 
