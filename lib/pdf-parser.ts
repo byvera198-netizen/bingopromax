@@ -3029,7 +3029,7 @@ const numberSheetExtraCards: SpecialPageCard[] = [
     cells: [
       cell(0.102, 0.077, [1, 75], 0.09, 0.075), cell(0.423, 0.077, [1, 75], 0.09, 0.075),
       cell(0.204, 0.178, [1, 75], 0.09, 0.075), cell(0.335, 0.178, [1, 75], 0.09, 0.075),
-      cell(0.102, 0.280, [1, 75], 0.075, 0.07), cell(0.423, 0.280, [1, 75], 0.075, 0.07),
+      cell(0.095, 0.280, [1, 75], 0.075, 0.07), cell(0.423, 0.280, [1, 75], 0.075, 0.07),
     ],
   },
 ];
@@ -3363,14 +3363,31 @@ async function recognizeSpecialPageCards(
       : null;
     let values: number[] = directValues ? [...directValues] : [];
     const candidates: number[][] = [];
-    for (const position of directValues ? [] : layout.cells) {
+    const positions = directValues ? [] : layout.cells;
+    for (const [positionIndex, position] of positions.entries()) {
       const symbolValue = valueFromRelativeSymbols(
         symbols,
         source.width,
         source.height,
         position,
       );
-      const croppedValue = await recognizeRelativeCell(source, position, worker);
+      let croppedValue = await recognizeRelativeCell(source, position, worker);
+      if (
+        layout.label === "Keke Keke" &&
+        positionIndex === 4
+      ) {
+        const alternateValue = await recognizeRelativeCell(
+          source,
+          { ...position, x: 0.102 },
+          worker,
+        );
+        if (
+          croppedValue === null ||
+          (croppedValue < 10 && (alternateValue ?? 0) >= 10)
+        ) {
+          croppedValue = alternateValue;
+        }
+      }
       const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
       candidates.push(
@@ -3415,7 +3432,7 @@ export async function runOcrCanvas(
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return [];
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-  const rectangles = detectGridRectangles(
+  let rectangles = detectGridRectangles(
     pixels.data,
     canvas.width,
     canvas.height,
@@ -3429,6 +3446,68 @@ export async function runOcrCanvas(
       fileName,
       pageNumber,
     );
+  } else if (
+    canvas.height > canvas.width &&
+    canvas.height / canvas.width >= 1.25 &&
+    canvas.height / canvas.width <= 1.55
+  ) {
+    // Las hojas Keke Keke / formas 1-3-5-9 compartidas como capturas de baja
+    // resoluciÃ³n pueden conservar los nÃºmeros pero perder grosor en sus bordes.
+    // Probar su geometrÃ­a impresa conocida permite recuperar las cuatro formas;
+    // solo se acepta si las cuatro validan como hojas de nÃºmeros reales.
+    const normalizedRectangles = [
+      [0.018, 0.390, 0.481, 0.658],
+      [0.507, 0.390, 0.965, 0.658],
+      [0.018, 0.714, 0.481, 0.982],
+      [0.507, 0.714, 0.965, 0.982],
+    ].map(([left, top, right, bottom]): GridRectangle => {
+      const x = left * canvas.width;
+      const y = top * canvas.height;
+      const width = (right - left) * canvas.width;
+      const height = (bottom - top) * canvas.height;
+      return {
+        x,
+        y,
+        width,
+        height,
+        verticalLines: Array.from({ length: 6 }, (_, index) =>
+          x + width * index / 5,
+        ),
+        horizontalLines: Array.from({ length: 6 }, (_, index) =>
+          y + height * index / 5,
+        ),
+        score: 70,
+      };
+    });
+    const forms: NumberSheetForm[] = ["1", "3", "5", "9"];
+    const candidateCards: BingoCard[] = [];
+    for (const [index, rectangle] of normalizedRectangles.entries()) {
+      const form = forms[index];
+      const grid = await recognizeMissingNumberSheetCells(
+        canvas,
+        rectangle,
+        Array(25).fill(-1),
+        form,
+        worker,
+      );
+      if (!isPlausibleNumberSheetGrid(grid, form)) continue;
+      candidateCards.push({
+        id: crypto.randomUUID(),
+        number: `SIN-ID-${String(pageNumber).padStart(3, "0")}-${index + 3}`,
+        serial: `Forma #${form}`,
+        grid,
+        sourceFile: fileName,
+        sourcePage: pageNumber,
+        status: "active",
+      });
+    }
+    if (
+      candidateCards.length === 4 &&
+      candidateCards.every((card) => numberSheetFormForGrid(card.grid) !== null)
+    ) {
+      rectangles = normalizedRectangles;
+      detectedCards = candidateCards;
+    }
   }
   const specialCards = await recognizeSpecialPageCards(
     canvas,
