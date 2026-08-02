@@ -25,9 +25,43 @@ import {
   extractCardsFromTextItems,
   identifierFamilyFromOcrText,
   numberSheetMetadataFromOcrText,
+  orderCardsByPdfPosition,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("conserva el orden visual de los cartones y juegos especiales del PDF", () => {
+  const makeCard = (number: string, serial = ""): BingoCard => ({
+    id: number,
+    number,
+    serial,
+    grid: baseGrid,
+    sourceFile: "hoja.pdf",
+    sourcePage: 1,
+    status: "active",
+  });
+  const gordito = [
+    makeCard("23729-1"), makeCard("23729-2"),
+    makeCard("23729-3"), makeCard("23729-4"),
+    makeCard("23729-7", "Yapa"),
+    makeCard("23729-5", "Eche Leche"),
+    makeCard("23729-6", "Bom Bom Bum"),
+  ];
+  assert.deepEqual(
+    orderCardsByPdfPosition(gordito).map((card) => card.number),
+    ["23729-7", "23729-1", "23729-2", "23729-5", "23729-6", "23729-3", "23729-4"],
+  );
+
+  const numberSheet = [
+    makeCard("40136-3"), makeCard("40136-4"),
+    makeCard("40136-5"), makeCard("40136-6"),
+    makeCard("40136-1", "Keke Keke"),
+  ];
+  assert.deepEqual(
+    orderCardsByPdfPosition(numberSheet).map((card) => card.number),
+    ["40136-1", "40136-3", "40136-4", "40136-5", "40136-6"],
+  );
+});
 
 test("reconstruye filas BINGO cuando el OCR entrega los dígitos unidos", () => {
   assert.deepEqual(decodeBingoRowDigits("316335270"), [3, 16, 33, 52, 70]);

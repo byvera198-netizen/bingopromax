@@ -313,8 +313,8 @@ export function specialCardPatternForGrid(grid: number[]) {
     const cells = range(0, grid.length - 1);
     const metadata: Record<number, { id: string; name: string; variants?: number[][] }> = {
       6: { id: "keke-keke-completo", name: "Keke Keke completo" },
-      7: { id: "leche-completo", name: "Leche completo" },
-      8: { id: "bom-bom-completo", name: "Bom Bom completo" },
+      7: { id: "leche-completo", name: "Eche Leche completo" },
+      8: { id: "bom-bom-completo", name: "Bom Bom Bum completo" },
       9: { id: "yapa-completo", name: "Yapa completo" },
       10: { id: "loco-completo", name: "Loco completo" },
       16: {

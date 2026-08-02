@@ -2161,26 +2161,29 @@ async function recognizeMissingCells(
   rectangle: GridRectangle,
   grid: number[],
   worker: OcrWorker,
+  rereadAll = false,
 ) {
   const counts = new Map<number, number>();
   grid
     .filter((value) => value > 0)
     .forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
-  const missing = grid
+  const cellsToRecognize = grid
     .map((value, index) => ({ value, index }))
     .filter(
       ({ value, index }) =>
         index !== 12 &&
-        (!validNumberForCell(value, index) || (counts.get(value) ?? 0) > 1),
+        (rereadAll ||
+          !validNumberForCell(value, index) ||
+          (counts.get(value) ?? 0) > 1),
     );
-  if (!missing.length) return grid;
+  if (!cellsToRecognize.length) return grid;
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
     tessedit_pageseg_mode: "8",
     preserve_interword_spaces: "1",
   });
   const resolved = [...grid];
-  for (const { index } of missing) {
+  for (const { index, value: originalValue } of cellsToRecognize) {
     const row = Math.floor(index / 5);
     const column = index % 5;
     const left = rectangle.verticalLines[column] + 5;
@@ -2237,7 +2240,9 @@ async function recognizeMissingCells(
       }
       if (value !== null) break;
     }
-    resolved[index] = value ?? -1;
+    resolved[index] = value ?? (validNumberForCell(originalValue, index)
+      ? originalValue
+      : -1);
   }
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -2394,14 +2399,13 @@ async function recognizeDetectedGrids(
           shifted.width,
           shifted.height,
         );
-        if (gridQuality(shiftedGrid) < 8) {
-          shiftedGrid = await recognizeMissingCells(
-            source,
-            shiftedRectangle,
-            shiftedGrid,
-            worker,
-          );
-        }
+        shiftedGrid = await recognizeMissingCells(
+          source,
+          shiftedRectangle,
+          shiftedGrid,
+          worker,
+          true,
+        );
         if (gridQuality(shiftedGrid) >= 8) {
           grid = shiftedGrid;
           rectangle.y = shiftedRectangle.y;
@@ -2832,12 +2836,12 @@ const gorditoSpecialCards: SpecialPageCard[] = [
     cells: [
       cell(0.742, 0.116, [1, 30], 0.07, 0.06, true), cell(0.827, 0.116, [16, 60], 0.07, 0.06, true), cell(0.902, 0.116, [46, 75], 0.07, 0.06, true),
       cell(0.752, 0.157, [1, 30], 0.07, 0.06, true), cell(0.831, 0.157, [16, 60], 0.07, 0.06, true), cell(0.898, 0.157, [46, 75], 0.07, 0.06, true),
-      cell(0.752, 0.215, [1, 30], 0.07, 0.06, true), cell(0.831, 0.215, [16, 60]), cell(0.898, 0.215, [46, 75], 0.07, 0.06, true),
+      cell(0.752, 0.215, [1, 30], 0.07, 0.06, true), cell(0.831, 0.215, [16, 60], 0.06, 0.04), cell(0.898, 0.215, [46, 75]),
     ],
   },
   {
     suffix: 5,
-    label: "Leche",
+    label: "Eche Leche",
     x: 0.25,
     y: 0.60,
     cells: [
@@ -2847,7 +2851,7 @@ const gorditoSpecialCards: SpecialPageCard[] = [
   },
   {
     suffix: 6,
-    label: "Bom Bom",
+    label: "Bom Bom Bum",
     x: 0.75,
     y: 0.60,
     cells: [
@@ -2856,6 +2860,30 @@ const gorditoSpecialCards: SpecialPageCard[] = [
     ],
   },
 ];
+
+function cardNumberSuffix(card: BingoCard) {
+  const suffix = Number(card.number.match(/-(\d+)$/)?.[1]);
+  return Number.isInteger(suffix) ? suffix : null;
+}
+
+export function orderCardsByPdfPosition(cards: BingoCard[]) {
+  const serials = new Set(cards.map((card) => card.serial));
+  const suffixOrder = serials.has("Yapa")
+    ? [7, 1, 2, 5, 6, 3, 4]
+    : serials.has("Keke Keke")
+      ? [1, 3, 4, 5, 6]
+      : null;
+  if (!suffixOrder) return cards;
+  const rank = new Map(suffixOrder.map((suffix, index) => [suffix, index]));
+  return cards
+    .map((card, index) => ({ card, index }))
+    .sort((left, right) => {
+      const leftRank = rank.get(cardNumberSuffix(left.card) ?? -1) ?? suffixOrder.length;
+      const rightRank = rank.get(cardNumberSuffix(right.card) ?? -1) ?? suffixOrder.length;
+      return leftRank - rightRank || left.index - right.index;
+    })
+    .map(({ card }) => card);
+}
 
 const numberSheetExtraCards: SpecialPageCard[] = [
   {
@@ -3117,7 +3145,7 @@ export async function runOcr(
     pageNumber,
   );
   if (detectedCards.length || specialCards.length) {
-    return [...detectedCards, ...specialCards];
+    return orderCardsByPdfPosition([...detectedCards, ...specialCards]);
   }
   if (!rectangles.some((rectangle) => rectangle.score >= 80)) {
     const compactRectangles = detectCompactRectangles(
