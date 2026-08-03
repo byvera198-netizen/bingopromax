@@ -431,6 +431,7 @@ export default function GameConsole() {
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const importBusyRef = useRef(false);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -1039,14 +1040,21 @@ export default function GameConsole() {
 
   const processFiles = async (files: File[]) => {
     if (!state || !files.length) return;
+    if (importBusyRef.current) {
+      notify("Espera a que termine la importación actual antes de seleccionar otros archivos.", "warning");
+      return;
+    }
     const invalid = files.find((file) => !isSupportedBingoImportFile(file));
     if (invalid) {
       notify(`${invalid.name} no es un PDF ni una imagen compatible.`, "warning");
       return;
     }
+    importBusyRef.current = true;
     setProcessingFiles(true);
+    setImportWarnings([]);
     const warnings: string[] = [];
     const existingFingerprints = new Set(state.cards.map(importedCardFingerprint));
+    const targetGameId = state.game.id;
     let imported = 0;
     let duplicateCount = 0;
     try {
@@ -1055,11 +1063,16 @@ export default function GameConsole() {
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const newCards = parsed.cards.filter((card) => {
+        const currentFileCards = parsed.cards.filter((card) => card.sourceFile === file.name);
+        if (currentFileCards.length !== parsed.cards.length) {
+          throw new Error(`${file.name}: se descartó un resultado que no pertenecía al archivo seleccionado.`);
+        }
+        const newCards = currentFileCards.filter((card) => {
           if (existingFingerprints.has(importedCardFingerprint(card))) {
             duplicateCount += 1;
             return false;
           }
+          existingFingerprints.add(importedCardFingerprint(card));
           return true;
         });
         const uniqueCards = newCards;
@@ -1069,7 +1082,8 @@ export default function GameConsole() {
         }
         const result = await api<{ accepted: number; duplicates: number }>({
           action: "saveCards",
-          gameId: state.game.id,
+          gameId: targetGameId,
+          importSource: file.name,
           cards: uniqueCards,
         });
         imported += result.accepted;
@@ -1085,6 +1099,7 @@ export default function GameConsole() {
       setImportWarnings(warnings);
       notify(message, "error");
     } finally {
+      importBusyRef.current = false;
       setProcessingFiles(false);
       setPdfProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1783,8 +1798,13 @@ export default function GameConsole() {
               <input
                 accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.bmp,.gif,.avif,.heic,.heif"
                 className="visually-hidden"
+                disabled={processingFiles}
                 multiple
-                onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
+                onChange={(event) => {
+                  const selectedFiles = Array.from(event.currentTarget.files ?? []);
+                  event.currentTarget.value = "";
+                  void processFiles(selectedFiles);
+                }}
                 ref={fileInputRef}
                 type="file"
               />
@@ -1792,7 +1812,12 @@ export default function GameConsole() {
                 accept="image/*"
                 capture="environment"
                 className="visually-hidden"
-                onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
+                disabled={processingFiles}
+                onChange={(event) => {
+                  const selectedFiles = Array.from(event.currentTarget.files ?? []);
+                  event.currentTarget.value = "";
+                  void processFiles(selectedFiles);
+                }}
                 ref={cameraInputRef}
                 type="file"
               />
@@ -1801,6 +1826,10 @@ export default function GameConsole() {
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
+                  if (importBusyRef.current) {
+                    notify("Espera a que termine la importación actual antes de seleccionar otros archivos.", "warning");
+                    return;
+                  }
                   void processFiles(Array.from(event.dataTransfer.files));
                 }}
               >

@@ -23,6 +23,16 @@ test("declara persistencia para partidas, membresías y archivos PDF", async () 
   }
 });
 
+test("aísla cada selección de archivos durante la importación", async () => {
+  const page = await read("app/game-console.tsx");
+  const stateRoute = await read("app/api/state/route.ts");
+
+  assert.match(page, /importBusyRef\.current/);
+  assert.match(page, /card\.sourceFile === file\.name/);
+  assert.match(page, /importSource: file\.name/);
+  assert.match(stateRoute, /cards\.some\(\(card\) => card\.sourceFile !== importSource\)/);
+});
+
 test("incluye los flujos operativos y administrativos principales", async () => {
   const page = await read("app/game-console.tsx");
   const route = await read("app/api/state/route.ts");

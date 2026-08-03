@@ -555,8 +555,15 @@ export async function POST(request: Request) {
 
     if (action === "saveCards") {
       const cards = (body.cards ?? []) as BingoCard[];
+      const importSource = typeof body.importSource === "string" ? body.importSource : null;
       if (!gameId || !Array.isArray(cards) || !cards.length) {
         return Response.json({ error: "No hay cartones válidos para guardar." }, { status: 400 });
+      }
+      if (importSource && cards.some((card) => card.sourceFile !== importSource)) {
+        return Response.json(
+          { error: "La importación contiene cartones que no pertenecen al archivo seleccionado." },
+          { status: 400 },
+        );
       }
       const existing = await db
         .prepare("SELECT number FROM cards WHERE game_id = ?")
