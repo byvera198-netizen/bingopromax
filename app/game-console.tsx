@@ -1482,7 +1482,6 @@ export default function GameConsole() {
     const awaitingCode = access.membership?.status === "approved" && !access.membership.activationVerified;
     const canRequest = !access.membership || access.membership.status === "rejected" || access.membership.status === "expired";
     const membershipEmail = access.email || authUser?.email || "";
-    const whatsappMessage = encodeURIComponent(`Hola, solicito ${access.membership?.status === "expired" ? "renovar" : "activar"} mi cuenta de Bingo Control Pro.\nCorreo: ${membershipEmail}`);
     return (
       <main className="membership-screen">
         <section className="membership-card">
@@ -1506,10 +1505,8 @@ export default function GameConsole() {
               <button className="primary-button" onClick={() => void activateMembership()} type="button">Activar membresía</button>
             </div>
           )}
-          <a className="whatsapp-button" href={`https://wa.me/${WHATSAPP_NUMBER}?text=${whatsappMessage}`} rel="noreferrer" target="_blank">Solicitar activación o renovación por WhatsApp</a>
           <button className="auth-link" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión y volver al inicio</button>
           {error && <div className="membership-error">{error}</div>}
-          <small>WhatsApp de atención: <a href={`https://wa.me/${WHATSAPP_NUMBER}`} rel="noreferrer" target="_blank">+593 98 528 0991</a>. Solo el administrador puede otorgar o renovar membresías.</small>
         </section>
       </main>
     );
