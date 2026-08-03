@@ -63,6 +63,7 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /onSubmit=\{\(event\) => \{ event\.preventDefault\(\); void submitAuth\(\); \}\}/);
   assert.match(page, /className="primary-button auth-submit"[^>]+type="submit"/);
   assert.match(page, /membershipEmail = access\.email \|\| authUser\?\.email/);
+  assert.match(page, /Cerrar sesión y volver al inicio/);
   assert.match(page, /capture="environment"/);
   assert.doesNotMatch(page, /assignApplicationCardNumbers/);
   assert.match(parser, /assignSequentialCardNumbers/);

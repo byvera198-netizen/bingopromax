@@ -1507,6 +1507,7 @@ export default function GameConsole() {
             </div>
           )}
           <a className="whatsapp-button" href={`https://wa.me/${WHATSAPP_NUMBER}?text=${whatsappMessage}`} rel="noreferrer" target="_blank">Solicitar activación o renovación por WhatsApp</a>
+          <button className="auth-link" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión y volver al inicio</button>
           {error && <div className="membership-error">{error}</div>}
           <small>WhatsApp de atención: <a href={`https://wa.me/${WHATSAPP_NUMBER}`} rel="noreferrer" target="_blank">+593 98 528 0991</a>. Solo el administrador puede otorgar o renovar membresías.</small>
         </section>
