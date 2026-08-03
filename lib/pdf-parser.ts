@@ -934,6 +934,10 @@ function validNumberForCell(value: number, index: number) {
   return Number.isInteger(value) && value >= minimum && value <= maximum;
 }
 
+export function shouldRereadBingoCell(value: number, index: number) {
+  return index % 5 === 0 && value >= 1 && value <= 9;
+}
+
 export function normalizeNumberSheetGrid(
   grid: number[],
   form: NumberSheetForm,
@@ -2274,6 +2278,7 @@ async function recognizeMissingCells(
       ({ value, index }) =>
         index !== 12 &&
         (rereadAll ||
+          shouldRereadBingoCell(value, index) ||
           !validNumberForCell(value, index) ||
           (counts.get(value) ?? 0) > 1),
     );
@@ -2484,7 +2489,10 @@ async function recognizeDetectedGrids(
         );
       }
     }
-    if (gridQuality(grid) < 8) {
+    if (
+      gridQuality(grid) < 8 ||
+      grid.some((value, index) => shouldRereadBingoCell(value, index))
+    ) {
       grid = await recognizeMissingCells(source, rectangle, grid, worker);
     }
     if (gridQuality(grid) < 8 && rectangle.nextHorizontalLine) {
@@ -3034,8 +3042,8 @@ export function specialPageLayoutFromOcrText(
   ) {
     return "number-sheet" as const;
   }
-  if (!isPortrait && rectangleCount === 0 &&
-      (labelText.includes("LINEA") || labelText.includes("LOCO"))) {
+  if (rectangleCount === 0 &&
+      labelText.includes("LINEA") && labelText.includes("LOCO")) {
     return "line-loco" as const;
   }
   return null;
@@ -3372,7 +3380,7 @@ async function recognizeSpecialPageCards(
   const isPortrait = source.height > source.width;
   const mayContainSpecialCards =
     (isPortrait && ordered.length >= 4) ||
-    (!isPortrait && ordered.length === 0);
+    ordered.length === 0;
   if (!mayContainSpecialCards) return [];
 
   await worker.setParameters({

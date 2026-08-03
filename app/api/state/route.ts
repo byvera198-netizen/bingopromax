@@ -788,6 +788,27 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, number });
     }
 
+    if (action === "updateCard") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const card = body.card as BingoCard;
+      if (!card?.id || !card.number?.trim() || validateCardGrid(card.grid).length) {
+        return Response.json({ error: "El cartón contiene datos inválidos." }, { status: 400 });
+      }
+      const duplicate = await db
+        .prepare("SELECT id FROM cards WHERE game_id = ? AND number = ? AND id <> ?")
+        .bind(gameId, card.number.trim(), card.id)
+        .first<{ id: string }>();
+      if (duplicate) return Response.json({ error: "Ya existe otro cartón con ese número." }, { status: 409 });
+      await db.batch([
+        db
+          .prepare("UPDATE cards SET number = ?, serial = ?, grid_json = ? WHERE game_id = ? AND id = ?")
+          .bind(card.number.trim(), card.serial ?? "", JSON.stringify(card.grid), gameId, card.id),
+        db.prepare("DELETE FROM winners WHERE game_id = ? AND card_id = ?").bind(gameId, card.id),
+      ]);
+      await audit(db, gameId, "UPDATE_CARD", card.number.trim(), actor);
+      return Response.json({ ok: true });
+    }
+
     if (action === "deleteVoidCards") {
       if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
       const voided = await db

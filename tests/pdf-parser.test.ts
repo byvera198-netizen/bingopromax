@@ -32,6 +32,7 @@ import {
   orderCardsByPdfPosition,
   reconcileTwoCardPageNumbers,
   specialPageLayoutFromOcrText,
+  shouldRereadBingoCell,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -74,6 +75,17 @@ test("no confunde una hoja clásica de cuatro cartones con juegos especiales", (
     specialPageLayoutFromOcrText("KEKE KEKE - FORMA #1 - FORMA #3", true, 4, 0.4),
     "number-sheet",
   );
+});
+
+test("reconoce Línea y Loco en una hoja vertical y relee cifras B que pueden estar truncadas", () => {
+  assert.equal(
+    specialPageLayoutFromOcrText("1 LINEA JUEGO 22154 1 LOCO LLENA 10 NUMEROS", true, 0, 0),
+    "line-loco",
+  );
+  assert.equal(shouldRereadBingoCell(1, 0), true);
+  assert.equal(shouldRereadBingoCell(9, 20), true);
+  assert.equal(shouldRereadBingoCell(11, 0), false);
+  assert.equal(shouldRereadBingoCell(1, 1), false);
 });
 
 test("separa las tres cifras de una fila Yapa aunque el OCR las una", () => {

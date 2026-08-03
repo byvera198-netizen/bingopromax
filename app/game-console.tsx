@@ -307,7 +307,7 @@ function CardPreview({
           <strong>Tab #{card.number}</strong>
         </div>
         <div className="ticket-actions">
-          {onEditNumber && <button className="icon-button small" title="Editar número del cartón" type="button" onClick={() => onEditNumber(card)}><PencilLine size={15} /></button>}
+          {onEditNumber && <button className="icon-button small" title="Editar cartón" type="button" onClick={() => onEditNumber(card)}><PencilLine size={15} /></button>}
           <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>
             <MoreHorizontal size={17} />
           </button>
@@ -398,6 +398,7 @@ export default function GameConsole() {
   const [ballInput, setBallInput] = useState("");
   const [ballBoardOpen, setBallBoardOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [patternOpen, setPatternOpen] = useState(false);
   const [gameOpen, setGameOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1007,7 +1008,7 @@ export default function GameConsole() {
     const grid = manualGrid.map((value) => Number(value));
     const errors = validateCardGrid(grid);
     if (!manualNumber.trim()) errors.unshift("Asigna un número al cartón.");
-    if (state.cards.some((card) => card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
+    if (state.cards.some((card) => card.id !== editingCardId && card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
       errors.unshift("Ya existe un cartón con ese número.");
     }
     if (errors.length) {
@@ -1015,24 +1016,37 @@ export default function GameConsole() {
       notify(errors[0], "warning");
       return;
     }
+    const currentCard = editingCardId
+      ? state.cards.find((card) => card.id === editingCardId)
+      : null;
     const card: BingoCard = {
-      id: crypto.randomUUID(),
+      id: currentCard?.id ?? crypto.randomUUID(),
       number: manualNumber.trim(),
       serial: manualSerial.trim(),
       grid,
-      sourceFile: "Ingreso manual",
-      sourcePage: 0,
-      status: "active",
+      sourceFile: currentCard?.sourceFile ?? "Ingreso manual",
+      sourcePage: currentCard?.sourcePage ?? 0,
+      status: currentCard?.status ?? "active",
     };
     try {
-      await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
-      setState({ ...state, cards: [card, ...state.cards] });
+      if (currentCard) {
+        await api({ action: "updateCard", gameId: state.game.id, card });
+        setState({
+          ...state,
+          cards: state.cards.map((item) => item.id === card.id ? card : item),
+          winners: state.winners.filter((winner) => winner.cardId !== card.id),
+        });
+      } else {
+        await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
+        setState({ ...state, cards: [card, ...state.cards] });
+      }
       setManualOpen(false);
+      setEditingCardId(null);
       setManualNumber("");
       setManualSerial("");
       setManualGrid(initialGrid);
       setImportWarnings([]);
-      notify(`Cartón #${card.number} guardado.`);
+      notify(currentCard ? `Cartón #${card.number} actualizado.` : `Cartón #${card.number} guardado.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el cartón.", "error");
     }
@@ -1164,6 +1178,26 @@ export default function GameConsole() {
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo cambiar el número del cartón.", "error");
     }
+  };
+
+  const openCardEditor = (card: BingoCard) => {
+    if (card.grid.length !== 25) {
+      void editCardNumber(card);
+      return;
+    }
+    setEditingCardId(card.id);
+    setManualNumber(card.number);
+    setManualSerial(card.serial ?? "");
+    setManualGrid(card.grid.map(String));
+    setManualOpen(true);
+  };
+
+  const closeCardEditor = () => {
+    setManualOpen(false);
+    setEditingCardId(null);
+    setManualNumber("");
+    setManualSerial("");
+    setManualGrid(initialGrid);
   };
 
   const openPatternEditor = (pattern?: BingoPattern) => {
@@ -1749,7 +1783,7 @@ export default function GameConsole() {
                             card={card}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
-                            onEditNumber={editCardNumber}
+                            onEditNumber={openCardEditor}
                             patterns={allPatterns}
                             wins={state.winners.filter((winner) => winner.cardId === card.id)}
                           />
@@ -1874,7 +1908,7 @@ export default function GameConsole() {
                       called={called}
                       key={card.id}
                       onDelete={deleteCard}
-                      onEditNumber={editCardNumber}
+                      onEditNumber={openCardEditor}
                       onToggleStatus={toggleCardStatus}
                       patterns={allPatterns}
                       showCalled={cardLayers.called}
@@ -2049,7 +2083,7 @@ export default function GameConsole() {
         {manualOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal manual-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
-              <header><div><span className="eyebrow">INGRESO MANUAL</span><h2>Crear un cartón</h2></div><button className="icon-button" onClick={() => setManualOpen(false)} type="button"><X size={19} /></button></header>
+              <header><div><span className="eyebrow">{editingCardId ? "EDICIÓN DE CARTÓN" : "INGRESO MANUAL"}</span><h2>{editingCardId ? "Editar cartón" : "Crear un cartón"}</h2></div><button className="icon-button" onClick={closeCardEditor} type="button"><X size={19} /></button></header>
               <div className="manual-layout">
                 <div className="manual-fields">
                   <label>Número del cartón<input onChange={(event) => setManualNumber(event.target.value)} placeholder="Ej. A-001" value={manualNumber} /></label>
@@ -2077,7 +2111,7 @@ export default function GameConsole() {
                   </div>
                 </div>
               </div>
-              <footer><button className="ghost-button" onClick={() => setManualOpen(false)} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveManualCard()} type="button"><Check size={17} /> Guardar cartón</button></footer>
+              <footer><button className="ghost-button" onClick={closeCardEditor} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveManualCard()} type="button"><Check size={17} /> {editingCardId ? "Guardar cambios" : "Guardar cartón"}</button></footer>
             </motion.section>
           </motion.div>
         )}

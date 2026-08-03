@@ -47,6 +47,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /patternStatuses/);
   assert.match(page, /togglePattern/);
   assert.match(page, /deleteCard/);
+  assert.match(page, /action: "updateCard"/);
+  assert.match(page, /Editar cartón/);
   assert.match(page, /deleteVoidedCards/);
   assert.match(page, /cardLayers/);
   assert.match(page, /Usuarios y membresías/);
