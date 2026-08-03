@@ -183,14 +183,17 @@ function lineSequences(
       const positions = [lines[first].position, lines[second].position];
       let valid = true;
       for (let index = 2; index < 6; index += 1) {
-        const expected = lines[first].position + spacing * index;
+        const localSpacing = median(
+          positions.slice(1).map((position, gapIndex) => position - positions[gapIndex]),
+        );
+        const expected = positions[positions.length - 1] + localSpacing;
         const match = lines
           .filter((line) => line.position > positions[positions.length - 1])
           .map((line) => ({
             position: line.position,
             distance: Math.abs(line.position - expected),
           }))
-          .filter((line) => line.distance <= spacing * 0.16)
+          .filter((line) => line.distance <= localSpacing * 0.22)
           .sort((a, b) => a.distance - b.distance)[0];
         if (!match) {
           valid = false;
@@ -199,6 +202,10 @@ function lineSequences(
         positions.push(match.position);
       }
       if (!valid) continue;
+      const gaps = positions
+        .slice(1)
+        .map((position, index) => position - positions[index]);
+      if (coefficientOfVariation(gaps) > 0.08) continue;
       const key = positions.join(",");
       if (!sequences.some((sequence) => sequence.join(",") === key)) {
         sequences.push(positions);
@@ -3001,6 +3008,39 @@ function cardNumberSuffix(card: BingoCard) {
   return Number.isInteger(suffix) ? suffix : null;
 }
 
+export function specialPageLayoutFromOcrText(
+  text: string,
+  isPortrait: boolean,
+  rectangleCount: number,
+  firstTop: number,
+) {
+  const labelText = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9#]+/g, " ");
+  const gorditoLabelCount = ["YAPA", "ECHE", "BOM"].filter((label) =>
+    labelText.includes(label),
+  ).length;
+  const formaLabelCount = labelText.match(/FORMA/g)?.length ?? 0;
+  if (isPortrait && rectangleCount >= 4 && firstTop < 0.32 && gorditoLabelCount >= 2) {
+    return "gordito" as const;
+  }
+  if (
+    isPortrait &&
+    rectangleCount >= 4 &&
+    firstTop >= 0.32 &&
+    (labelText.includes("KEKE") || formaLabelCount >= 2)
+  ) {
+    return "number-sheet" as const;
+  }
+  if (!isPortrait && rectangleCount === 0 &&
+      (labelText.includes("LINEA") || labelText.includes("LOCO"))) {
+    return "line-loco" as const;
+  }
+  return null;
+}
+
 export function orderCardsByPdfPosition(cards: BingoCard[]) {
   const serials = new Set(cards.map((card) => card.serial));
   const suffixOrder = serials.has("Yapa")
@@ -3330,18 +3370,13 @@ async function recognizeSpecialPageCards(
   const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
   const firstTop = ordered[0]?.y / source.height;
   const isPortrait = source.height > source.width;
-  const layouts =
-    isPortrait && ordered.length >= 4 && firstTop < 0.32
-      ? gorditoSpecialCards
-      : isPortrait && ordered.length >= 4 && firstTop >= 0.32
-        ? numberSheetExtraCards
-        : !isPortrait && ordered.length === 0
-          ? lineAndLocoCards
-          : [];
-  if (!layouts.length) return [];
+  const mayContainSpecialCards =
+    (isPortrait && ordered.length >= 4) ||
+    (!isPortrait && ordered.length === 0);
+  if (!mayContainSpecialCards) return [];
 
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789-_Tab",
+    tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#-_ ",
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
@@ -3350,6 +3385,27 @@ async function recognizeSpecialPageCards(
     {},
     { blocks: true, text: true },
   );
+  const specialLayout = specialPageLayoutFromOcrText(
+    result.data.text ?? "",
+    isPortrait,
+    ordered.length,
+    firstTop,
+  );
+  const layouts = specialLayout === "gordito"
+    ? gorditoSpecialCards
+    : specialLayout === "number-sheet"
+      ? numberSheetExtraCards
+      : specialLayout === "line-loco"
+        ? lineAndLocoCards
+        : [];
+  if (!layouts.length) {
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "11",
+      preserve_interword_spaces: "1",
+    });
+    return [];
+  }
   const symbols = result.data.blocks?.length
     ? flattenOcrSymbols(ocrWords(result.data.blocks))
     : [];

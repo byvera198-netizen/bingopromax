@@ -31,6 +31,7 @@ import {
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
   reconcileTwoCardPageNumbers,
+  specialPageLayoutFromOcrText,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -53,6 +54,26 @@ test("acepta PDF e imágenes compatibles para importación y cámara", () => {
   assert.equal(isSupportedBingoImportFile({ name: "foto.JPG", type: "" }), true);
   assert.equal(isSupportedBingoImportFile({ name: "captura.webp", type: "image/webp" }), true);
   assert.equal(isSupportedBingoImportFile({ name: "notas.txt", type: "text/plain" }), false);
+});
+
+test("no confunde una hoja clásica de cuatro cartones con juegos especiales", () => {
+  assert.equal(
+    specialPageLayoutFromOcrText(
+      "FECHA MARTES - 20 LETRAS A JUGARSE - SORTEO 0058 - BINGO",
+      true,
+      4,
+      0.17,
+    ),
+    null,
+  );
+  assert.equal(
+    specialPageLayoutFromOcrText("YAPA 30 - ECHE LECHE - BOM BOM BUM", true, 4, 0.2),
+    "gordito",
+  );
+  assert.equal(
+    specialPageLayoutFromOcrText("KEKE KEKE - FORMA #1 - FORMA #3", true, 4, 0.4),
+    "number-sheet",
+  );
 });
 
 test("separa las tres cifras de una fila Yapa aunque el OCR las una", () => {
@@ -639,6 +660,46 @@ test("separa dos cuadrículas escaneadas por sus líneas", () => {
 
   assert.equal(rectangles.length, 2);
   assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [50, 550]);
+});
+
+test("detecta cuatro cartones aunque el escaneo deforme progresivamente las filas", () => {
+  const width = 1_000;
+  const height = 1_400;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  const drawGrid = (vertical: number[], horizontal: number[]) => {
+    for (const x of vertical) {
+      for (let thickness = -1; thickness <= 1; thickness += 1) {
+        for (let y = horizontal[0]; y <= horizontal[5]; y += 1) drawPixel(x + thickness, y);
+      }
+    }
+    for (const y of horizontal) {
+      for (let thickness = -1; thickness <= 1; thickness += 1) {
+        for (let x = vertical[0]; x <= vertical[5]; x += 1) drawPixel(x, y + thickness);
+      }
+    }
+  };
+  const left = [24, 119, 208, 299, 390, 478];
+  const right = left.map((value) => value + 476);
+  const top = [230, 325, 414, 500, 591, 679];
+  const bottom = top.map((value) => value + 450);
+  drawGrid(left, top);
+  drawGrid(right, top);
+  drawGrid(left, bottom);
+  drawGrid(right, bottom);
+
+  const rectangles = detectGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 4);
+  assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [24, 500, 24, 500]);
+  assert.ok(rectangles.slice(0, 2).every((rectangle) => Math.abs(rectangle.y - 230) <= 3));
+  assert.ok(rectangles.slice(2).every((rectangle) => Math.abs(rectangle.y - 680) <= 3));
 });
 
 test("detecta los ocho cartones compactos de una hoja escaneada", () => {
