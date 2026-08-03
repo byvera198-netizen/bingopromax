@@ -266,6 +266,9 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
 
 export type NumberSheetForm = "1" | "3" | "5" | "9";
 
+const normalizeGameName = (value: string) =>
+  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+
 export const NUMBER_SHEET_FORM_CELLS: Record<NumberSheetForm, number[]> = {
   "1": [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
   "3": [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
@@ -307,7 +310,7 @@ export function numberSheetFormForGrid(grid: number[]): NumberSheetForm | null {
   );
 }
 
-export function specialCardPatternForGrid(grid: number[]) {
+export function specialCardPatternForGrid(grid: number[], serial = "") {
   if (grid.length === 5) return COMPACT_CARD_PATTERN;
   if (grid.length >= 6 && grid.length < 25) {
     const cells = range(0, grid.length - 1);
@@ -328,14 +331,29 @@ export function specialCardPatternForGrid(grid: number[]) {
         ],
       },
     };
-    const special = metadata[grid.length] ?? {
+    const normalizedSerial = normalizeGameName(serial);
+    const serialPattern = normalizedSerial.includes("linea") && grid.length === 16
+      ? metadata[16]
+      : normalizedSerial.includes("loco") && grid.length === 10
+        ? metadata[10]
+        : null;
+    const requiresNamedGame = grid.length === 10 || grid.length === 16;
+    const special = serialPattern ?? (
+      requiresNamedGame && normalizedSerial
+        ? null
+        : metadata[grid.length]
+    ) ?? {
       id: `carton-especial-${grid.length}`,
       name: "Cartón especial completo",
     };
     return {
       id: special.id,
       name: special.name,
-      description: "Todos los números impresos del cartón especial.",
+      description: special.id === "linea-completa"
+        ? "Cinco números en cualquiera de las líneas impresas del juego Línea."
+        : special.id === "loco-completo"
+          ? "Los diez números impresos del juego Loco."
+          : "Todos los números impresos del cartón especial.",
       color: "#d7ff3f",
       category: "Especial",
       difficulty: "Especial",
@@ -348,14 +366,14 @@ export function specialCardPatternForGrid(grid: number[]) {
 }
 
 export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
-  return specialCardPatternForGrid(card.grid) ?? activePattern;
+  return specialCardPatternForGrid(card.grid, card.serial) ?? activePattern;
 }
 
 export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
-  const specialPattern = specialCardPatternForGrid(card.grid);
+  const specialPattern = specialCardPatternForGrid(card.grid, card.serial);
   return specialPattern
     ? [specialPattern]
     : activePatterns.filter((pattern) => pattern.id !== COMPACT_CARD_PATTERN.id);

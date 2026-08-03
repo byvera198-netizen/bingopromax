@@ -523,6 +523,39 @@ test("un cartón Sabrosito gana al completar sus cinco números", () => {
   assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
 });
 
+test("Línea gana solo con una línea impresa y Loco exige los diez números", () => {
+  const activePattern = BUILTIN_PATTERNS[0];
+  const linea: BingoCard = {
+    id: "linea-1",
+    number: "11132-1",
+    serial: "Línea",
+    grid: [19, 47, 3, 25, 41, 56, 63, 29, 57, 6, 17, 36, 52, 75, 16, 51],
+    sourceFile: "linea-loco.pdf",
+    sourcePage: 1,
+    status: "active",
+  };
+  const loco: BingoCard = {
+    id: "loco-1",
+    number: "11132-2",
+    serial: "Loco",
+    grid: [39, 8, 17, 45, 57, 72, 31, 30, 38, 56],
+    sourceFile: "linea-loco.pdf",
+    sourcePage: 1,
+    status: "active",
+  };
+
+  assert.equal(isWinningCard(linea, new Set([3, 25, 41, 56]), activePattern), false);
+  assert.equal(isWinningCard(linea, new Set([3, 25, 41, 56, 63]), activePattern), true);
+  assert.equal(patternForCard(linea, activePattern).id, "linea-completa");
+  assert.equal(isWinningCard(loco, new Set(loco.grid.slice(0, 9)), activePattern), false);
+  assert.equal(isWinningCard(loco, new Set(loco.grid), activePattern), true);
+  assert.equal(patternForCard(loco, activePattern).id, "loco-completo");
+  assert.deepEqual(
+    winningPatternsForCard(loco, new Set(loco.grid), [activePattern]).map((pattern) => pattern.id),
+    ["loco-completo"],
+  );
+});
+
 test("una hoja de números gana únicamente al completar su forma impresa", () => {
   const grid = [
     0, 0, 37, 0, 0,

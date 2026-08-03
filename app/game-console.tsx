@@ -1309,7 +1309,7 @@ export default function GameConsole() {
       for (const winner of state.winners) {
         const card = state.cards.find((item) => item.id === winner.cardId);
         const pattern = availablePatterns.find((item) => item.id === winner.patternId) ??
-          (card ? specialCardPatternForGrid(card.grid) : null);
+          (card ? specialCardPatternForGrid(card.grid, card.serial) : null);
         const compactRows = card && card.grid.length !== 25
           ? Math.ceil(card.grid.length / 5)
           : 5;
@@ -1956,7 +1956,7 @@ export default function GameConsole() {
                       const card = state.cards.find((item) => item.id === winner.cardId);
                       const pattern = card
                         ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
-                          specialCardPatternForGrid(card.grid)
+                          specialCardPatternForGrid(card.grid, card.serial)
                         : null;
                       if (!card || !pattern) return null;
                       return (
@@ -2128,7 +2128,7 @@ export default function GameConsole() {
                   const card = state.cards.find((item) => item.id === winner.cardId);
                   const pattern = card
                     ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
-                      specialCardPatternForGrid(card.grid)
+                      specialCardPatternForGrid(card.grid, card.serial)
                     : null;
                   if (!card) return null;
                   return <article key={`card-${winner.id}`}><strong>Tab #{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
