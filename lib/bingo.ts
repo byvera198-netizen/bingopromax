@@ -349,7 +349,9 @@ export function specialCardPatternForGrid(grid: number[], serial = "") {
     return {
       id: special.id,
       name: special.name,
-      description: special.id === "linea-completa"
+      description: special.id === "yapa-completo"
+        ? "Los nueve números de la cuadrícula 3×3 del juego Yapa."
+        : special.id === "linea-completa"
         ? "Cinco números en cualquiera de las líneas impresas del juego Línea."
         : special.id === "loco-completo"
           ? "Los diez números impresos del juego Loco."

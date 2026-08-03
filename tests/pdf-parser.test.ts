@@ -556,6 +556,24 @@ test("Línea gana solo con una línea impresa y Loco exige los diez números", (
   );
 });
 
+test("Yapa usa una cuadrícula 3×3 y gana únicamente con sus nueve números", () => {
+  const yapa: BingoCard = {
+    id: "yapa-1",
+    number: "23727-7",
+    serial: "Yapa",
+    grid: [6, 33, 54, 17, 41, 66, 18, 46, 69],
+    sourceFile: "yapa.pdf",
+    sourcePage: 1,
+    status: "active",
+  };
+  const activePattern = BUILTIN_PATTERNS[0];
+
+  assert.equal(yapa.grid.length, 9);
+  assert.equal(patternForCard(yapa, activePattern).id, "yapa-completo");
+  assert.equal(isWinningCard(yapa, new Set(yapa.grid.slice(0, 8)), activePattern), false);
+  assert.equal(isWinningCard(yapa, new Set(yapa.grid), activePattern), true);
+});
+
 test("una hoja de números gana únicamente al completar su forma impresa", () => {
   const grid = [
     0, 0, 37, 0, 0,
