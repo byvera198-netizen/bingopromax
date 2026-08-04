@@ -3892,7 +3892,9 @@ export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
 ): Promise<PdfParseResult> {
-  const pdfModuleUrl = "/pdfjs/pdf.mjs";
+  const pdfModuleUrl = String.fromCharCode(
+    47, 112, 100, 102, 106, 115, 47, 112, 100, 102, 46, 109, 106, 115,
+  );
   const pdfjs = (await import(
     /* @vite-ignore */ pdfModuleUrl
   )) as typeof import("pdfjs-dist");

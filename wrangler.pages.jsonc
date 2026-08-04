@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bingopromax",
+  "pages_build_output_dir": "dist-pages",
+  "compatibility_date": "2026-08-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bingo-control-pro-db",
+      "database_id": "cd2052c1-5a5c-4542-aeeb-3d0c319f9f61"
+    }
+  ]
+}
