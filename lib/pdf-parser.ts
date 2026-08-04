@@ -3857,6 +3857,37 @@ export function reconcileTwoCardPageNumbers(cards: BingoCard[]) {
   }));
 }
 
+export function reconcilePlainSequentialCardNumbers(cards: BingoCard[]) {
+  if (cards.length < 3) return cards.map((card) => ({ ...card }));
+
+  const detected = cards.flatMap((card, index) => {
+    const match = card.number.trim().match(/^#?(\d{5,12})$/);
+    if (!match) return [];
+    const value = BigInt(match[1]);
+    const base = value - BigInt(index);
+    return base >= 0n ? [{ base, width: match[1].length }] : [];
+  });
+  if (detected.length < Math.ceil(cards.length * 0.6)) {
+    return cards.map((card) => ({ ...card }));
+  }
+
+  const votes = new Map<string, { count: number; base: bigint; width: number }>();
+  for (const item of detected) {
+    const key = `${item.width}:${item.base}`;
+    const current = votes.get(key);
+    votes.set(key, { ...item, count: (current?.count ?? 0) + 1 });
+  }
+  const winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
+  if (!winner || winner.count < Math.max(3, Math.ceil(detected.length * 0.5))) {
+    return cards.map((card) => ({ ...card }));
+  }
+
+  return cards.map((card, index) => ({
+    ...card,
+    number: String(winner.base + BigInt(index)).padStart(winner.width, "0"),
+  }));
+}
+
 export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
@@ -3935,7 +3966,9 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  const reconciledCards = reconcileTwoCardPageNumbers(cards);
+  const reconciledCards = reconcilePlainSequentialCardNumbers(
+    reconcileTwoCardPageNumbers(cards),
+  );
   const numberedCards = assignSequentialCardNumbers(reconciledCards);
   return { cards: numberedCards, pages: pageCount, warnings };
 }

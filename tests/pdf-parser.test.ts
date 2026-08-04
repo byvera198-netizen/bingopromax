@@ -16,6 +16,7 @@ import {
 } from "../lib/bingo";
 import {
   assignSequentialCardNumbers,
+  reconcilePlainSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
   decodeYapaRowDigits,
@@ -36,6 +37,22 @@ import {
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("repara una secuencia numÃ©rica simple cuando el OCR repite un cartÃ³n", () => {
+  const cards = ["0311297", "0311298", "0311298", "0311300"].map((number, index) => ({
+    id: String(index),
+    number,
+    serial: "",
+    grid: Array.from({ length: 25 }, (_, cell) => cell === 12 ? 0 : cell + 1),
+    sourceFile: "lote.pdf",
+    sourcePage: 1,
+    status: "active" as const,
+  }));
+  assert.deepEqual(
+    reconcilePlainSequentialCardNumbers(cards).map((card) => card.number),
+    ["0311297", "0311298", "0311299", "0311300"],
+  );
+});
 
 test("conserva la numeración impresa y completa solo los cartones ilegibles", () => {
   const cards = [

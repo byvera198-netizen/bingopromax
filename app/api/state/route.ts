@@ -569,12 +569,25 @@ export async function POST(request: Request) {
         .prepare("SELECT number FROM cards WHERE game_id = ?")
         .bind(gameId)
         .all<{ number: string }>();
-      const numbers = new Set((existing.results ?? []).map((row) => row.number));
-      const accepted = cards.filter((card) =>
-        !numbers.has(card.number) &&
-        !card.number.startsWith("SIN-ID-") &&
-        validateCardGrid(card.grid).length === 0,
+      const numbers = new Set(
+        (existing.results ?? []).map((row) => row.number.trim().toLowerCase()),
       );
+      let renamed = 0;
+      const accepted = cards.flatMap((card) => {
+        if (validateCardGrid(card.grid).length > 0) return [];
+        const original = card.number.trim();
+        let candidate = original.startsWith("SIN-ID-") ? "" : original;
+        if (!candidate) candidate = String(numbers.size + 1);
+        if (numbers.has(candidate.toLowerCase())) {
+          const base = candidate;
+          let suffix = 2;
+          while (numbers.has(`${base}-${suffix}`.toLowerCase())) suffix += 1;
+          candidate = `${base}-${suffix}`;
+          renamed += 1;
+        }
+        numbers.add(candidate.toLowerCase());
+        return [{ ...card, number: candidate }];
+      });
       const duplicates = cards.length - accepted.length;
       if (accepted.length) {
         await db.batch(
@@ -599,8 +612,14 @@ export async function POST(request: Request) {
           ),
         );
       }
-      await audit(db, gameId, "IMPORT_CARDS", `${accepted.length} guardados; ${duplicates} duplicados`, actor);
-      return Response.json({ accepted: accepted.length, duplicates });
+      await audit(
+        db,
+        gameId,
+        "IMPORT_CARDS",
+        `${accepted.length} guardados; ${duplicates} invÃ¡lidos; ${renamed} renumerados`,
+        actor,
+      );
+      return Response.json({ accepted: accepted.length, duplicates, renamed });
     }
 
     if (action === "saveDraw") {
