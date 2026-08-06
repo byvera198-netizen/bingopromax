@@ -1,0 +1,8 @@
+{
+  "name": "Bingo Control Pro",
+  "description": "Control profesional de partidas de bingo, importación de cartones, bolillero y verificación automática.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

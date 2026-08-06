@@ -1,0 +1,60 @@
+{
+  "name": "bingo-control-pro",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/copy-pdfjs.mjs && cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev -p 3000 -H 0.0.0.0",
+    "postinstall": "node scripts/copy-pdfjs.mjs",
+    "prebuild": "node scripts/copy-pdfjs.mjs",
+    "build": "cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "start": "cross-env WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
+    "test": "npm run build && node --test tests/*.test.mjs && tsx --test tests/*.test.ts",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work --ignore-pattern public/pdfjs",
+    "db:generate": "drizzle-kit generate",
+    "android:sync": "cap sync android",
+    "android:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@supabase/supabase-js": "^2.111.0",
+    "drizzle-orm": "0.45.2",
+    "framer-motion": "^12.23.24",
+    "jspdf": "^3.0.4",
+    "lucide-react": "^0.468.0",
+    "motion-dom": "12.23.23",
+    "motion-utils": "12.23.6",
+    "next": "16.2.6",
+    "pdfjs-dist": "^5.4.296",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-rsc": "0.5.26",
+    "cross-env": "^10.1.0",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "react-server-dom-webpack": "19.2.6",
+    "tailwindcss": "4.2.1",
+    "tsx": "^4.22.1",
+    "typescript": "5.9.3",
+    "vinext": "0.0.50",
+    "vite": "8.0.13",
+    "wrangler": "4.92.0"
+  },
+  "type": "module"
+}
