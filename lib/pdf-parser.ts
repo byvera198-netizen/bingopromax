@@ -972,7 +972,16 @@ function isPlausibleNumberSheetGrid(
   form: NumberSheetForm,
 ) {
   const required = NUMBER_SHEET_FORM_CELLS[form];
+  const requiredSet = new Set(required);
   const values = required.map((index) => grid[index]);
+  const nonFormValidCount = grid.filter(
+    (value, index) => !requiredSet.has(index) && validNumberForCell(value, index),
+  ).length;
+
+  if (nonFormValidCount >= 2) {
+    return false;
+  }
+
   return (
     numberSheetFormForGrid(grid) === form &&
     values.every((value, index) => validNumberForCell(value, required[index])) &&
@@ -1018,8 +1027,8 @@ export function numberSheetMetadataFromOcrText(
   const form = rawLines
     .map((line) => {
       const explicit = line.match(/\bFORMA?\w*\s*#?\s*([1359])\b/i)?.[1];
-      const digits = line.replace(/\D/g, "");
-      return (explicit ?? (/^[1359]$/.test(digits) ? digits : null)) as NumberSheetForm | null;
+      const trimmed = line.trim();
+      return (explicit ?? (/^[1359]$/.test(trimmed) ? trimmed : null)) as NumberSheetForm | null;
     })
     .find((value): value is NumberSheetForm => value !== null) ?? null;
   const normalized = text
@@ -2461,15 +2470,31 @@ async function recognizeDetectedGrids(
   const firstRectangleTop = Math.min(
     ...eligibleRectangles.map((item) => item.y / source.height),
   );
+  let numberSheetMetadataCache: Array<NumberSheetMetadata | null> | null = null;
+  let numberSheetFormCache: NumberSheetForm[] | null = null;
+  let numberSheetFamily: string | null = null;
+  if (eligibleRectangles.length === 4) {
+    numberSheetMetadataCache = await Promise.all(
+      eligibleRectangles.map((candidate) =>
+        recognizeNumberSheetMetadata(source, candidate, worker),
+      ),
+    );
+    numberSheetFormCache = numberSheetFormsFromIdentifierSeries(
+      numberSheetMetadataCache,
+    );
+    numberSheetFamily = dominantNumberSheetFamily(numberSheetMetadataCache);
+  }
+  const hasExplicitNumberSheetForm =
+    numberSheetFormCache !== null ||
+    (numberSheetMetadataCache?.some((item) => item?.form !== null) ?? false);
   const likelyNumberSheetPage =
-    eligibleRectangles.length === 4 && firstRectangleTop >= 0.32;
+    eligibleRectangles.length === 4 &&
+    firstRectangleTop >= 0.32 &&
+    hasExplicitNumberSheetForm;
   const printedPortraitFamily = isFourCardPortraitSheet && !likelyNumberSheetPage
     ? await recognizePortraitPageFamily(source, worker)
     : null;
   const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
-  let numberSheetMetadataCache: Array<NumberSheetMetadata | null> | null = null;
-  let numberSheetFormCache: NumberSheetForm[] | null = null;
-  let numberSheetFamily: string | null = null;
   for (const rectangle of eligibleRectangles) {
     const original = cropGridCanvas(source, rectangle);
     if (!original) continue;
@@ -3137,7 +3162,7 @@ export function specialPageLayoutFromOcrText(
     return "sabrosito" as const;
   }
 
-  const gorditoLabelCount = ["YAPA", "ECHE", "BOM", "GORDITO"].filter((label) =>
+  const gorditoLabelCount = ["YAPA", "ECHE", "BOM"].filter((label) =>
     labelText.includes(label),
   ).length;
   const formaLabelCount = labelText.match(/FORMA/g)?.length ?? 0;
