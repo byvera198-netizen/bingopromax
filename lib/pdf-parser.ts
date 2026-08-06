@@ -1028,7 +1028,9 @@ export function numberSheetMetadataFromOcrText(
     .map((line) => {
       const explicit = line.match(/\bFORMA?\w*\s*#?\s*([1359])\b/i)?.[1];
       const trimmed = line.trim();
-      return (explicit ?? (/^[1359]$/.test(trimmed) ? trimmed : null)) as NumberSheetForm | null;
+      const isDateOrPage = /\b(AGO|AGOSTO|ENE|FEB|MAR|ABR|MAY|JUN|JUL|SEP|OCT|NOV|DIC|PAG|PÁG|TAB|SERIAL)\b/i.test(line);
+      const matchesSingleDigit = /^[1359]$/.test(trimmed) && !isDateOrPage;
+      return (explicit ?? (matchesSingleDigit ? trimmed : null)) as NumberSheetForm | null;
     })
     .find((value): value is NumberSheetForm => value !== null) ?? null;
   const normalized = text
@@ -2485,8 +2487,7 @@ async function recognizeDetectedGrids(
     numberSheetFamily = dominantNumberSheetFamily(numberSheetMetadataCache);
   }
   const hasExplicitNumberSheetForm =
-    numberSheetFormCache !== null ||
-    (numberSheetMetadataCache?.some((item) => item?.form !== null) ?? false);
+    numberSheetFormCache !== null;
   const likelyNumberSheetPage =
     eligibleRectangles.length === 4 &&
     firstRectangleTop >= 0.32 &&
@@ -2552,27 +2553,35 @@ async function recognizeDetectedGrids(
         }
       }
       if (form) {
-        let numberSheetGrid = normalizeNumberSheetGrid(grid, form);
-        numberSheetGrid = await recognizeMissingNumberSheetCells(
-          source,
-          rectangle,
-          numberSheetGrid,
-          form,
-          worker,
-        );
-        if (isPlausibleNumberSheetGrid(numberSheetGrid, form)) {
-          detected.push({
-            grid: numberSheetGrid,
-            x: rectangle.x + rectangle.width / 2,
-            y: source.height - rectangle.y,
-            score: rectangle.score,
-            rowIds: [],
-            identifier: numberSheetFamily && Number.isInteger(metadataSuffix)
-              ? `${numberSheetFamily}-${metadataSuffix}`
-              : metadata?.identifier ??
-              `SIN-ID-${String(pageNumber).padStart(3, "0")}-${eligibleRectangles.indexOf(rectangle) + 1}`,
-          });
-          continue;
+        const requiredSet = new Set(NUMBER_SHEET_FORM_CELLS[form]);
+        const nonFormValidCount = grid.filter(
+          (value, index) =>
+            !requiredSet.has(index) && validNumberForCell(value, index),
+        ).length;
+
+        if (nonFormValidCount < 2) {
+          let numberSheetGrid = normalizeNumberSheetGrid(grid, form);
+          numberSheetGrid = await recognizeMissingNumberSheetCells(
+            source,
+            rectangle,
+            numberSheetGrid,
+            form,
+            worker,
+          );
+          if (isPlausibleNumberSheetGrid(numberSheetGrid, form)) {
+            detected.push({
+              grid: numberSheetGrid,
+              x: rectangle.x + rectangle.width / 2,
+              y: source.height - rectangle.y,
+              score: rectangle.score,
+              rowIds: [],
+              identifier: numberSheetFamily && Number.isInteger(metadataSuffix)
+                ? `${numberSheetFamily}-${metadataSuffix}`
+                : metadata?.identifier ??
+                `SIN-ID-${String(pageNumber).padStart(3, "0")}-${eligibleRectangles.indexOf(rectangle) + 1}`,
+            });
+            continue;
+          }
         }
       }
     }
@@ -3165,7 +3174,6 @@ export function specialPageLayoutFromOcrText(
   const gorditoLabelCount = ["YAPA", "ECHE", "BOM"].filter((label) =>
     labelText.includes(label),
   ).length;
-  const formaLabelCount = labelText.match(/FORMA/g)?.length ?? 0;
   if (isPortrait && (rectangleCount >= 4 || labelText.includes("YAPA")) && gorditoLabelCount >= 1) {
     return "gordito" as const;
   }
@@ -3173,7 +3181,7 @@ export function specialPageLayoutFromOcrText(
     isPortrait &&
     rectangleCount >= 4 &&
     firstTop >= 0.32 &&
-    (labelText.includes("KEKE") || formaLabelCount >= 2)
+    (labelText.includes("KEKE") || labelText.includes("HOJA DE NUMERO") || labelText.includes("HOJA DE NUMEROS"))
   ) {
     return "number-sheet" as const;
   }
