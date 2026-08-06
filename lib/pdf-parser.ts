@@ -1451,6 +1451,10 @@ function bestCellValue(
         (Math.min(first.bbox.x0, second.bbox.x0) +
           Math.max(first.bbox.x1, second.bbox.x1)) /
         2;
+      const span = Math.max(first.bbox.x1, second.bbox.x1) - Math.min(first.bbox.x0, second.bbox.x0);
+      if (value === 11 && (secondCenter - firstCenter < columnSpacing * 0.2 || span < columnSpacing * 0.25)) {
+        continue;
+      }
       candidates.push({
         value,
         score:
@@ -2222,6 +2226,10 @@ async function recognizeMissingNumberSheetCells(
       value = bestCellValue(symbols, column, 120, 240);
       if (value === null) {
         const digits = (result.data.text ?? "").replace(/\D/g, "");
+        const orig = normalized[index];
+        if (validNumberForCell(orig, index) && (orig === 1 || digits === "11")) {
+          value = orig === 1 ? 1 : null;
+        }
         for (let start = 0; start < digits.length && value === null; start += 1) {
           for (const length of [2, 1]) {
             const candidate = Number(digits.slice(start, start + length));
@@ -2231,6 +2239,9 @@ async function recognizeMissingNumberSheetCells(
             }
           }
         }
+      }
+      if (normalized[index] === 1 && value === 11 && column === 0) {
+        value = 1;
       }
       if (value !== null) break;
     }
@@ -2357,10 +2368,19 @@ async function recognizeMissingCells(
             }
           }
         }
-        value = options[0] ?? null;
+        if (validNumberForCell(originalValue, index) && (originalValue === 1 || options.includes(originalValue))) {
+          value = (digits === "11" || options.includes(1)) && originalValue === 1 ? 1 : (options.includes(originalValue) ? originalValue : options[0] ?? null);
+        } else if (digits === "11" && column === 0) {
+          value = 1;
+        } else {
+          value = options[0] ?? null;
+        }
         if (value === null && column === 1 && digits === "7") {
           value = 17;
         }
+      }
+      if (originalValue === 1 && value === 11 && column === 0) {
+        value = 1;
       }
       if (value !== null) break;
     }

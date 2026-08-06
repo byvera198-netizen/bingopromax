@@ -88,6 +88,11 @@ test("reconoce Línea y Loco en una hoja vertical y relee cifras B que pueden es
   assert.equal(shouldRereadBingoCell(1, 1), false);
 });
 
+test("no reemplaza la cifra 1 por 11 en la columna B al releer cartones", () => {
+  const rowDigits = decodeBingoRowDigits("1 16 33 52 70");
+  assert.deepEqual(rowDigits, [1, 16, 33, 52, 70]);
+});
+
 test("separa las tres cifras de una fila Yapa aunque el OCR las una", () => {
   assert.deepEqual(decodeYapaRowDigits("1040 62"), [10, 40, 62]);
   assert.deepEqual(decodeYapaRowDigits("224365"), [22, 43, 65]);
