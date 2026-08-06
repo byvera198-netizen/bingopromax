@@ -454,6 +454,221 @@ export interface ImportAuditEntry {
   gridSnippet?: number[];
 }
 
+export interface CellValidationResult {
+  index: number;
+  colIndex: number;
+  colLetter: string;
+  expectedMin: number;
+  expectedMax: number;
+  value: number | null;
+  rawValue: string;
+  isFreeCenter: boolean;
+  isEmpty: boolean;
+  isOutOfRange: boolean;
+  isDuplicate: boolean;
+  errors: string[];
+}
+
+export interface DetailedCardValidation {
+  isValid: boolean;
+  cells: CellValidationResult[];
+  errors: string[];
+  warnings: string[];
+  duplicateNumbers: number[];
+  outOfRangeCells: number[];
+  emptyCellsCount: number;
+}
+
+export function validateCardGridDetailed(
+  gridStr: string[],
+  isFreeCenterChecked = true,
+): DetailedCardValidation {
+  const ranges = [
+    [1, 15],
+    [16, 30],
+    [31, 45],
+    [46, 60],
+    [61, 75],
+  ] as const;
+  const colLetters = ["B", "I", "N", "G", "O"] as const;
+
+  const cells: CellValidationResult[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const counts = new Map<number, number[]>(); // value -> array of cell indices
+
+  gridStr.forEach((rawValue, index) => {
+    const colIndex = index % 5;
+    const colLetter = colLetters[colIndex];
+    const [expectedMin, expectedMax] = ranges[colIndex];
+    const isCenter = index === 12;
+    const isFreeCenter = isCenter && (isFreeCenterChecked || rawValue === "0" || rawValue.trim().toUpperCase() === "LIBRE");
+
+    const cellErrors: string[] = [];
+    let value: number | null = null;
+    let isEmpty = false;
+    let isOutOfRange = false;
+
+    if (isFreeCenter) {
+      value = 0;
+    } else if (!rawValue || rawValue.trim() === "") {
+      isEmpty = true;
+    } else {
+      const parsed = parseInt(rawValue.trim(), 10);
+      if (isNaN(parsed) || !Number.isInteger(parsed) || parsed < 1 || parsed > 75) {
+        isOutOfRange = true;
+        cellErrors.push(`El número debe estar entre 1 y 75.`);
+      } else {
+        value = parsed;
+        if (parsed < expectedMin || parsed > expectedMax) {
+          isOutOfRange = true;
+          cellErrors.push(`Columna ${colLetter}: el valor ${parsed} debe estar entre ${expectedMin} y ${expectedMax}.`);
+        }
+      }
+    }
+
+    if (value !== null && value > 0) {
+      const existing = counts.get(value) ?? [];
+      existing.push(index);
+      counts.set(value, existing);
+    }
+
+    cells.push({
+      index,
+      colIndex,
+      colLetter,
+      expectedMin,
+      expectedMax,
+      value,
+      rawValue,
+      isFreeCenter,
+      isEmpty,
+      isOutOfRange,
+      isDuplicate: false,
+      errors: cellErrors,
+    });
+  });
+
+  const duplicateNumbers: number[] = [];
+  counts.forEach((indices, val) => {
+    if (indices.length > 1) {
+      duplicateNumbers.push(val);
+      indices.forEach((idx) => {
+        cells[idx].isDuplicate = true;
+        cells[idx].errors.push(`Número ${val} está repetido en el cartón.`);
+      });
+    }
+  });
+
+  const emptyCellsCount = cells.filter((c) => c.isEmpty).length;
+  const outOfRangeCells = cells.filter((c) => c.isOutOfRange).map((c) => c.index);
+
+  if (emptyCellsCount > 0) {
+    warnings.push(`Hay ${emptyCellsCount} casilla(s) vacía(s) en la cuadrícula.`);
+  }
+
+  if (outOfRangeCells.length > 0) {
+    const samples = cells
+      .filter((c) => c.isOutOfRange)
+      .slice(0, 3)
+      .map((c) => `${c.colLetter}${Math.floor(c.index / 5) + 1} (${c.rawValue})`);
+    errors.push(
+      `Existen ${outOfRangeCells.length} número(s) fuera del rango de columna BINGO permitidos (ej. ${samples.join(", ")}).`,
+    );
+  }
+
+  if (duplicateNumbers.length > 0) {
+    errors.push(`El cartón contiene números repetidos: ${duplicateNumbers.join(", ")}.`);
+  }
+
+  const isValid = emptyCellsCount === 0 && outOfRangeCells.length === 0 && duplicateNumbers.length === 0;
+
+  return {
+    isValid,
+    cells,
+    errors,
+    warnings,
+    duplicateNumbers,
+    outOfRangeCells,
+    emptyCellsCount,
+  };
+}
+
+export function autoFixCardGridColumns(gridStr: string[], freeCenter = true): string[] {
+  const ranges = [
+    [1, 15],
+    [16, 30],
+    [31, 45],
+    [46, 60],
+    [61, 75],
+  ];
+
+  // Extract all non-zero numbers
+  const allNums = gridStr
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => !isNaN(n) && n >= 1 && n <= 75);
+
+  const buckets: number[][] = [[], [], [], [], []];
+  allNums.forEach((n) => {
+    for (let c = 0; c < 5; c++) {
+      if (n >= ranges[c][0] && n <= ranges[c][1]) {
+        if (!buckets[c].includes(n)) {
+          buckets[c].push(n);
+        }
+        break;
+      }
+    }
+  });
+
+  const result: string[] = Array(25).fill("");
+  for (let c = 0; c < 5; c++) {
+    const colNums = buckets[c];
+    for (let r = 0; r < 5; r++) {
+      const idx = r * 5 + c;
+      if (idx === 12 && freeCenter) {
+        result[idx] = "0";
+        continue;
+      }
+      if (colNums.length > 0) {
+        result[idx] = String(colNums.shift());
+      }
+    }
+  }
+  return result;
+}
+
+export function generateValidBingoGrid(freeCenter = true): string[] {
+  const ranges = [
+    [1, 15],
+    [16, 30],
+    [31, 45],
+    [46, 60],
+    [61, 75],
+  ];
+  const result: string[] = Array(25).fill("");
+
+  for (let c = 0; c < 5; c++) {
+    const [min, max] = ranges[c];
+    const available: number[] = [];
+    for (let i = min; i <= max; i++) available.push(i);
+    // Shuffle
+    for (let i = available.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [available[i], available[j]] = [available[j], available[i]];
+    }
+
+    for (let r = 0; r < 5; r++) {
+      const idx = r * 5 + c;
+      if (idx === 12 && freeCenter) {
+        result[idx] = "0";
+      } else {
+        result[idx] = String(available.pop());
+      }
+    }
+  }
+  return result;
+}
+
 export function validateCardGrid(grid: number[]) {
   const errors: string[] = [];
   const isSpecialCard = grid.length >= 5 && grid.length < 25;

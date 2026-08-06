@@ -1,5 +1,6 @@
 "use client";
 
+import { CardEditorModal } from "@/components/card-editor-modal";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
@@ -64,7 +65,6 @@ import {
   patternsForCard,
   referenceCatalogPatterns,
   specialCardPatternForGrid,
-  validateCardGrid,
   winningPatternsForCard,
   type AppState,
   type AccessState,
@@ -426,9 +426,6 @@ export default function GameConsole() {
   const [processingFiles, setProcessingFiles] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
-  const [manualNumber, setManualNumber] = useState("");
-  const [manualSerial, setManualSerial] = useState("");
-  const [manualGrid, setManualGrid] = useState(initialGrid);
   const [patternName, setPatternName] = useState("");
   const [patternDescription, setPatternDescription] = useState("");
   const [patternCategory, setPatternCategory] = useState("Personalizado");
@@ -697,21 +694,20 @@ export default function GameConsole() {
 
   const game = state?.game;
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
-  const availablePatterns = useMemo(
-    () =>
-      [
-        ...referenceCatalogPatterns(
-          state?.customPatterns ?? [],
-          state?.removedPatternIds ?? [],
-        ),
-        ...(state?.customPatterns ?? []).filter((pattern) =>
-          pattern.id.startsWith("custom-user-"),
-        ),
-      ].sort((a, b) =>
-        a.name.localeCompare(b.name, "es", { numeric: true }),
-      ),
-    [state?.customPatterns, state?.removedPatternIds],
-  );
+  const availablePatterns = useMemo(() => {
+    const customList = (state?.customPatterns ?? []).filter(
+      (pattern) => !state?.removedPatternIds?.includes(pattern.id),
+    );
+    const customIds = new Set(customList.map((p) => p.id));
+    const refPatterns = referenceCatalogPatterns(
+      state?.customPatterns ?? [],
+      state?.removedPatternIds ?? [],
+    ).filter((p) => !customIds.has(p.id));
+
+    return [...customList, ...refPatterns].sort((a, b) =>
+      a.name.localeCompare(b.name, "es", { numeric: true }),
+    );
+  }, [state?.customPatterns, state?.removedPatternIds]);
   const gamePatterns = useMemo(
     () =>
       availablePatterns.filter(
@@ -1123,53 +1119,43 @@ export default function GameConsole() {
     }
   };
 
-  const saveManualCard = async () => {
+  const saveManualCard = async ({
+    number,
+    serial,
+    grid,
+  }: {
+    number: string;
+    serial: string;
+    grid: number[];
+  }) => {
     if (!state) return;
-    const grid = manualGrid.map((value) => Number(value));
-    const errors = validateCardGrid(grid);
-    if (!manualNumber.trim()) errors.unshift("Asigna un número al cartón.");
-    if (state.cards.some((card) => card.id !== editingCardId && card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
-      errors.unshift("Ya existe un cartón con ese número.");
-    }
-    if (errors.length) {
-      setImportWarnings(errors);
-      notify(errors[0], "warning");
-      return;
-    }
     const currentCard = editingCardId
       ? state.cards.find((card) => card.id === editingCardId)
       : null;
     const card: BingoCard = {
       id: currentCard?.id ?? crypto.randomUUID(),
-      number: manualNumber.trim(),
-      serial: manualSerial.trim(),
+      number: number.trim(),
+      serial: serial.trim(),
       grid,
       sourceFile: currentCard?.sourceFile ?? "Ingreso manual",
       sourcePage: currentCard?.sourcePage ?? 0,
       status: currentCard?.status ?? "active",
     };
-    try {
-      if (currentCard) {
-        await api({ action: "updateCard", gameId: state.game.id, card });
-        setState({
-          ...state,
-          cards: state.cards.map((item) => item.id === card.id ? card : item),
-          winners: state.winners.filter((winner) => winner.cardId !== card.id),
-        });
-      } else {
-        await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
-        setState({ ...state, cards: [card, ...state.cards] });
-      }
-      setManualOpen(false);
-      setEditingCardId(null);
-      setManualNumber("");
-      setManualSerial("");
-      setManualGrid(initialGrid);
-      setImportWarnings([]);
-      notify(currentCard ? `Cartón #${card.number} actualizado.` : `Cartón #${card.number} guardado.`);
-    } catch (caught) {
-      notify(caught instanceof Error ? caught.message : "No se pudo guardar el cartón.", "error");
+    if (currentCard) {
+      await api({ action: "updateCard", gameId: state.game.id, card });
+      setState({
+        ...state,
+        cards: state.cards.map((item) => item.id === card.id ? card : item),
+        winners: state.winners.filter((winner) => winner.cardId !== card.id),
+      });
+    } else {
+      await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
+      setState({ ...state, cards: [card, ...state.cards] });
     }
+    setManualOpen(false);
+    setEditingCardId(null);
+    setImportWarnings([]);
+    notify(currentCard ? `Cartón #${card.number} actualizado.` : `Cartón #${card.number} guardado.`);
   };
 
   const processFiles = async (files: File[]) => {
@@ -1249,6 +1235,45 @@ export default function GameConsole() {
             type: "warning",
             reason: `${file.name}: Todos los cartones extraídos ya figuraban como cargados en esta partida.`,
           });
+        }
+
+        // Detect and auto-register any special game forms or shapes in imported cards
+        const knownPatternIds = new Set([
+          ...BUILTIN_PATTERNS.map((p) => p.id),
+          ...(state?.customPatterns ?? []).map((p) => p.id),
+        ]);
+        const knownPatternNames = new Set([
+          ...BUILTIN_PATTERNS.map((p) => p.name.toLowerCase().trim()),
+          ...(state?.customPatterns ?? []).map((p) => p.name.toLowerCase().trim()),
+        ]);
+        const newPatternsToRegister: BingoPattern[] = [];
+
+        for (const card of uniqueCards) {
+          const specialPattern = specialCardPatternForGrid(card.grid, card.serial);
+          if (specialPattern) {
+            const nameLower = specialPattern.name.toLowerCase().trim();
+            if (!knownPatternIds.has(specialPattern.id) && !knownPatternNames.has(nameLower)) {
+              knownPatternIds.add(specialPattern.id);
+              knownPatternNames.add(nameLower);
+              newPatternsToRegister.push({
+                ...specialPattern,
+                custom: true,
+              });
+            }
+          }
+        }
+
+        for (const pattern of newPatternsToRegister) {
+          try {
+            await api({
+              action: "savePattern",
+              gameId: targetGameId,
+              pattern,
+            });
+            notify(`Nueva forma de juego registrada: ${pattern.name}`);
+          } catch {
+            // Continuation if already saved
+          }
         }
         const result = await api<{ accepted: number; duplicates: number }>({
           action: "saveCards",
@@ -1395,18 +1420,12 @@ export default function GameConsole() {
       return;
     }
     setEditingCardId(card.id);
-    setManualNumber(card.number);
-    setManualSerial(card.serial ?? "");
-    setManualGrid(card.grid.map(String));
     setManualOpen(true);
   };
 
   const closeCardEditor = () => {
     setManualOpen(false);
     setEditingCardId(null);
-    setManualNumber("");
-    setManualSerial("");
-    setManualGrid(initialGrid);
   };
 
   const saveGame = async () => {
@@ -1930,7 +1949,7 @@ export default function GameConsole() {
                     <>
                       <div className="draw-history">
                         {[...state.draws].reverse().slice(0, 18).map((draw, index) => (
-                          <span className={index === 0 ? "latest" : ""} key={draw.id}>{draw.number}</span>
+                          <span className={index === 0 ? "latest" : ""} key={`${draw.id}-${index}`}>{draw.number}</span>
                         ))}
                       </div>
                       <div className="game-progress"><span><i style={{ width: `${(state.draws.length / 75) * 100}%` }} /></span><small>{75 - state.draws.length} números restantes</small></div>
@@ -1947,8 +1966,8 @@ export default function GameConsole() {
                   <span className="secure-badge"><Activity size={14} /> {gamePatterns.length} activos</span>
                 </div>
                 <div className="live-pattern-grid">
-                  {patternStatuses.map(({ pattern, cards, nearest, winners }) => (
-                    <article className="live-pattern-card" key={pattern.id}>
+                  {patternStatuses.map(({ pattern, cards, nearest, winners }, index) => (
+                    <article className="live-pattern-card" key={`${pattern.id}-${index}`}>
                       <div>
                         <PatternMini pattern={pattern} />
                         <span><strong>{pattern.name}</strong><small>{pattern.category} · {pattern.difficulty}</small></span>
@@ -1992,11 +2011,11 @@ export default function GameConsole() {
                             ).progress.progress,
                         )
                         .slice(0, 12)
-                        .map((card) => (
+                        .map((card, index) => (
                           <CardPreview
                             called={called}
                             card={card}
-                            key={card.id}
+                            key={`${card.id}-${index}`}
                             onToggleStatus={toggleCardStatus}
                             onEditNumber={openCardEditor}
                             patterns={allPatterns}
@@ -2020,8 +2039,8 @@ export default function GameConsole() {
                   </div>
                   {state.winners.length ? (
                     <div className="winner-list">
-                      {state.winners.slice(0, 4).map((winner) => (
-                        <button key={winner.id} onClick={() => setWinnerModal([winner])} type="button">
+                      {state.winners.slice(0, 4).map((winner, index) => (
+                        <button key={`${winner.id}-${index}`} onClick={() => setWinnerModal([winner])} type="button">
                           <span><Trophy size={17} /></span>
                           <div><strong>Cartón #{winner.cardNumber}</strong><small>{winner.patternName}</small></div>
                           <time>{new Date(winner.validatedAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</time>
@@ -2113,7 +2132,7 @@ export default function GameConsole() {
                   <AlertTriangle size={19} />
                   <div style={{ flex: 1 }}>
                     <strong>Revisión de la última importación</strong>
-                    {importWarnings.slice(0, 5).map((warning) => <p key={warning}>{warning}</p>)}
+                    {importWarnings.slice(0, 5).map((warning, index) => <p key={`warning-${index}-${warning.slice(0, 20)}`}>{warning}</p>)}
                     <button
                       className="secondary-button compact"
                       style={{ marginTop: 8 }}
@@ -2138,11 +2157,11 @@ export default function GameConsole() {
               </div>
               {filteredCards.length ? (
                 <div className="ticket-grid">
-                  {filteredCards.map((card) => (
+                  {filteredCards.map((card, index) => (
                     <CardPreview
                       card={card}
                       called={called}
-                      key={card.id}
+                      key={`${card.id}-${index}`}
                       onDelete={deleteCard}
                       onEditNumber={openCardEditor}
                       onToggleStatus={toggleCardStatus}
@@ -2233,10 +2252,10 @@ export default function GameConsole() {
                   </div>
 
                   <div className="pattern-grid">
-                    {filteredTemplates.map((pattern) => {
+                    {filteredTemplates.map((pattern, index) => {
                       const enabledInGame = !state?.disabledPatternIds.includes(pattern.id);
                       return (
-                        <article className={`pattern-card ${enabledInGame ? "active" : ""}`} key={pattern.id}>
+                        <article className={`pattern-card ${enabledInGame ? "active" : ""}`} key={`${pattern.id}-${index}`}>
                           <div className="pattern-card-top">
                             <PatternMini pattern={pattern} />
                             <span>
@@ -2298,15 +2317,15 @@ export default function GameConsole() {
                       </div>
                     </div>
                     <div className="pattern-stack-preview">
-                      {gamePatterns.slice(0, 4).map((pattern) => <PatternMini key={pattern.id} pattern={pattern} />)}
+                      {gamePatterns.slice(0, 4).map((pattern, index) => <PatternMini key={`mini-${pattern.id}-${index}`} pattern={pattern} />)}
                     </div>
                   </section>
                   <div className="pattern-grid">
-                    {availablePatterns.map((pattern) => {
+                    {availablePatterns.map((pattern, index) => {
                       const enabled = !state.disabledPatternIds.includes(pattern.id);
                       const hasWinner = state.winners.some((winner) => winner.patternId === pattern.id);
                       return (
-                        <article className={`pattern-card ${enabled ? "active" : "disabled"}`} key={pattern.id}>
+                        <article className={`pattern-card ${enabled ? "active" : "disabled"}`} key={`${pattern.id}-${index}`}>
                           <div className="pattern-card-top">
                             <PatternMini pattern={pattern} />
                             <span>{enabled ? <Check size={14} /> : <Pause size={14} />} {enabled ? "En juego" : "Inhabilitado"}</span>
@@ -2346,7 +2365,7 @@ export default function GameConsole() {
                 </div>
                 {state.winners.length ? (
                   <div className="winning-cards-grid">
-                    {state.winners.map((winner) => {
+                    {state.winners.map((winner, index) => {
                       const card = state.cards.find((item) => item.id === winner.cardId);
                       const pattern = card
                         ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
@@ -2354,7 +2373,7 @@ export default function GameConsole() {
                         : null;
                       if (!card || !pattern) return null;
                       return (
-                        <article className="winning-card-report" key={winner.id}>
+                        <article className="winning-card-report" key={`${winner.id}-${index}`}>
                           <header><span><Trophy size={15} /> Cartón #{winner.cardNumber}</span><b>{winner.patternName}</b></header>
                           <BingoGrid called={called} compact grid={card.grid} pattern={pattern} />
                           <footer><span>{card.sourceFile}{card.sourcePage ? ` · pág. ${card.sourcePage}` : ""}</span><time>{new Date(winner.validatedAt).toLocaleString("es-EC")}</time></footer>
@@ -2381,8 +2400,8 @@ export default function GameConsole() {
                 <section className="panel audit-panel">
                   <div className="panel-heading"><div><span className="eyebrow">TRAZABILIDAD</span><h3>Eventos de la partida</h3></div><ShieldCheck size={20} /></div>
                   <div className="audit-list">
-                    {state.draws.slice(-6).reverse().map((draw) => (
-                      <div key={draw.id}><i /><div><strong>Bolilla {draw.number} registrada</strong><span>Validación automática completada</span></div><time>{new Date(draw.drawnAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</time></div>
+                    {state.draws.slice(-6).reverse().map((draw, index) => (
+                      <div key={`${draw.id}-${index}`}><i /><div><strong>Bolilla {draw.number} registrada</strong><span>Validación automática completada</span></div><time>{new Date(draw.drawnAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</time></div>
                     ))}
                     {!state.draws.length && <EmptyState icon={History} text="Los movimientos aparecerán al comenzar el juego." title="Sin actividad todavía" />}
                   </div>
@@ -2407,7 +2426,7 @@ export default function GameConsole() {
                   <div className="panel-heading"><div><span className="eyebrow">ADMINISTRADORES</span><h3>Administradores adicionales</h3></div><span className="secure-badge"><ShieldCheck size={14} /> Solo propietario</span></div>
                   <div className="admin-manager">
                     <div className="admin-add"><input onChange={(event) => setAdminEmail(event.target.value)} placeholder="correo@ejemplo.com" type="email" value={adminEmail} /><button className="primary-button" disabled={!adminEmail.includes("@") } onClick={() => void manageAdmin("addAdmin", adminEmail)} type="button"><Plus size={16} /> Aprobar administrador</button></div>
-                    {(state.admins ?? []).map((admin) => <div className="admin-row" key={admin.email}><span><strong>{admin.email}</strong><small>Aprobado por {admin.addedBy}</small></span><button className="danger-button compact" onClick={() => window.confirm(`¿Quitar permisos de administrador a ${admin.email}?`) && void manageAdmin("removeAdmin", admin.email)} type="button"><Trash2 size={14} /> Quitar</button></div>)}
+                    {(state.admins ?? []).map((admin, index) => <div className="admin-row" key={`${admin.email}-${index}`}><span><strong>{admin.email}</strong><small>Aprobado por {admin.addedBy}</small></span><button className="danger-button compact" onClick={() => window.confirm(`¿Quitar permisos de administrador a ${admin.email}?`) && void manageAdmin("removeAdmin", admin.email)} type="button"><Trash2 size={14} /> Quitar</button></div>)}
                     {!(state.admins ?? []).length && <small className="admin-empty">Todavía no hay administradores adicionales.</small>}
                   </div>
                 </section>
@@ -2415,8 +2434,8 @@ export default function GameConsole() {
               <section className="panel membership-admin-panel">
                 <div className="panel-heading"><div><span className="eyebrow">SOLICITUDES</span><h3>Control de acceso</h3></div><span className="secure-badge"><ShieldCheck size={14} /> Administrador</span></div>
                 <div className="membership-list">
-                  {(state.memberships ?? []).map((membership) => (
-                    <article key={membership.id}>
+                  {(state.memberships ?? []).map((membership, index) => (
+                    <article key={`${membership.id}-${index}`}>
                       <span className={`membership-status status-${membership.status}`}>{membership.status}</span>
                       <div><strong>{membership.name || "Sin nombre"}</strong><small>{membership.email}</small></div>
                       <div><b>{membership.months || 1} mes(es)</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small>{membership.accessCode && <code className="membership-code">Código: {membership.accessCode}</code>}</div>
@@ -2440,41 +2459,13 @@ export default function GameConsole() {
       </section>
 
       <AnimatePresence>
-        {manualOpen && (
-          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
-            <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal manual-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
-              <header><div><span className="eyebrow">{editingCardId ? "EDICIÓN DE CARTÓN" : "INGRESO MANUAL"}</span><h2>{editingCardId ? "Editar cartón" : "Crear un cartón"}</h2></div><button className="icon-button" onClick={closeCardEditor} type="button"><X size={19} /></button></header>
-              <div className="manual-layout">
-                <div className="manual-fields">
-                  <label>Número del cartón<input onChange={(event) => setManualNumber(event.target.value)} placeholder="Ej. A-001" value={manualNumber} /></label>
-                  <label>Serie <small>opcional</small><input onChange={(event) => setManualSerial(event.target.value)} placeholder="Ej. LOTE-2026" value={manualSerial} /></label>
-                  <div className="manual-note"><ShieldCheck size={17} /><p><strong>Validación automática</strong>Comprobaremos casillas vacías, duplicados y números fuera de rango.</p></div>
-                  <label className="free-toggle"><input checked={manualGrid[12] === "0"} onChange={(event) => setManualGrid((current) => current.map((value, index) => index === 12 ? (event.target.checked ? "0" : "") : value))} type="checkbox" /><span /><div><strong>Centro libre</strong><small>La casilla central contará como marcada.</small></div></label>
-                </div>
-                <div className="manual-grid">
-                  <div className="manual-bingo-head">{BINGO.map((letter) => <span key={letter}>{letter}</span>)}</div>
-                  <div>
-                    {manualGrid.map((value, index) => (
-                      <input
-                        aria-label={`Casilla ${index + 1}`}
-                        className={index === 12 && value === "0" ? "free" : ""}
-                        disabled={index === 12 && value === "0"}
-                        inputMode="numeric"
-                        key={index}
-                        max="75"
-                        min="1"
-                        onChange={(event) => setManualGrid((current) => current.map((item, cell) => cell === index ? event.target.value.replace(/\D/g, "").slice(0, 2) : item))}
-                        placeholder={index === 12 ? "LIBRE" : "—"}
-                        value={index === 12 && value === "0" ? "LIBRE" : value}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <footer><button className="ghost-button" onClick={closeCardEditor} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveManualCard()} type="button"><Check size={17} /> {editingCardId ? "Guardar cambios" : "Guardar cartón"}</button></footer>
-            </motion.section>
-          </motion.div>
-        )}
+        <CardEditorModal
+          editingCard={editingCardId ? state?.cards.find((c) => c.id === editingCardId) ?? null : null}
+          existingNumbers={new Set((state?.cards ?? []).map((c) => c.number.trim().toLowerCase()))}
+          isOpen={manualOpen}
+          onClose={closeCardEditor}
+          onSave={saveManualCard}
+        />
 
         {patternOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
@@ -2506,10 +2497,10 @@ export default function GameConsole() {
               <h2>¡BINGO!</h2>
               <p>{winnerModal.length > 1 ? `Existen ${winnerModal.length} cartones ganadores.` : "Tenemos un cartón ganador."}</p>
               <div className="winner-details">
-                {winnerModal.map((winner) => {
+                {winnerModal.map((winner, index) => {
                   const card = state.cards.find((item) => item.id === winner.cardId);
                   return (
-                    <div key={winner.id}>
+                    <div key={`win-dtl-${winner.id}-${index}`}>
                       <span>#{winner.cardNumber}</span>
                       <div><strong>{winner.patternName}</strong><small>{card?.sourceFile} {card?.sourcePage ? `· página ${card.sourcePage}` : "· ingreso manual"}</small></div>
                       <time>{new Date(winner.validatedAt).toLocaleTimeString("es-EC")}</time>
@@ -2518,14 +2509,14 @@ export default function GameConsole() {
                 })}
               </div>
               <div className="winner-card-previews">
-                {winnerModal.map((winner) => {
+                {winnerModal.map((winner, index) => {
                   const card = state.cards.find((item) => item.id === winner.cardId);
                   const pattern = card
                     ? [...availablePatterns, COMPACT_CARD_PATTERN].find((item) => item.id === winner.patternId) ??
                       specialCardPatternForGrid(card.grid, card.serial)
                     : null;
                   if (!card) return null;
-                  return <article key={`card-${winner.id}`}><strong>Tab #{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
+                  return <article key={`card-preview-${winner.id}-${index}`}><strong>Tab #{card.number} · {winner.patternName}</strong><BingoGrid called={called} compact grid={card.grid} pattern={pattern ?? undefined} /></article>;
                 })}
               </div>
               <div className="winner-actions">
@@ -2682,8 +2673,8 @@ export default function GameConsole() {
                   <label>Archivo:</label>
                   <select onChange={(e) => setAuditFilterFile(e.target.value)} value={auditFilterFile}>
                     <option value="all">Todos los archivos ({auditLogs.length})</option>
-                    {Array.from(new Set(auditLogs.map((a) => a.file))).map((f) => (
-                      <option key={f} value={f}>{f}</option>
+                    {Array.from(new Set(auditLogs.map((a) => a.file))).map((f, index) => (
+                      <option key={`${f}-${index}`} value={f}>{f}</option>
                     ))}
                   </select>
                 </div>
@@ -2735,8 +2726,8 @@ export default function GameConsole() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredAuditLogs.map((entry) => (
-                        <tr className={`audit-row ${entry.type}`} key={entry.id}>
+                      {filteredAuditLogs.map((entry, index) => (
+                        <tr className={`audit-row ${entry.type}`} key={`audit-${entry.id}-${index}`}>
                           <td className="timestamp-cell">
                             {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                           </td>
@@ -2769,7 +2760,7 @@ export default function GameConsole() {
                                 <small>Números extraídos por el parser:</small>
                                 <div className="grid-snippet-5x5">
                                   {selectedAuditGridSnippet.grid.map((num, i) => (
-                                    <span className={num === 0 ? "free-cell" : num < 1 || num > 75 ? "invalid-cell" : ""} key={i}>
+                                    <span className={num === 0 ? "free-cell" : num < 1 || num > 75 ? "invalid-cell" : ""} key={`snip-${i}`}>
                                       {num === 0 ? "LIBRE" : num}
                                     </span>
                                   ))}
@@ -2888,8 +2879,8 @@ export default function GameConsole() {
 
       <div className="toast-stack">
         <AnimatePresence>
-          {toasts.map((toast) => (
-            <motion.div animate={{ opacity: 1, x: 0 }} className={`toast toast-${toast.tone}`} exit={{ opacity: 0, x: 24 }} initial={{ opacity: 0, x: 24 }} key={toast.id}>
+          {toasts.map((toast, index) => (
+            <motion.div animate={{ opacity: 1, x: 0 }} className={`toast toast-${toast.tone}`} exit={{ opacity: 0, x: 24 }} initial={{ opacity: 0, x: 24 }} key={`toast-${toast.id}-${index}`}>
               {toast.tone === "success" ? <Check size={17} /> : <AlertTriangle size={17} />}
               <span>{toast.message}</span>
               <button onClick={() => setToasts((current) => current.filter((item) => item.id !== toast.id))} type="button"><X size={15} /></button>

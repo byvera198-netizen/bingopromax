@@ -497,3 +497,329 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .template-info-banner { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid rgba(215,255,63,0.2); border-radius: 12px; background: var(--lime-soft); color: var(--text); font-size: 10px; line-height: 1.5; margin-bottom: 16px; }
 .template-info-banner svg { color: var(--lime); flex-shrink: 0; }
 
+/* ==========================================================================
+   Card Editor Modal & Real-Time Bingo Grid Styles
+   ========================================================================== */
+.card-editor-grid-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  padding: 20px;
+}
+
+.card-editor-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 18px;
+  border-right: 1px solid var(--line);
+}
+
+.card-editor-sidebar .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card-editor-sidebar .form-group label {
+  font-size: 11px;
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-editor-sidebar input[type="text"] {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  transition: border-color 0.15s ease;
+}
+
+.card-editor-sidebar input.input-error {
+  border-color: var(--red);
+  background: rgba(255, 124, 112, 0.08);
+}
+
+.field-error-msg {
+  color: var(--red);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.free-toggle-box {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.editor-quick-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.editor-quick-actions .section-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.full-width {
+  width: 100%;
+  justify-content: center;
+}
+
+.danger-text {
+  color: var(--red) !important;
+}
+
+.paste-box-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--lime);
+  border-radius: 10px;
+  background: var(--surface-3);
+  margin-top: 4px;
+}
+
+.paste-box-popover small {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.paste-box-popover textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-family: monospace;
+}
+
+/* Main Grid Column */
+.card-editor-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bingo-header-bar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.bingo-col-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  text-align: center;
+}
+
+.bingo-col-badge .bingo-letter {
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--lime);
+  line-height: 1;
+}
+
+.bingo-col-badge .bingo-range {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.bingo-editor-grid-5x5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.bingo-cell-wrapper {
+  position: relative;
+  aspect-ratio: 1;
+}
+
+.bingo-cell-input {
+  width: 100%;
+  height: 100%;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 800;
+  border-radius: 10px;
+  border: 2px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.bingo-cell-input:focus {
+  outline: none;
+  border-color: var(--lime);
+  box-shadow: 0 0 12px rgba(215, 255, 63, 0.25);
+  background: var(--surface-3);
+}
+
+.bingo-cell-input.cell-free {
+  background: var(--lime-soft);
+  border-color: rgba(215, 255, 63, 0.4);
+  color: var(--lime);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  cursor: not-allowed;
+}
+
+.bingo-cell-input.cell-error-range {
+  border-color: var(--red) !important;
+  background: rgba(255, 124, 112, 0.12) !important;
+  color: #ff9d94 !important;
+}
+
+.bingo-cell-input.cell-error-duplicate {
+  border-color: var(--amber) !important;
+  background: rgba(255, 200, 87, 0.12) !important;
+  color: #ffe099 !important;
+}
+
+.bingo-cell-input.cell-valid {
+  border-color: rgba(119, 232, 201, 0.4);
+  background: rgba(119, 232, 201, 0.06);
+}
+
+.cell-mini-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.cell-mini-badge.badge-err {
+  background: var(--red);
+  color: #fff;
+}
+
+.cell-mini-badge.badge-dup {
+  background: var(--amber);
+  color: #101309;
+}
+
+.cell-mini-badge.badge-ok {
+  background: var(--mint);
+  color: #0b1512;
+}
+
+/* Real-Time Validation Status Box */
+.realtime-validation-panel {
+  margin-top: 6px;
+}
+
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.banner-success {
+  border: 1px solid rgba(119, 232, 201, 0.3);
+  background: rgba(119, 232, 201, 0.08);
+  color: var(--text);
+}
+
+.banner-success svg {
+  color: var(--mint);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.banner-warning {
+  border: 1px solid rgba(255, 200, 87, 0.3);
+  background: rgba(255, 200, 87, 0.08);
+  color: var(--text);
+}
+
+.banner-warning svg {
+  color: var(--amber);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.banner-content strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.banner-content ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.banner-content li.err-text {
+  color: var(--red);
+}
+
+.submit-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 124, 112, 0.4);
+  border-radius: 8px;
+  background: rgba(255, 124, 112, 0.12);
+  color: var(--red);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .card-editor-grid-layout {
+    grid-template-columns: 1fr;
+  }
+  .card-editor-sidebar {
+    padding-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 16px;
+  }
+}
+
+

@@ -3,13 +3,16 @@ import test from "node:test";
 
 import {
   BUILTIN_PATTERNS,
+  autoFixCardGridColumns,
   cardProgress,
+  generateValidBingoGrid,
   isWinningCard,
   numberSheetFormForGrid,
   patternForCard,
   referenceCatalogPatterns,
   specialCardPatternForGrid,
   validateCardGrid,
+  validateCardGridDetailed,
   winningPatternsForCard,
   type BingoCard,
   type BingoPattern,
@@ -838,3 +841,43 @@ test("reconstruye una tabla desde símbolos OCR ubicados por celda", () => {
 
   assert.deepEqual(grid, baseGrid);
 });
+
+test("valida en tiempo real las reglas de columnas BINGO (B:1-15, I:16-30, N:31-45, G:46-60, O:61-75) y detecta duplicados", () => {
+  const validGridStr = generateValidBingoGrid(true);
+  const validResult = validateCardGridDetailed(validGridStr, true);
+  assert.equal(validResult.isValid, true);
+  assert.equal(validResult.errors.length, 0);
+
+  // Introducir error de rango (poner un 25 en la columna B)
+  const invalidRangeGrid = [...validGridStr];
+  invalidRangeGrid[0] = "25"; // B1 es 25 (fuera de 1-15)
+  const invalidRangeResult = validateCardGridDetailed(invalidRangeGrid, true);
+  assert.equal(invalidRangeResult.isValid, false);
+  assert.equal(invalidRangeResult.outOfRangeCells.includes(0), true);
+
+  // Introducir duplicado
+  const duplicateGrid = [...validGridStr];
+  duplicateGrid[1] = "18"; // I1 es 18
+  duplicateGrid[6] = "18"; // I2 es 18
+  const duplicateResult = validateCardGridDetailed(duplicateGrid, true);
+  assert.equal(duplicateResult.isValid, false);
+  assert.equal(duplicateResult.duplicateNumbers.includes(18), true);
+});
+
+test("auto-corrige columnas transponiendo números fuera de su rango BINGO correspondiente", () => {
+  const misplacedGrid = Array(25).fill("");
+  // Colocar números desordenados
+  misplacedGrid[0] = "18"; // Pertenece a I (16-30)
+  misplacedGrid[1] = "5";  // Pertenece a B (1-15)
+  misplacedGrid[2] = "35"; // Pertenece a N (31-45)
+  misplacedGrid[3] = "55"; // Pertenece a G (46-60)
+  misplacedGrid[4] = "70"; // Pertenece a O (61-75)
+
+  const fixed = autoFixCardGridColumns(misplacedGrid, true);
+  const fixedValidation = validateCardGridDetailed(fixed, true);
+  assert.equal(fixedValidation.outOfRangeCells.length, 0);
+  // Al menos B1 debe ser 5 y I1 debe ser 18
+  assert.equal(fixed[0], "5");
+  assert.equal(fixed[1], "18");
+});
+

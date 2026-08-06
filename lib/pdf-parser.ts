@@ -2467,13 +2467,12 @@ async function recognizeDetectedGrids(
   pageNumber: number,
 ) {
   const detected: DetectedGrid[] = [];
+  const isPortraitSheet = source.height > source.width;
   const isFourCardPortraitSheet =
-    source.height > source.width &&
-    rectangles.length === 4 &&
-    rectangles.every((item) => item.score >= 65);
+    isPortraitSheet && rectangles.length >= 4;
   const eligibleRectangles = isFourCardPortraitSheet
-    ? rectangles
-    : rectangles.filter((item) => item.score >= 80);
+    ? rectangles.slice(0, 4)
+    : rectangles.filter((item) => item.score >= 65);
   const firstRectangleTop = Math.min(
     ...eligibleRectangles.map((item) => item.y / source.height),
   );
@@ -3185,8 +3184,14 @@ export function specialPageLayoutFromOcrText(
   if (
     isPortrait &&
     rectangleCount >= 4 &&
-    firstTop >= 0.32 &&
-    (labelText.includes("KEKE") || labelText.includes("HOJA DE NUMERO") || labelText.includes("HOJA DE NUMEROS"))
+    firstTop >= 0.25 &&
+    (
+      labelText.includes("KEKE") ||
+      labelText.includes("HOJA DE NUMERO") ||
+      labelText.includes("HOJA DE NUMEROS") ||
+      labelText.includes("FORMA") ||
+      labelText.includes("COMPLETA")
+    )
   ) {
     return "number-sheet" as const;
   }
