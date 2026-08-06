@@ -108,6 +108,7 @@ export interface AppState {
   access: AccessState;
   memberships?: Membership[];
   admins?: AdminAccount[];
+  auditLogs?: ImportAuditEntry[];
 }
 
 const range = (start: number, end: number) =>
@@ -441,6 +442,18 @@ export function winningPatternsForCard(
   );
 }
 
+export interface ImportAuditEntry {
+  id: string;
+  gameId?: string;
+  timestamp: string;
+  file: string;
+  page?: number;
+  cardIdentifier?: string;
+  type: "error" | "warning" | "duplicate" | "info";
+  reason: string;
+  gridSnippet?: number[];
+}
+
 export function validateCardGrid(grid: number[]) {
   const errors: string[] = [];
   const isSpecialCard = grid.length >= 5 && grid.length < 25;
@@ -449,12 +462,31 @@ export function validateCardGrid(grid: number[]) {
   }
   const nonFree = grid.filter((number) => number !== 0);
   if (nonFree.some((number) => !Number.isInteger(number) || number < 1 || number > 75)) {
-    errors.push("Los números deben estar entre 1 y 75.");
+    const invalidValues = nonFree.filter((n) => !Number.isInteger(n) || n < 1 || n > 75);
+    errors.push(`Los números deben estar entre 1 y 75 (valores inválidos: ${invalidValues.join(", ")}).`);
   }
-  if (new Set(nonFree).size !== nonFree.length) errors.push("El cartón contiene números repetidos.");
+  if (new Set(nonFree).size !== nonFree.length) {
+    const counts = new Map<number, number>();
+    nonFree.forEach((n) => counts.set(n, (counts.get(n) ?? 0) + 1));
+    const dupes = Array.from(counts.entries()).filter(([, c]) => c > 1).map(([n]) => n);
+    errors.push(`El cartón contiene números repetidos (${dupes.join(", ")}).`);
+  }
   const ranges = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
-  if (grid.length === 25 && grid.some((number, index) => number !== 0 && (number < ranges[index % 5][0] || number > ranges[index % 5][1]))) {
-    errors.push("Las columnas deben respetar los rangos B, I, N, G y O.");
+  const colLetters = ["B", "I", "N", "G", "O"];
+  if (grid.length === 25) {
+    const invalidCols: string[] = [];
+    grid.forEach((number, index) => {
+      if (number !== 0) {
+        const colIdx = index % 5;
+        const [minVal, maxVal] = ranges[colIdx];
+        if (number < minVal || number > maxVal) {
+          invalidCols.push(`Columna ${colLetters[colIdx]} (valor ${number} fuera de ${minVal}-${maxVal})`);
+        }
+      }
+    });
+    if (invalidCols.length > 0) {
+      errors.push(`Inconsistencia en columnas BINGO: ${invalidCols.join("; ")}.`);
+    }
   }
   return errors;
 }

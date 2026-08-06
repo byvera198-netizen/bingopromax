@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { validateCardGrid, type BingoCard, type BingoPattern, type Game, type Membership, type Winner } from "@/lib/bingo";
+import { validateCardGrid, type BingoCard, type BingoPattern, type Game, type ImportAuditEntry, type Membership, type Winner } from "@/lib/bingo";
 
 export const dynamic = "force-dynamic";
 
@@ -369,7 +369,7 @@ export async function GET(request: Request) {
       )
       .bind(game.id, access.email)
       .run();
-    const [cardRows, drawRows, winnerRows, patternRows, gamePatternRows, removedPatternRows, fileRows] = await Promise.all([
+    const [cardRows, drawRows, winnerRows, patternRows, gamePatternRows, removedPatternRows, fileRows, auditRows] = await Promise.all([
       db.prepare("SELECT * FROM cards WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM draws WHERE game_id = ? ORDER BY drawn_at ASC").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM winners WHERE game_id = ? ORDER BY validated_at DESC").bind(game.id).all<Record<string, unknown>>(),
@@ -382,6 +382,7 @@ export async function GET(request: Request) {
       db.prepare("SELECT pattern_id, enabled FROM game_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT pattern_id FROM removed_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
       db.prepare("SELECT * FROM files WHERE game_id = ? ORDER BY created_at DESC").bind(game.id).all<Record<string, unknown>>(),
+      db.prepare("SELECT * FROM audit_logs WHERE game_id = ? ORDER BY created_at DESC LIMIT 300").bind(game.id).all<Record<string, unknown>>(),
     ]);
 
     const membershipRows = access.role === "admin"
@@ -443,6 +444,25 @@ export async function GET(request: Request) {
         cards: Number(row.cards),
         createdAt: String(row.created_at),
       })),
+      auditLogs: (auditRows.results ?? []).map((row) => {
+        let entry: Partial<ImportAuditEntry> = {};
+        try {
+          entry = JSON.parse(String(row.detail));
+        } catch {
+          entry = { reason: String(row.detail) };
+        }
+        return {
+          id: String(row.id),
+          gameId: row.game_id ? String(row.game_id) : undefined,
+          timestamp: String(row.created_at),
+          file: entry.file ?? "Sistema",
+          page: entry.page,
+          cardIdentifier: entry.cardIdentifier,
+          type: (entry.type as ImportAuditEntry["type"]) ?? (String(row.action).includes("ERROR") ? "error" : "info"),
+          reason: entry.reason ?? String(row.detail),
+          gridSnippet: entry.gridSnippet,
+        };
+      }),
       access,
       memberships: (membershipRows.results ?? []).map((row) => mapMembership(row, true)),
       admins: (adminRows.results ?? []).map((row) => ({
@@ -686,8 +706,55 @@ export async function POST(request: Request) {
           ),
         );
       }
+      const clientAuditEntries = (body.auditEntries ?? []) as ImportAuditEntry[];
+      if (Array.isArray(clientAuditEntries) && clientAuditEntries.length > 0) {
+        for (const entry of clientAuditEntries) {
+          await db
+            .prepare(
+              "INSERT INTO audit_logs (id, game_id, action, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(
+              entry.id || crypto.randomUUID(),
+              gameId,
+              `IMPORT_${entry.type.toUpperCase()}`,
+              JSON.stringify(entry),
+              actor,
+              entry.timestamp || now(),
+            )
+            .run();
+        }
+      }
       await audit(db, gameId, "IMPORT_CARDS", `${accepted.length} guardados; ${duplicates} duplicados`, actor);
       return Response.json({ accepted: accepted.length, duplicates });
+    }
+
+    if (action === "saveAuditLogs") {
+      const entries = (body.entries ?? []) as ImportAuditEntry[];
+      if (gameId && Array.isArray(entries)) {
+        for (const entry of entries) {
+          await db
+            .prepare(
+              "INSERT INTO audit_logs (id, game_id, action, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(
+              entry.id || crypto.randomUUID(),
+              gameId,
+              `IMPORT_${entry.type.toUpperCase()}`,
+              JSON.stringify(entry),
+              actor,
+              entry.timestamp || now(),
+            )
+            .run();
+        }
+      }
+      return Response.json({ ok: true });
+    }
+
+    if (action === "clearAuditLogs") {
+      if (gameId) {
+        await db.prepare("DELETE FROM audit_logs WHERE game_id = ?").bind(gameId).run();
+      }
+      return Response.json({ ok: true });
     }
 
     if (action === "saveDraw") {

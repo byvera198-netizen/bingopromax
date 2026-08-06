@@ -3,7 +3,9 @@
 import {
   NUMBER_SHEET_FORM_CELLS,
   numberSheetFormForGrid,
+  validateCardGrid,
   type BingoCard,
+  type ImportAuditEntry,
   type NumberSheetForm,
 } from "./bingo";
 
@@ -103,6 +105,7 @@ export interface PdfParseResult {
   cards: BingoCard[];
   pages: number;
   warnings: string[];
+  auditEntries?: ImportAuditEntry[];
 }
 
 export interface GridRectangle {
@@ -4054,6 +4057,7 @@ export async function parseBingoPdf(
   const pageCount = pdf.numPages;
   const cards: BingoCard[] = [];
   const warnings: string[] = [];
+  const auditEntries: ImportAuditEntry[] = [];
   let ocrWorker: OcrWorker | null = null;
 
   try {
@@ -4091,16 +4095,59 @@ export async function parseBingoPdf(
           ocrWorker ??= await createOcrWorker();
           pageCards = await runOcr(page, ocrWorker, file.name, pageNumber);
         } catch (error) {
-          warnings.push(
-            `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
-          );
+          const errMsg = `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`;
+          warnings.push(errMsg);
+          auditEntries.push({
+            id: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            file: file.name,
+            page: pageNumber,
+            type: "error",
+            reason: errMsg,
+          });
         }
       }
 
       if (!pageCards.length) {
-        warnings.push(
-          `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`,
-        );
+        const warnMsg = `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`;
+        warnings.push(warnMsg);
+        auditEntries.push({
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          file: file.name,
+          page: pageNumber,
+          type: "warning",
+          reason: warnMsg,
+        });
+      } else {
+        for (const card of pageCards) {
+          const gridErrors = validateCardGrid(card.grid);
+          if (gridErrors.length > 0) {
+            const cause = `Página ${pageNumber}, Cartón ${card.number}: Falló la validación de cuadrícula (${gridErrors.join("; ")}).`;
+            warnings.push(cause);
+            auditEntries.push({
+              id: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              file: file.name,
+              page: pageNumber,
+              cardIdentifier: card.number,
+              type: "error",
+              reason: cause,
+              gridSnippet: card.grid,
+            });
+          } else {
+            auditEntries.push({
+              id: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              file: file.name,
+              page: pageNumber,
+              cardIdentifier: card.number,
+              type: "info",
+              reason: `Página ${pageNumber}, Cartón ${card.number}: Parsing completado y validado correctamente.`,
+              gridSnippet: card.grid,
+            });
+          }
+        }
       }
       cards.push(...pageCards);
       page.cleanup();
@@ -4118,7 +4165,7 @@ export async function parseBingoPdf(
   });
   const reconciledCards = reconcileTwoCardPageNumbers(cards);
   const numberedCards = assignSequentialCardNumbers(reconciledCards);
-  return { cards: numberedCards, pages: pageCount, warnings };
+  return { cards: numberedCards, pages: pageCount, warnings, auditEntries };
 }
 
 export async function parseBingoImage(
@@ -4130,23 +4177,67 @@ export async function parseBingoImage(
   onProgress({ page: 1, pages: 1, stage: "Aplicando OCR", percent: 30 });
   const worker = await createOcrWorker();
   const warnings: string[] = [];
+  const auditEntries: ImportAuditEntry[] = [];
   let cards: BingoCard[] = [];
   try {
     cards = await runOcrCanvas(canvas, worker, file.name, 1);
   } catch (error) {
-    warnings.push(
-      `La imagen no pudo reconocerse (${error instanceof Error ? error.message : "error desconocido"}).`,
-    );
+    const errMsg = `La imagen no pudo reconocerse (${error instanceof Error ? error.message : "error desconocido"}).`;
+    warnings.push(errMsg);
+    auditEntries.push({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      file: file.name,
+      page: 1,
+      type: "error",
+      reason: errMsg,
+    });
   } finally {
     await worker.terminate().catch(() => undefined);
   }
   if (!cards.length) {
-    warnings.push(
-      "No se encontró un formato de bingo válido. Procura que la fotografía esté derecha, enfocada y muestre el cartón completo.",
-    );
+    const warnMsg = "No se encontró un formato de bingo válido. Procura que la fotografía esté derecha, enfocada y muestre el cartón completo.";
+    warnings.push(warnMsg);
+    auditEntries.push({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      file: file.name,
+      page: 1,
+      type: "warning",
+      reason: warnMsg,
+    });
+  } else {
+    for (const card of cards) {
+      const gridErrors = validateCardGrid(card.grid);
+      if (gridErrors.length > 0) {
+        const cause = `Cartón ${card.number}: Falló la validación de cuadrícula (${gridErrors.join("; ")}).`;
+        warnings.push(cause);
+        auditEntries.push({
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          file: file.name,
+          page: 1,
+          cardIdentifier: card.number,
+          type: "error",
+          reason: cause,
+          gridSnippet: card.grid,
+        });
+      } else {
+        auditEntries.push({
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          file: file.name,
+          page: 1,
+          cardIdentifier: card.number,
+          type: "info",
+          reason: `Cartón ${card.number}: Reconocimiento OCR validado correctamente.`,
+          gridSnippet: card.grid,
+        });
+      }
+    }
   }
   onProgress({ page: 1, pages: 1, stage: "Validando", percent: 100 });
-  return { cards: assignSequentialCardNumbers(cards), pages: 1, warnings };
+  return { cards: assignSequentialCardNumbers(cards), pages: 1, warnings, auditEntries };
 }
 
 export async function parseBingoImportFile(

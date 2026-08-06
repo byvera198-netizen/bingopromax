@@ -3,16 +3,22 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   Award,
   Bookmark,
   Camera,
   Check,
+  CheckCircle2,
   ChevronRight,
   CircleGauge,
+  ClipboardList,
   Clock3,
+  Copy,
   Download,
+  Eye,
+  FileCode,
   FileSpreadsheet,
   FileText,
   Gamepad2,
@@ -69,6 +75,7 @@ import {
   type Membership,
   type ShapePreset,
   type Winner,
+  type ImportAuditEntry,
 } from "@/lib/bingo";
 import {
   isSupportedBingoImportFile,
@@ -447,6 +454,12 @@ export default function GameConsole() {
   const [activationCode, setActivationCode] = useState("");
   const [membershipMonths, setMembershipMonths] = useState<Record<string, number>>({});
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
+  const [auditLogs, setAuditLogs] = useState<ImportAuditEntry[]>([]);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [auditFilterFile, setAuditFilterFile] = useState<string>("all");
+  const [auditFilterType, setAuditFilterType] = useState<string>("all");
+  const [auditSearch, setAuditSearch] = useState<string>("");
+  const [selectedAuditGridSnippet, setSelectedAuditGridSnippet] = useState<{ id: string; grid: number[] } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const importBusyRef = useRef(false);
@@ -488,6 +501,9 @@ export default function GameConsole() {
       if (!response.ok) throw new Error(payload.error || "No se pudo abrir la partida.");
       setState(payload);
       setAccess(payload.access);
+      if (payload.auditLogs) {
+        setAuditLogs(payload.auditLogs);
+      }
       if (!silent) {
         setGameDraft({
           name: payload.game.name,
@@ -1171,6 +1187,7 @@ export default function GameConsole() {
     setProcessingFiles(true);
     setImportWarnings([]);
     const warnings: string[] = [];
+    const newAuditEntries: ImportAuditEntry[] = [];
     const existingFingerprints = new Set(state.cards.map(importedCardFingerprint));
     const existingNumbers = new Set(state.cards.map((c) => c.number.trim().toLowerCase()));
     const targetGameId = state.game.id;
@@ -1182,6 +1199,7 @@ export default function GameConsole() {
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
+        const currentFileAudits: ImportAuditEntry[] = [...(parsed.auditEntries ?? [])];
         const currentFileCards = parsed.cards.filter((card) => card.sourceFile === file.name);
         if (currentFileCards.length !== parsed.cards.length) {
           throw new Error(`${file.name}: se descartó un resultado que no pertenecía al archivo seleccionado.`);
@@ -1191,6 +1209,16 @@ export default function GameConsole() {
           const fingerprint = importedCardFingerprint(rawCard);
           if (existingFingerprints.has(fingerprint)) {
             duplicateCount += 1;
+            currentFileAudits.push({
+              id: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              file: file.name,
+              page: rawCard.sourcePage ?? 1,
+              cardIdentifier: rawCard.number,
+              type: "duplicate",
+              reason: `Cartón ${rawCard.number}: Omitido por duplicidad (ya registrado previamente en la partida).`,
+              gridSnippet: rawCard.grid,
+            });
             continue;
           }
           const card = { ...rawCard };
@@ -1213,25 +1241,46 @@ export default function GameConsole() {
         const uniqueCards = newCards;
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: todos los cartones ya estaban cargados en esta partida.`);
-          continue;
+          currentFileAudits.push({
+            id: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            file: file.name,
+            page: 1,
+            type: "warning",
+            reason: `${file.name}: Todos los cartones extraídos ya figuraban como cargados en esta partida.`,
+          });
         }
         const result = await api<{ accepted: number; duplicates: number }>({
           action: "saveCards",
           gameId: targetGameId,
           importSource: file.name,
           cards: uniqueCards,
+          auditEntries: currentFileAudits,
         });
         imported += result.accepted;
         duplicateCount += result.duplicates;
+        newAuditEntries.push(...currentFileAudits);
       }
       await refresh();
       setImportWarnings(warnings);
+      if (newAuditEntries.length) {
+        setAuditLogs((prev) => [...newAuditEntries, ...prev]);
+      }
       if (imported) notify(`${imported} cartones importados correctamente.`);
       if (duplicateCount) notify(`${duplicateCount} elementos duplicados fueron omitidos.`, "warning");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
       warnings.push(message);
       setImportWarnings(warnings);
+      const errEntry: ImportAuditEntry = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        file: files[0]?.name ?? "Importación",
+        type: "error",
+        reason: `Fallo durante el procesamiento del archivo: ${message}`,
+      };
+      setAuditLogs((prev) => [errEntry, ...prev]);
+      api({ action: "saveAuditLogs", gameId: targetGameId, entries: [errEntry] }).catch(() => undefined);
       notify(message, "error");
     } finally {
       importBusyRef.current = false;
@@ -1576,6 +1625,22 @@ export default function GameConsole() {
           ).progress.progress,
       );
   }, [allPatterns, called, search, state]);
+
+  const filteredAuditLogs = useMemo(() => {
+    return auditLogs.filter((entry) => {
+      if (auditFilterFile !== "all" && entry.file !== auditFilterFile) return false;
+      if (auditFilterType !== "all" && entry.type !== auditFilterType) return false;
+      if (auditSearch.trim()) {
+        const q = auditSearch.trim().toLowerCase();
+        const matchFile = entry.file.toLowerCase().includes(q);
+        const matchCard = (entry.cardIdentifier ?? "").toLowerCase().includes(q);
+        const matchReason = entry.reason.toLowerCase().includes(q);
+        const matchPage = String(entry.page ?? "").includes(q);
+        if (!matchFile && !matchCard && !matchReason && !matchPage) return false;
+      }
+      return true;
+    });
+  }, [auditLogs, auditFilterFile, auditFilterType, auditSearch]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -1974,8 +2039,18 @@ export default function GameConsole() {
           {view === "cards" && (
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
-                <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Cartones de la partida.</h2><p>Importa PDFs, imágenes o fotografías; también puedes completar una tabla manualmente.</p></div>
-                <button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button>
+                <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Cartones de la partida.</h2><p>Importa PDFs, imágenes o fotografías; también puedes ingresar cartones manualmente.</p></div>
+                <div className="flex-gap-sm">
+                  <button className="secondary-button" onClick={() => setAuditModalOpen(true)} type="button">
+                    <ClipboardList size={17} /> Auditoría de Importación
+                    {auditLogs.some((a) => a.type === "error" || a.type === "warning") && (
+                      <span className="audit-badge-pill">
+                        {auditLogs.filter((a) => a.type === "error" || a.type === "warning").length}
+                      </span>
+                    )}
+                  </button>
+                  <button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button>
+                </div>
               </div>
               <input
                 accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.bmp,.gif,.avif,.heic,.heif"
@@ -2036,7 +2111,18 @@ export default function GameConsole() {
               {importWarnings.length > 0 && (
                 <section className="warning-box">
                   <AlertTriangle size={19} />
-                  <div><strong>Revisión de la última importación</strong>{importWarnings.slice(0, 8).map((warning) => <p key={warning}>{warning}</p>)}</div>
+                  <div style={{ flex: 1 }}>
+                    <strong>Revisión de la última importación</strong>
+                    {importWarnings.slice(0, 5).map((warning) => <p key={warning}>{warning}</p>)}
+                    <button
+                      className="secondary-button compact"
+                      style={{ marginTop: 8 }}
+                      onClick={() => setAuditModalOpen(true)}
+                      type="button"
+                    >
+                      <ClipboardList size={14} /> Abrir Panel de Auditoría completo ({auditLogs.length} registros)
+                    </button>
+                  </div>
                   <button onClick={() => setImportWarnings([])} type="button"><X size={17} /></button>
                 </section>
               )}
@@ -2551,6 +2637,249 @@ export default function GameConsole() {
               <footer>
                 <button className="ghost-button" onClick={() => setConfirmModal(null)} type="button">Cancelar</button>
                 <button className="danger-button" onClick={() => void confirmModal.onConfirm()} type="button">{confirmModal.confirmText || "Confirmar"}</button>
+              </footer>
+            </motion.section>
+          </motion.div>
+        )}
+
+        {auditModalOpen && (
+          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
+            <motion.section animate={{ opacity: 1, scale: 1 }} className="modal wide-modal audit-modal" exit={{ opacity: 0, scale: 0.98 }} initial={{ opacity: 0, scale: 0.98 }}>
+              <header>
+                <div>
+                  <span className="eyebrow"><ClipboardList size={14} className="inline-icon" /> AUDITORÍA DE IMPORTACIÓN</span>
+                  <h2>Panel de Auditoría de Importación</h2>
+                  <p>Detalle de validación, errores de parsing y causas de rechazo registradas durante la carga de archivos PDF e imágenes.</p>
+                </div>
+                <button className="icon-button" onClick={() => setAuditModalOpen(false)} type="button"><X size={19} /></button>
+              </header>
+
+              <div className="audit-kpi-grid">
+                <div className="audit-kpi-card">
+                  <span>Total registros</span>
+                  <strong>{auditLogs.length}</strong>
+                </div>
+                <div className="audit-kpi-card error">
+                  <span><AlertCircle size={14} /> Errores</span>
+                  <strong>{auditLogs.filter((a) => a.type === "error").length}</strong>
+                </div>
+                <div className="audit-kpi-card warning">
+                  <span><AlertTriangle size={14} /> Advertencias</span>
+                  <strong>{auditLogs.filter((a) => a.type === "warning").length}</strong>
+                </div>
+                <div className="audit-kpi-card duplicate">
+                  <span><FileCode size={14} /> Duplicados</span>
+                  <strong>{auditLogs.filter((a) => a.type === "duplicate").length}</strong>
+                </div>
+                <div className="audit-kpi-card success">
+                  <span><CheckCircle2 size={14} /> Correctos</span>
+                  <strong>{auditLogs.filter((a) => a.type === "info").length}</strong>
+                </div>
+              </div>
+
+              <div className="audit-filters-bar">
+                <div className="filter-group">
+                  <label>Archivo:</label>
+                  <select onChange={(e) => setAuditFilterFile(e.target.value)} value={auditFilterFile}>
+                    <option value="all">Todos los archivos ({auditLogs.length})</option>
+                    {Array.from(new Set(auditLogs.map((a) => a.file))).map((f) => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="filter-group">
+                  <label>Estado:</label>
+                  <select onChange={(e) => setAuditFilterType(e.target.value)} value={auditFilterType}>
+                    <option value="all">Todos los estados</option>
+                    <option value="error">🔴 Errores ({auditLogs.filter((a) => a.type === "error").length})</option>
+                    <option value="warning">🟡 Advertencias ({auditLogs.filter((a) => a.type === "warning").length})</option>
+                    <option value="duplicate">🟧 Duplicados ({auditLogs.filter((a) => a.type === "duplicate").length})</option>
+                    <option value="info">🟢 Correctos ({auditLogs.filter((a) => a.type === "info").length})</option>
+                  </select>
+                </div>
+
+                <div className="search-group">
+                  <Search size={15} />
+                  <input
+                    onChange={(e) => setAuditSearch(e.target.value)}
+                    placeholder="Buscar por número, página o causa..."
+                    type="text"
+                    value={auditSearch}
+                  />
+                  {auditSearch && (
+                    <button className="ghost-button icon-only" onClick={() => setAuditSearch("")} type="button">
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="audit-table-container">
+                {filteredAuditLogs.length === 0 ? (
+                  <div className="empty-audit">
+                    <ClipboardList size={38} />
+                    <p>{auditLogs.length === 0 ? "No hay registros de auditoría de importación en esta partida." : "No hay registros que coincidan con los filtros seleccionados."}</p>
+                  </div>
+                ) : (
+                  <table className="audit-table">
+                    <thead>
+                      <tr>
+                        <th>Hora</th>
+                        <th>Archivo</th>
+                        <th>Pág.</th>
+                        <th>Cartón / ID</th>
+                        <th>Estado</th>
+                        <th>Causa exacta / Detalle de validación</th>
+                        <th>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAuditLogs.map((entry) => (
+                        <tr className={`audit-row ${entry.type}`} key={entry.id}>
+                          <td className="timestamp-cell">
+                            {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                          </td>
+                          <td className="file-cell" title={entry.file}>{entry.file}</td>
+                          <td className="page-cell">{entry.page ? `Pág. ${entry.page}` : "-"}</td>
+                          <td className="card-id-cell">
+                            <strong>{entry.cardIdentifier || "N/A"}</strong>
+                          </td>
+                          <td className="type-cell">
+                            <span className={`badge-pill badge-${entry.type}`}>
+                              {entry.type === "error" && "🔴 ERROR"}
+                              {entry.type === "warning" && "🟡 ADVERTENCIA"}
+                              {entry.type === "duplicate" && "🟧 DUPLICADO"}
+                              {entry.type === "info" && "🟢 OK"}
+                            </span>
+                          </td>
+                          <td className="reason-cell">
+                            <p style={{ margin: 0 }}>{entry.reason}</p>
+                            {entry.gridSnippet && (
+                              <button
+                                className="text-link-button"
+                                onClick={() => setSelectedAuditGridSnippet(selectedAuditGridSnippet?.id === entry.id ? null : { id: entry.id, grid: entry.gridSnippet! })}
+                                type="button"
+                              >
+                                <Eye size={12} /> {selectedAuditGridSnippet?.id === entry.id ? "Ocultar casillas leídas" : "Ver casillas leídas (5x5)"}
+                              </button>
+                            )}
+                            {selectedAuditGridSnippet?.id === entry.id && (
+                              <div className="audit-grid-preview">
+                                <small>Números extraídos por el parser:</small>
+                                <div className="grid-snippet-5x5">
+                                  {selectedAuditGridSnippet.grid.map((num, i) => (
+                                    <span className={num === 0 ? "free-cell" : num < 1 || num > 75 ? "invalid-cell" : ""} key={i}>
+                                      {num === 0 ? "LIBRE" : num}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="actions-cell">
+                            <div className="flex-gap-sm">
+                              {(entry.type === "error" || entry.type === "warning") && (
+                                <button
+                                  className="secondary-button compact"
+                                  onClick={() => {
+                                    setAuditModalOpen(false);
+                                    setEditingCardId(null);
+                                    setManualNumber(entry.cardIdentifier || "");
+                                    setManualSerial("");
+                                    if (entry.gridSnippet && entry.gridSnippet.length === 25) {
+                                      setManualGrid(entry.gridSnippet.map((n) => String(n)));
+                                    } else {
+                                      setManualGrid(initialGrid);
+                                    }
+                                    setManualOpen(true);
+                                  }}
+                                  title="Abrir formulario para ingresar/corregir cartón"
+                                  type="button"
+                                >
+                                  <PencilLine size={13} /> Corregir
+                                </button>
+                              )}
+                              <button
+                                className="ghost-button icon-only compact"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(`${entry.file} [Pág ${entry.page || 1}] ${entry.cardIdentifier ? `Cartón ${entry.cardIdentifier}: ` : ""}${entry.reason}`);
+                                  notify("Detalle de auditoría copiado.", "success");
+                                }}
+                                title="Copiar causa exacta al portapapeles"
+                                type="button"
+                              >
+                                <Copy size={13} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <footer>
+                <div className="flex-between">
+                  <div className="flex-gap-sm">
+                    {auditLogs.length > 0 && (
+                      <button
+                        className="ghost-button danger-button"
+                        onClick={async () => {
+                          if (confirm("¿Deseas limpiar el registro de auditoría de importación de esta partida?")) {
+                            setAuditLogs([]);
+                            if (state?.game.id) {
+                              await api({ action: "clearAuditLogs", gameId: state.game.id });
+                            }
+                            notify("Auditoría de importación limpiada.");
+                          }
+                        }}
+                        type="button"
+                      >
+                        <Trash2 size={15} /> Limpiar registros
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex-gap-sm">
+                    <button
+                      className="secondary-button"
+                      disabled={!auditLogs.length}
+                      onClick={() => {
+                        const report = auditLogs.map((a) => `[${new Date(a.timestamp).toLocaleString()}] [${a.type.toUpperCase()}] ${a.file} (Pág. ${a.page || 1}) - ${a.cardIdentifier ? `Cartón ${a.cardIdentifier}: ` : ""}${a.reason}`).join("\n");
+                        navigator.clipboard.writeText(report);
+                        notify("Reporte completo copiado al portapapeles.");
+                      }}
+                      type="button"
+                    >
+                      <Copy size={15} /> Copiar reporte
+                    </button>
+
+                    <button
+                      className="secondary-button"
+                      disabled={!auditLogs.length}
+                      onClick={() => {
+                        const report = `AUDITORÍA DE IMPORTACIÓN BINGO PRO\nPartida: ${state?.game.name || "Bingo"}\nFecha: ${new Date().toLocaleString()}\n\n` +
+                          auditLogs.map((a) => `[${new Date(a.timestamp).toLocaleString()}] [${a.type.toUpperCase()}] Archivo: ${a.file} | Pág: ${a.page || 1} | Cartón: ${a.cardIdentifier || "N/A"}\nCausa: ${a.reason}\n${a.gridSnippet ? `Cuadrícula: ${a.gridSnippet.join(",")}\n` : ""}---`).join("\n");
+                        const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `auditoria_importacion_${state?.game.name || "bingo"}.txt`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      type="button"
+                    >
+                      <Download size={15} /> Descargar TXT
+                    </button>
+
+                    <button className="primary-button" onClick={() => setAuditModalOpen(false)} type="button">
+                      Cerrar
+                    </button>
+                  </div>
+                </div>
               </footer>
             </motion.section>
           </motion.div>
