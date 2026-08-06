@@ -1024,12 +1024,12 @@ export function numberSheetMetadataFromOcrText(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  const isDateOrPageOrHeader = /\b(AGO|AGOSTO|ENE|FEB|MAR|ABR|MAY|JUN|JUL|SEP|OCT|NOV|DIC|PAG|PÁG|TAB|SERIAL|FECHA|SORTEO|JUEGO|LETRAS|SUERTE|GORDITO|BINGO)\b/i.test(text);
   const form = rawLines
     .map((line) => {
       const explicit = line.match(/\bFORMA?\w*\s*#?\s*([1359])\b/i)?.[1];
       const trimmed = line.trim();
-      const isDateOrPage = /\b(AGO|AGOSTO|ENE|FEB|MAR|ABR|MAY|JUN|JUL|SEP|OCT|NOV|DIC|PAG|PÁG|TAB|SERIAL)\b/i.test(line);
-      const matchesSingleDigit = /^[1359]$/.test(trimmed) && !isDateOrPage;
+      const matchesSingleDigit = /^[1359]$/.test(trimmed) && !isDateOrPageOrHeader;
       return (explicit ?? (matchesSingleDigit ? trimmed : null)) as NumberSheetForm | null;
     })
     .find((value): value is NumberSheetForm => value !== null) ?? null;
@@ -1058,6 +1058,8 @@ function numberSheetFormsFromIdentifierSeries(
   metadata: Array<NumberSheetMetadata | null>,
 ) {
   if (metadata.length !== 4) return null;
+  const hasExplicitForm = metadata.some((item) => item?.form !== null);
+  if (!hasExplicitForm) return null;
   const parsed = metadata.map((item, index) => {
     const match = item?.identifier?.match(/^(.+)-(\d+)$/);
     return match
