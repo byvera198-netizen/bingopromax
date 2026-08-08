@@ -49,6 +49,7 @@ import type { User } from "@supabase/supabase-js";
 import {
   BUILTIN_PATTERNS,
   COMPACT_CARD_PATTERN,
+  NUMBER_SHEET_PATTERNS,
   cardProgress,
   formatDuration,
   numberSheetFormForGrid,
@@ -699,7 +700,12 @@ export default function GameConsole() {
     [state?.customPatterns, state?.removedPatternIds],
   );
   const specialGamePatterns = useMemo(() => {
-    const patterns = new Map<string, BingoPattern>();
+    const patterns = new Map<string, BingoPattern>(
+      Object.values(NUMBER_SHEET_PATTERNS).map((pattern) => [
+        pattern.id,
+        pattern,
+      ]),
+    );
     for (const card of state?.cards ?? []) {
       const pattern = specialCardPatternForGrid(card.grid, card.serial);
       if (pattern) patterns.set(pattern.id, pattern);

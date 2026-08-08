@@ -680,6 +680,21 @@ test("identifica las cuatro formas especiales 1, 3, 5 y 9", () => {
     const required = new Set<number>(cells);
     const grid = baseGrid.map((value, index) => required.has(index) ? value : 0);
     assert.equal(numberSheetFormForGrid(grid), form);
+    const card: BingoCard = {
+      id: `forma-${form}`,
+      number: `37506-${form}`,
+      serial: `Forma #${form}`,
+      grid,
+      sourceFile: "formas.pdf",
+      sourcePage: 1,
+      status: "active",
+    };
+    const called = new Set(grid.filter((value) => value > 0));
+    const pattern = patternForCard(card, BUILTIN_PATTERNS[0]);
+    assert.equal(pattern.id, `forma-${form}-completa`);
+    assert.equal(isWinningCard(card, called, pattern), true);
+    called.delete(grid[cells[0]]);
+    assert.equal(isWinningCard(card, called, pattern), false);
   }
 });
 
