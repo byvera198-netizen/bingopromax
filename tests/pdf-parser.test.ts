@@ -288,22 +288,35 @@ const verticalPattern: BingoPattern = {
 };
 
 test("conserva exactamente el catálogo de patrones de referencia", () => {
-  assert.equal(BUILTIN_PATTERNS.length, 36);
+  assert.equal(BUILTIN_PATTERNS.length, 38);
   assert.deepEqual(
     BUILTIN_PATTERNS.map((pattern) => pattern.name),
     [
-      "Letra E", "Letra D", "Letra C", "Letra B",
-      "Letra A", "Número 10", "Número 9", "Número 8",
-      "Número 4", "Número 3", "Número 2", "Número 1",
-      "Letra H", "Letra T", "Letra X", "X",
-      "Letra W", "Letra V", "Letra U", "Letra S",
-      "Letra R", "Letra Q", "Letra P", "Letra O",
-      "Letra N", "Letra M", "Letra L", "Letra K",
-      "Letra J", "Letra I", "Letra G", "Letra F",
-      "Letra O", "Tabla llena", "Letra Z", "Letra Y",
+      "Letra A", "Letra B", "Letra C", "Letra D",
+      "Letra E", "Letra EE", "Letra F", "Letra G",
+      "Letra H", "Letra I", "Letra J", "Letra K",
+      "Letra L", "Doble LL", "Letra M", "Letra N",
+      "Letra O", "Letra P", "Letra Q", "Letra R",
+      "Letra S", "Letra T", "Letra U", "Letra V",
+      "Letra W", "Letra X", "Letra Y", "Letra Z",
+      "Número 1", "Número 2", "Número 3", "Número 4",
+      "Número 8", "Número 9", "Número 10", "Número 23",
+      "Número 51", "Tabla llena",
     ],
   );
   assert.ok(BUILTIN_PATTERNS.every((pattern) => pattern.category === "Personalizado"));
+  assert.equal(new Set(BUILTIN_PATTERNS.map((pattern) => pattern.id)).size, 38);
+  assert.equal(BUILTIN_PATTERNS.filter((pattern) => pattern.name === "Letra O").length, 1);
+  assert.equal(BUILTIN_PATTERNS.filter((pattern) => pattern.name === "Letra X").length, 1);
+});
+
+test("conserva las formas nuevas EE, Doble LL, 23 y 51", () => {
+  const cells = (id: string) => BUILTIN_PATTERNS.find((pattern) => pattern.id === id)?.cells;
+
+  assert.deepEqual(cells("letra-ee"), [0, 1, 3, 4, 5, 8, 10, 11, 13, 14, 15, 18, 20, 21, 23, 24]);
+  assert.deepEqual(cells("doble-ll"), [0, 3, 5, 8, 10, 13, 15, 18, 20, 21, 23, 24]);
+  assert.deepEqual(cells("patron-23"), [0, 1, 3, 4, 6, 9, 10, 11, 13, 14, 15, 19, 20, 21, 23, 24]);
+  assert.deepEqual(cells("patron-51"), [0, 1, 4, 5, 8, 9, 10, 11, 14, 16, 19, 20, 21, 23, 24]);
 });
 
 test("oculta patrones ajenos al catálogo y conserva los reemplazos editados", () => {
@@ -311,7 +324,7 @@ test("oculta patrones ajenos al catálogo y conserva los reemplazos editados", (
   const replacement: BingoPattern = {
     ...reference,
     id: `custom-${reference.id}-prueba`,
-    name: "Letra E editada",
+    name: "Letra A editada",
     custom: true,
   };
   const unrelated: BingoPattern = {
