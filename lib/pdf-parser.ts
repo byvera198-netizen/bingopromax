@@ -2398,8 +2398,11 @@ async function recognizeDetectedGrids(
   const firstRectangleTop = Math.min(
     ...eligibleRectangles.map((item) => item.y / source.height),
   );
+  // Las hojas 1-3-5-9 empiezan un poco más arriba que las muestras iniciales
+  // (aprox. 31 % de la página). El umbral anterior de 32 % las trataba como
+  // cartones 5x5 completos y terminaba enviándolas a revisión.
   const likelyNumberSheetPage =
-    eligibleRectangles.length === 4 && firstRectangleTop >= 0.32;
+    eligibleRectangles.length === 4 && firstRectangleTop >= 0.28;
   const printedPortraitFamily = isFourCardPortraitSheet && !likelyNumberSheetPage
     ? await recognizePortraitPageFamily(source, worker)
     : null;
@@ -3141,17 +3144,25 @@ export function specialPageLayoutFromOcrText(
   if (isPortrait && rectangleCount >= 4 && firstTop < 0.32 && gorditoLabelCount >= 1) {
     return "gordito" as const;
   }
+  // Línea y Loco son dos diagramas irregulares. El detector puede encontrar
+  // sus trazos como una o dos cuadrículas, por lo que su reconocimiento no
+  // debe depender de que el conteo de rectángulos sea cero.
+  const hasLineTitle = /(?:^|\s)[1I]\s*LINEA\b/.test(labelText);
+  // El OCR puede omitir el «1» antes de LOCO, pero el título exclusivo
+  // «LLENA EL LOCO» no aparece en el encabezado genérico de otras hojas.
+  const hasLocoTitle =
+    /(?:^|\s)[1I]\s*LOCO\b/.test(labelText) ||
+    labelText.includes("LLENA EL LOCO");
+  if (hasLineTitle && hasLocoTitle) {
+    return "line-loco" as const;
+  }
   if (
     isPortrait &&
     rectangleCount >= 4 &&
-    firstTop >= 0.32 &&
+    firstTop >= 0.28 &&
     (labelText.includes("KEKE") || formaLabelCount >= 2)
   ) {
     return "number-sheet" as const;
-  }
-  if (rectangleCount === 0 &&
-      labelText.includes("LINEA") && labelText.includes("LOCO")) {
-    return "line-loco" as const;
   }
   return null;
 }
@@ -3192,15 +3203,15 @@ const numberSheetExtraCards: SpecialPageCard[] = [
 const lineAndLocoCards: SpecialPageCard[] = [
   {
     suffix: 1,
-    label: "Línea",
+    label: "Linea",
     x: 0.27,
     y: 0.58,
     cells: [
-      cell(0.185, 0.385, [16, 30], 0.065, 0.09), cell(0.350, 0.385, [46, 60], 0.065, 0.09),
-      cell(0.100, 0.497, [1, 15], 0.065, 0.09), cell(0.183, 0.497, [16, 30], 0.065, 0.09), cell(0.266, 0.497, [31, 45], 0.065, 0.09), cell(0.350, 0.497, [46, 60], 0.065, 0.09), cell(0.433, 0.497, [61, 75], 0.065, 0.09),
-      cell(0.185, 0.609, [16, 30], 0.065, 0.09), cell(0.350, 0.609, [46, 60], 0.065, 0.09),
-      cell(0.100, 0.718, [1, 15], 0.065, 0.07), cell(0.183, 0.718, [16, 30], 0.065, 0.07), cell(0.266, 0.718, [31, 45], 0.065, 0.07), cell(0.350, 0.718, [46, 60], 0.065, 0.07), cell(0.433, 0.718, [61, 75], 0.065, 0.07),
-      cell(0.185, 0.833, [16, 30], 0.065, 0.09), cell(0.350, 0.833, [46, 60], 0.065, 0.09),
+      cell(0.197, 0.370, [16, 30], 0.07, 0.09), cell(0.355, 0.370, [46, 60], 0.07, 0.09),
+      cell(0.117, 0.477, [1, 15], 0.07, 0.09), cell(0.197, 0.477, [16, 30], 0.07, 0.09), cell(0.276, 0.477, [31, 45], 0.07, 0.09), cell(0.355, 0.477, [46, 60], 0.07, 0.09), cell(0.435, 0.477, [61, 75], 0.07, 0.09),
+      cell(0.197, 0.583, [16, 30], 0.07, 0.09), cell(0.355, 0.583, [46, 60], 0.07, 0.09),
+      cell(0.117, 0.692, [1, 15], 0.07, 0.08), cell(0.197, 0.692, [16, 30], 0.07, 0.08), cell(0.276, 0.692, [31, 45], 0.07, 0.08), cell(0.355, 0.692, [46, 60], 0.07, 0.08), cell(0.435, 0.692, [61, 75], 0.07, 0.08),
+      cell(0.197, 0.797, [16, 30], 0.07, 0.09), cell(0.355, 0.797, [46, 60], 0.07, 0.09),
     ],
   },
   {
@@ -3209,10 +3220,10 @@ const lineAndLocoCards: SpecialPageCard[] = [
     x: 0.75,
     y: 0.58,
     cells: [
-      cell(0.733, 0.385, [31, 45], 0.065, 0.09),
-      cell(0.581, 0.497, [1, 15], 0.065, 0.09), cell(0.665, 0.497, [16, 30], 0.065, 0.09), cell(0.749, 0.497, [31, 45], 0.065, 0.09), cell(0.827, 0.497, [46, 60], 0.075, 0.09), cell(0.905, 0.497, [61, 75], 0.07, 0.09),
-      cell(0.733, 0.715, [31, 45], 0.065, 0.09),
-      cell(0.665, 0.837, [16, 30], 0.065, 0.09), cell(0.749, 0.837, [31, 45], 0.065, 0.09), cell(0.833, 0.837, [46, 60], 0.065, 0.09),
+      cell(0.724, 0.370, [31, 45], 0.07, 0.09),
+      cell(0.566, 0.477, [1, 15], 0.07, 0.09), cell(0.645, 0.477, [16, 30], 0.07, 0.09), cell(0.724, 0.477, [31, 45], 0.07, 0.09), cell(0.803, 0.477, [46, 60], 0.07, 0.09), cell(0.880, 0.477, [61, 75], 0.07, 0.09),
+      cell(0.724, 0.696, [31, 45], 0.07, 0.09),
+      cell(0.645, 0.796, [16, 30], 0.07, 0.09), cell(0.724, 0.796, [31, 45], 0.07, 0.09), cell(0.803, 0.796, [46, 60], 0.07, 0.09),
     ],
   },
 ];
@@ -3365,6 +3376,56 @@ function familyFromCards(cards: BingoCard[]) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+function gameFamilyFromOcrText(text: string) {
+  // En Línea, Loco y Keke el número maestro aparece como "JUEGO #12345".
+  // Se prioriza sobre teléfonos o anuncios que el OCR también puede leer.
+  const match = text.match(/JUEGO\s*#?\s*([\d\s]{4,20})/i)?.[1];
+  const digits = match?.replace(/\D/g, "") ?? "";
+  return /^\d{4,12}$/.test(digits) ? digits : null;
+}
+
+async function lineLocoFamilyFromPrintedIds(
+  source: HTMLCanvasElement,
+  worker: OcrWorker,
+) {
+  // En estas dos figuras el identificador se imprime debajo de LINEA/LOCO.
+  // El OCR general suele confundirlo con el teléfono publicitario, por eso se
+  // lee solo la franja de los dos identificadores impresos.
+  const candidates = new Map<string, number>();
+  for (const x of [0.27, 0.75]) {
+    for (const height of [0.025, 0.03]) {
+      for (const threshold of [100, 145, 190]) {
+        const target = makeCanvas(600, 180);
+        if (!target) continue;
+        target.context.drawImage(
+          source,
+          (x - 0.075) * source.width,
+          (0.611 - height / 2) * source.height,
+          0.15 * source.width,
+          height * source.height,
+          0,
+          0,
+          target.canvas.width,
+          target.canvas.height,
+        );
+        binarizeNumbers(target.canvas, target.context, threshold, 80);
+        await worker.setParameters({
+          tessedit_char_whitelist: "0123456789-_",
+          tessedit_pageseg_mode: "7",
+          preserve_interword_spaces: "1",
+        });
+        const result = await worker.recognize(target.canvas, {}, { text: true });
+        const family = (result.data.text ?? "").match(/(\d{4,12})(?:\s*[-_]\s*[12])?/)?.[1];
+        if (family) candidates.set(family, (candidates.get(family) ?? 0) + 1);
+      }
+    }
+  }
+  const best = [...candidates.entries()]
+    .filter(([family, count]) => family.length >= 5 && count >= 2)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0];
+  return best?.[0] ?? null;
+}
+
 function repairAscendingSpecialColumns(
   values: number[],
   candidates: number[][],
@@ -3474,6 +3535,178 @@ async function recognizeYapaGridCrop(
   return null;
 }
 
+async function recognizeKnownNumberSheetGrid(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  form: NumberSheetForm,
+  worker: OcrWorker,
+) {
+  const grid = Array(25).fill(0);
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  const requiredCells = form === "9"
+    ? [19, ...NUMBER_SHEET_FORM_CELLS[form].filter((index) => index !== 19)]
+    : NUMBER_SHEET_FORM_CELLS[form];
+  for (const index of requiredCells) {
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const left = rectangle.verticalLines[column] + 5;
+    const top = rectangle.horizontalLines[row] + 5;
+    const width = Math.max(1, rectangle.verticalLines[column + 1] - left - 5);
+    const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 5);
+    const readings = new Map<number, number>();
+    for (const threshold of [100, 145, 195, 225]) {
+      const target = makeCanvas(240, 190);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        left,
+        top,
+        width,
+        height,
+        15,
+        15,
+        210,
+        160,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const value = valueFromCellText(
+        result.data.text ?? "",
+        bingoColumnRanges[column],
+      );
+      if (value !== null) {
+        readings.set(value, (readings.get(value) ?? 0) + 1);
+      }
+    }
+    if (!readings.size) {
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: "7",
+        preserve_interword_spaces: "1",
+      });
+      for (const threshold of [135, 180, 215]) {
+        const target = makeCanvas(420, 280);
+        if (!target) continue;
+        target.context.drawImage(
+          source,
+          left + width * 0.12,
+          top + height * 0.12,
+          width * 0.76,
+          height * 0.76,
+          15,
+          15,
+          390,
+          250,
+        );
+        binarizeNumbers(target.canvas, target.context, threshold);
+        const result = await worker.recognize(target.canvas, {}, { text: true });
+        const value = valueFromCellText(
+          result.data.text ?? "",
+          bingoColumnRanges[column],
+        );
+        if (value !== null) {
+          readings.set(value, (readings.get(value) ?? 0) + 1);
+        }
+      }
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: "8",
+        preserve_interword_spaces: "1",
+      });
+    }
+    const value = [...readings.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]?.[0];
+    grid[index] = value ?? -1;
+  }
+  return grid;
+}
+
+async function recognizeKnownNumberSheetCards(
+  source: HTMLCanvasElement,
+  rectangles: GridRectangle[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+  family: string | null,
+) {
+  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
+  if (ordered.length !== 4) return [];
+  const forms: NumberSheetForm[] = ["1", "3", "5", "9"];
+  const suffixes = [3, 4, 5, 6];
+  const cards: BingoCard[] = [];
+  for (const [index, rectangle] of ordered.entries()) {
+    const form = forms[index];
+    // El detector conserva la fila B-I-N-G-O como la primera franja. Para
+    // las formas 1-3-5-9 esa franja es encabezado, no una fila de números.
+    // Desplazamos las líneas una posición y añadimos el borde inferior real.
+    const nextLine = rectangle.nextHorizontalLine;
+    const bottomDataLines = nextLine
+      ? [
+        ...rectangle.horizontalLines.slice(2),
+        nextLine,
+        // En la fila inferior, el detector se engancha con el borde de la
+        // forma superior. El último borde se calcula desde el espaciado de
+        // filas ya detectado, sin fabricar cifras ni identificadores.
+        nextLine + (nextLine - rectangle.horizontalLines.at(-1)!),
+      ]
+      : null;
+    const dataLines = index < 2
+      ? nextLine
+        ? [...rectangle.horizontalLines.slice(1), nextLine]
+        : null
+      : bottomDataLines;
+    const dataRectangle = dataLines && dataLines.length === 6
+      ? {
+        ...rectangle,
+        y: dataLines[0],
+        height: dataLines[5] - dataLines[0],
+        horizontalLines: dataLines,
+      }
+      : rectangle;
+    const grid = await recognizeKnownNumberSheetGrid(
+      source,
+      dataRectangle,
+      form,
+      worker,
+    );
+    // Cada forma tiene posiciones vacías impresas. La validación comprueba
+    // únicamente sus casillas obligatorias y el rango B-I-N-G-O de cada una.
+    if (!isPlausibleNumberSheetGrid(grid, form)) {
+      // Se conserva la forma, el identificador impreso y toda cifra que sí
+      // pasó la validación. La única celda dudosa queda visible para edición
+      // en la revisión previa; así nunca se omite ni se inventa un cartón.
+      cards.push({
+        id: crypto.randomUUID(),
+        number: family
+          ? `${family}-${suffixes[index]}`
+          : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${suffixes[index]}`,
+        serial: `Forma #${form} · pendiente de revisión`,
+        grid,
+        sourceFile: fileName,
+        sourcePage: pageNumber,
+        status: "active",
+      });
+      continue;
+    }
+    cards.push({
+      id: crypto.randomUUID(),
+      number: family
+        ? `${family}-${suffixes[index]}`
+        : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${suffixes[index]}`,
+      serial: `Forma #${form}`,
+      grid,
+      sourceFile: fileName,
+      sourcePage: pageNumber,
+      status: "active",
+    });
+  }
+  return cards;
+}
+
 async function recognizeSpecialPageCards(
   source: HTMLCanvasElement,
   rectangles: GridRectangle[],
@@ -3486,7 +3719,9 @@ async function recognizeSpecialPageCards(
   const firstTop = ordered[0]?.y / source.height;
   const isPortrait = source.height > source.width;
   const mayContainSpecialCards =
-    (isPortrait && ordered.length >= 4) ||
+    // Línea/Loco puede dejar solo dos rectángulos detectables; la validación
+    // posterior por etiquetas y cifras impide confundirlo con una hoja común.
+    (isPortrait && ordered.length >= 2) ||
     ordered.length === 0;
   if (!mayContainSpecialCards) return [];
 
@@ -3532,9 +3767,26 @@ async function recognizeSpecialPageCards(
   const symbols = result.data.blocks?.length
     ? flattenOcrSymbols(ocrWords(result.data.blocks))
     : [];
-  const family =
-    familyFromCards(detectedCards) ??
-    identifierFamilyFromOcrText(result.data.text ?? "");
+  const lineLocoFamily = specialLayout === "line-loco"
+    ? await lineLocoFamilyFromPrintedIds(source, worker)
+    : null;
+  const family = specialLayout === "line-loco"
+    ? lineLocoFamily
+    : gameFamilyFromOcrText(result.data.text ?? "") ??
+      familyFromCards(detectedCards) ??
+      identifierFamilyFromOcrText(result.data.text ?? "");
+  const hasCompleteNumberSheet =
+    detectedCards.filter((card) => numberSheetFormForGrid(card.grid) !== null).length === 4;
+  const numberSheetCards = specialLayout === "number-sheet" && !hasCompleteNumberSheet
+    ? await recognizeKnownNumberSheetCards(
+      source,
+      rectangles,
+      worker,
+      fileName,
+      pageNumber,
+      family,
+    )
+    : [];
   const cards: BingoCard[] = [];
   for (const layout of layouts) {
     const directValues = layout.label === "Yapa"
@@ -3600,7 +3852,7 @@ async function recognizeSpecialPageCards(
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
-  return cards;
+  return [...cards, ...numberSheetCards];
 }
 
 export async function runOcrCanvas(
@@ -3707,7 +3959,14 @@ export async function runOcrCanvas(
     pageNumber,
   );
   if (detectedCards.length || specialCards.length) {
-    return orderCardsByPdfPosition([...detectedCards, ...specialCards]);
+    const hasRecoveredNumberSheet =
+      specialCards.some((card) => card.serial.startsWith("Forma #"));
+    // Si las cuatro formas se recuperaron con la geometría impresa, los
+    // marcadores "Pendiente" del primer OCR son sustituidos, no duplicados.
+    const primaryCards = hasRecoveredNumberSheet
+      ? detectedCards.filter((card) => !needsImportReview(card))
+      : detectedCards;
+    return orderCardsByPdfPosition([...primaryCards, ...specialCards]);
   }
   if (!rectangles.some((rectangle) => rectangle.score >= 80)) {
     const compactRectangles = detectCompactRectangles(
