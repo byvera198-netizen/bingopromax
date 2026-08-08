@@ -76,6 +76,7 @@ import {
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
+type CardTypeFilter = "all" | "bom-bom-bum" | "eche-leche" | "yapa" | "number-sheet";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
 type ImportPreview = {
   cards: BingoCard[];
@@ -87,6 +88,31 @@ type ImportPreview = {
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
 const WHATSAPP_NUMBER = "593985280991";
+const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
+  { id: "all", label: "Todos" },
+  { id: "bom-bom-bum", label: "Bom Bom Bum" },
+  { id: "eche-leche", label: "Eche Leche" },
+  { id: "yapa", label: "Yapa" },
+  { id: "number-sheet", label: "Números 1 · 3 · 5 · 9" },
+];
+
+function cardType(card: BingoCard): CardTypeFilter | "other" {
+  if (card.grid.length === 8) return "bom-bom-bum";
+  if (card.grid.length === 7) return "eche-leche";
+  if (card.grid.length === 9) return "yapa";
+  if (numberSheetFormForGrid(card.grid)) return "number-sheet";
+  return "other";
+}
+
+function cardTypeLabel(card: BingoCard) {
+  const type = cardType(card);
+  if (type === "bom-bom-bum") return "Bom Bom Bum";
+  if (type === "eche-leche") return "Eche Leche";
+  if (type === "yapa") return "Yapa";
+  if (type === "number-sheet") return `Número ${numberSheetFormForGrid(card.grid)}`;
+  if (card.grid.length === 5) return "Sabrosito";
+  return card.serial || (card.grid.length === 25 ? "Cartón 5×5" : "Cartón especial");
+}
 
 function deviceId() {
   const key = "bingo-device-id";
@@ -163,6 +189,7 @@ function BingoGrid({
   grid,
   called,
   pattern,
+  specialLabel,
   compact = false,
   editable = false,
   selected = [],
@@ -172,6 +199,7 @@ function BingoGrid({
   grid?: number[];
   called?: Set<number>;
   pattern?: BingoPattern;
+  specialLabel?: string;
   compact?: boolean;
   editable?: boolean;
   selected?: number[];
@@ -181,7 +209,7 @@ function BingoGrid({
   if (grid && grid.length !== 25) {
     return (
       <div className={`compact-card-grid ${compact ? "compact" : ""} ${showPending ? "" : "hide-pending"}`}>
-        <span className="compact-card-title">{grid.length === 5 ? "SABROSITO" : "CARTÓN ESPECIAL"}</span>
+        <span className="compact-card-title">{specialLabel ?? (grid.length === 5 ? "SABROSITO" : "CARTÓN ESPECIAL")}</span>
         <div className="compact-number-grid">
           {grid.map((value, index) => {
             const marked = Boolean(called?.has(value));
@@ -296,6 +324,8 @@ function CardPreview({
   onToggleStatus,
   onDelete,
   onEditNumber,
+  onSelect,
+  selected = false,
   showCalled = true,
   showPattern = true,
   showPending = true,
@@ -308,6 +338,8 @@ function CardPreview({
   onToggleStatus: (card: BingoCard) => void;
   onDelete?: (card: BingoCard) => void;
   onEditNumber?: (card: BingoCard) => void;
+  onSelect?: (card: BingoCard) => void;
+  selected?: boolean;
   showCalled?: boolean;
   showPattern?: boolean;
   showPending?: boolean;
@@ -322,13 +354,14 @@ function CardPreview({
     new Set(disabledPatternIds),
   );
   return (
-    <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
+    <article className={`ticket ${card.status === "void" ? "ticket-void" : ""} ${selected ? "ticket-selected" : ""}`}>
       <header>
         <div>
           <span>Tabla</span>
           <strong>Tab #{card.number}</strong>
         </div>
         <div className="ticket-actions">
+          {onSelect && <button aria-pressed={selected} className={`icon-button small select-card-button ${selected ? "active" : ""}`} title={selected ? "Quitar de la selección" : "Seleccionar cartón"} type="button" onClick={() => onSelect(card)}><Check size={15} /></button>}
           {onEditNumber && <button className="icon-button small" title="Editar cartón" type="button" onClick={() => onEditNumber(card)}><PencilLine size={15} /></button>}
           <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>
             <MoreHorizontal size={17} />
@@ -351,6 +384,7 @@ function CardPreview({
         grid={card.grid}
         called={showCalled ? called : new Set<number>()}
         pattern={showPattern ? nearest.pattern : undefined}
+        specialLabel={cardTypeLabel(card).toUpperCase()}
         compact
         showPending={showPending}
       />
@@ -427,6 +461,8 @@ export default function GameConsole() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [winnerModal, setWinnerModal] = useState<Winner[]>([]);
   const [search, setSearch] = useState("");
+  const [cardTypeFilter, setCardTypeFilter] = useState<CardTypeFilter>("all");
+  const [selectedCardIds, setSelectedCardIds] = useState<Set<string>>(() => new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [nowTick, setNowTick] = useState(0);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -1169,6 +1205,62 @@ export default function GameConsole() {
     setManualOpen(true);
   };
 
+  const toggleCardSelection = (card: BingoCard) => {
+    setSelectedCardIds((current) => {
+      const next = new Set(current);
+      if (next.has(card.id)) next.delete(card.id);
+      else next.add(card.id);
+      return next;
+    });
+  };
+
+  const disableSelectedCards = async () => {
+    if (!state) return;
+    const ids = [...selectedCardIds].filter((id) =>
+      state.cards.some((card) => card.id === id && card.status === "active"),
+    );
+    if (!ids.length) {
+      notify("No hay cartones activos seleccionados para inhabilitar.", "warning");
+      return;
+    }
+    if (!window.confirm(`¿Inhabilitar los ${ids.length} cartones seleccionados?`)) return;
+    try {
+      await api({ action: "updateCardStatusBulk", gameId: state.game.id, cardIds: ids, status: "void" });
+      const idSet = new Set(ids);
+      setState({
+        ...state,
+        cards: state.cards.map((card) => idSet.has(card.id) ? { ...card, status: "void" } : card),
+      });
+      setSelectedCardIds(new Set());
+      notify(`${ids.length} cartones inhabilitados.`, "warning");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudieron inhabilitar los cartones.", "error");
+    }
+  };
+
+  const deleteSelectedCards = async () => {
+    if (!state) return;
+    const ids = [...selectedCardIds].filter((id) => state.cards.some((card) => card.id === id));
+    if (!ids.length) {
+      notify("Selecciona al menos un cartón para eliminar.", "warning");
+      return;
+    }
+    if (!window.confirm(`¿Eliminar definitivamente los ${ids.length} cartones seleccionados?`)) return;
+    try {
+      await api({ action: "deleteCards", gameId: state.game.id, cardIds: ids });
+      const idSet = new Set(ids);
+      setState({
+        ...state,
+        cards: state.cards.filter((card) => !idSet.has(card.id)),
+        winners: state.winners.filter((winner) => !idSet.has(winner.cardId)),
+      });
+      setSelectedCardIds(new Set());
+      notify(`${ids.length} cartones eliminados.`, "warning");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudieron eliminar los cartones.", "error");
+    }
+  };
+
   const saveImportPreview = async () => {
     if (!state || !importPreview) return;
     const invalidCards = importPreview.cards.filter((card) =>
@@ -1563,10 +1655,11 @@ export default function GameConsole() {
     return state.cards
       .filter(
         (card) =>
-          !term ||
-        card.number.toLowerCase().includes(term) ||
-        card.sourceFile.toLowerCase().includes(term) ||
-        card.serial?.toLowerCase().includes(term),
+          (cardTypeFilter === "all" || cardType(card) === cardTypeFilter) &&
+          (!term ||
+            card.number.toLowerCase().includes(term) ||
+            card.sourceFile.toLowerCase().includes(term) ||
+            card.serial?.toLowerCase().includes(term)),
       )
       .sort(
         (a, b) =>
@@ -1585,7 +1678,18 @@ export default function GameConsole() {
             new Set(state.disabledPatternIds),
           ).progress.progress,
       );
-  }, [allPatterns, called, search, state]);
+  }, [allPatterns, called, cardTypeFilter, search, state]);
+
+  const allFilteredCardsSelected = filteredCards.length > 0 && filteredCards.every((card) => selectedCardIds.has(card.id));
+
+  const toggleVisibleCardSelection = () => {
+    setSelectedCardIds((current) => {
+      const next = new Set(current);
+      if (allFilteredCardsSelected) filteredCards.forEach((card) => next.delete(card.id));
+      else filteredCards.forEach((card) => next.add(card.id));
+      return next;
+    });
+  };
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -2063,6 +2167,19 @@ export default function GameConsole() {
                 <button aria-pressed={cardLayers.pending} className={cardLayers.pending ? "active" : ""} onClick={() => setCardLayers((current) => ({ ...current, pending: !current.pending }))} type="button"><i /> Pendientes</button>
                 <b><Activity size={13} /> Sincronización en vivo cada 4 s</b>
               </div>
+              <div className="card-bulk-toolbar" aria-label="Filtros y acciones masivas de cartones">
+                <div className="card-type-filters">
+                  {CARD_TYPE_FILTERS.map((filter) => (
+                    <button aria-pressed={cardTypeFilter === filter.id} className={cardTypeFilter === filter.id ? "active" : ""} key={filter.id} onClick={() => setCardTypeFilter(filter.id)} type="button">{filter.label}</button>
+                  ))}
+                </div>
+                <div className="card-bulk-actions">
+                  <button className={allFilteredCardsSelected ? "active" : ""} disabled={!filteredCards.length} onClick={toggleVisibleCardSelection} type="button"><Check size={14} /> {allFilteredCardsSelected ? "Quitar visibles" : "Seleccionar visibles"}</button>
+                  {selectedCardIds.size > 0 && <span>{selectedCardIds.size} seleccionados</span>}
+                  <button disabled={!selectedCardIds.size} onClick={() => void disableSelectedCards()} type="button"><X size={14} /> Inhabilitar</button>
+                  <button className="danger" disabled={!selectedCardIds.size} onClick={() => void deleteSelectedCards()} type="button"><Trash2 size={14} /> Eliminar</button>
+                </div>
+              </div>
               {filteredCards.length ? (
                 <div className="ticket-grid">
                   {filteredCards.map((card) => (
@@ -2073,11 +2190,13 @@ export default function GameConsole() {
                       key={card.id}
                       onDelete={deleteCard}
                       onEditNumber={openCardEditor}
+                      onSelect={toggleCardSelection}
                       onToggleStatus={toggleCardStatus}
                       patterns={allPatterns}
                       showCalled={cardLayers.called}
                       showPattern={cardLayers.pattern}
                       showPending={cardLayers.pending}
+                      selected={selectedCardIds.has(card.id)}
                       wins={state.winners.filter((winner) => winner.cardId === card.id)}
                     />
                   ))}

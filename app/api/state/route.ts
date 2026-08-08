@@ -803,6 +803,28 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "deleteCards") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const cardIds = [...new Set(
+        (Array.isArray(body.cardIds) ? body.cardIds : [])
+          .map((cardId) => String(cardId).trim())
+          .filter(Boolean),
+      )];
+      if (!cardIds.length) return Response.json({ error: "No se seleccionaron cartones." }, { status: 400 });
+      const chunks = Array.from({ length: Math.ceil(cardIds.length / 50) }, (_, index) => cardIds.slice(index * 50, index * 50 + 50));
+      await db.batch(
+        chunks.flatMap((chunk) => {
+          const placeholders = chunk.map(() => "?").join(", ");
+          return [
+            db.prepare(`DELETE FROM winners WHERE game_id = ? AND card_id IN (${placeholders})`).bind(gameId, ...chunk),
+            db.prepare(`DELETE FROM cards WHERE game_id = ? AND id IN (${placeholders})`).bind(gameId, ...chunk),
+          ];
+        }),
+      );
+      await audit(db, gameId, "DELETE_CARDS_BULK", String(cardIds.length), actor);
+      return Response.json({ deleted: cardIds.length });
+    }
+
     if (action === "updateCardNumber") {
       if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
       const cardId = String(body.cardId ?? "");
@@ -864,6 +886,26 @@ export async function POST(request: Request) {
       await db.prepare("UPDATE cards SET status = ? WHERE id = ?").bind(status, cardId).run();
       await audit(db, gameId, "CARD_STATUS", `${cardId}: ${status}`, actor);
       return Response.json({ ok: true });
+    }
+
+    if (action === "updateCardStatusBulk") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const cardIds = [...new Set(
+        (Array.isArray(body.cardIds) ? body.cardIds : [])
+          .map((cardId) => String(cardId).trim())
+          .filter(Boolean),
+      )];
+      if (!cardIds.length) return Response.json({ error: "No se seleccionaron cartones." }, { status: 400 });
+      const status = body.status === "void" ? "void" : "active";
+      const chunks = Array.from({ length: Math.ceil(cardIds.length / 50) }, (_, index) => cardIds.slice(index * 50, index * 50 + 50));
+      await db.batch(
+        chunks.map((chunk) => {
+          const placeholders = chunk.map(() => "?").join(", ");
+          return db.prepare(`UPDATE cards SET status = ? WHERE game_id = ? AND id IN (${placeholders})`).bind(status, gameId, ...chunk);
+        }),
+      );
+      await audit(db, gameId, "CARD_STATUS_BULK", `${status}: ${cardIds.length}`, actor);
+      return Response.json({ updated: cardIds.length });
     }
 
     if (action === "recordWinners") {
