@@ -68,6 +68,7 @@ import {
 } from "@/lib/bingo";
 import {
   isSupportedBingoImportFile,
+  needsImportReview,
   parseBingoImportFile,
   type PdfParseProgress,
 } from "@/lib/pdf-parser";
@@ -75,6 +76,12 @@ import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
+type ImportPreview = {
+  cards: BingoCard[];
+  files: number;
+  pages: number;
+  warnings: string[];
+};
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
@@ -114,15 +121,6 @@ async function api<T>(body: Record<string, unknown>): Promise<T> {
   }
   if (!response.ok) throw new Error(payload.error || "No se pudo completar la operación.");
   return payload;
-}
-
-function importedCardFingerprint(card: Pick<BingoCard, "grid" | "serial" | "sourceFile" | "sourcePage">) {
-  return [
-    card.sourceFile.trim().toLowerCase(),
-    card.sourcePage,
-    card.serial.trim().toLowerCase(),
-    card.grid.join(","),
-  ].join("|");
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -399,6 +397,7 @@ export default function GameConsole() {
   const [ballBoardOpen, setBallBoardOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [editingPreviewCardId, setEditingPreviewCardId] = useState<string | null>(null);
   const [patternOpen, setPatternOpen] = useState(false);
   const [gameOpen, setGameOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -415,6 +414,7 @@ export default function GameConsole() {
   const [processingFiles, setProcessingFiles] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [manualNumber, setManualNumber] = useState("");
   const [manualSerial, setManualSerial] = useState("");
   const [manualGrid, setManualGrid] = useState(initialGrid);
@@ -1008,12 +1008,42 @@ export default function GameConsole() {
     const grid = manualGrid.map((value) => Number(value));
     const errors = validateCardGrid(grid);
     if (!manualNumber.trim()) errors.unshift("Asigna un número al cartón.");
-    if (state.cards.some((card) => card.id !== editingCardId && card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
+    const duplicateInGame = state.cards.some((card) => card.id !== editingCardId && card.number.toLowerCase() === manualNumber.trim().toLowerCase());
+    const duplicateInPreview = importPreview?.cards.some((card) =>
+      card.id !== editingPreviewCardId &&
+      card.number.toLowerCase() === manualNumber.trim().toLowerCase(),
+    );
+    if (duplicateInGame || duplicateInPreview) {
       errors.unshift("Ya existe un cartón con ese número.");
     }
     if (errors.length) {
       setImportWarnings(errors);
       notify(errors[0], "warning");
+      return;
+    }
+    if (editingPreviewCardId) {
+      const currentPreviewCard = importPreview?.cards.find((card) => card.id === editingPreviewCardId);
+      if (!currentPreviewCard) return;
+      const updated = {
+        ...currentPreviewCard,
+        number: manualNumber.trim(),
+        serial: manualSerial.trim(),
+        grid,
+      };
+      setImportPreview((current) => current
+        ? {
+            ...current,
+            cards: current.cards.map((card) => card.id === updated.id ? updated : card),
+          }
+        : current,
+      );
+      setManualOpen(false);
+      setEditingPreviewCardId(null);
+      setManualNumber("");
+      setManualSerial("");
+      setManualGrid(initialGrid);
+      setImportWarnings([]);
+      notify(`Cartón #${updated.number} corregido en la vista previa.`);
       return;
     }
     const currentCard = editingCardId
@@ -1042,6 +1072,7 @@ export default function GameConsole() {
       }
       setManualOpen(false);
       setEditingCardId(null);
+      setEditingPreviewCardId(null);
       setManualNumber("");
       setManualSerial("");
       setManualGrid(initialGrid);
@@ -1049,6 +1080,68 @@ export default function GameConsole() {
       notify(currentCard ? `Cartón #${card.number} actualizado.` : `Cartón #${card.number} guardado.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el cartón.", "error");
+    }
+  };
+
+  const openPreviewCardEditor = (card: BingoCard) => {
+    if (card.grid.length !== 25) {
+      const number = window.prompt("Número impreso del cartón:", card.number)?.trim();
+      if (!number || number === card.number) return;
+      setImportPreview((current) => current
+        ? { ...current, cards: current.cards.map((item) => item.id === card.id ? { ...item, number } : item) }
+        : current,
+      );
+      return;
+    }
+    setEditingCardId(null);
+    setEditingPreviewCardId(card.id);
+    setManualNumber(card.number.startsWith("SIN-ID-") ? "" : card.number);
+    setManualSerial(card.serial ?? "");
+    setManualGrid(card.grid.map((value) => value > 0 ? String(value) : value === 0 ? "0" : ""));
+    setManualOpen(true);
+  };
+
+  const saveImportPreview = async () => {
+    if (!state || !importPreview) return;
+    const invalidCards = importPreview.cards.filter((card) =>
+      needsImportReview(card) || validateCardGrid(card.grid).length > 0,
+    );
+    if (invalidCards.length) {
+      setImportWarnings([`Hay ${invalidCards.length} cartón(es) pendiente(s). Corrige o retira cada uno antes de guardar.`]);
+      notify("Corrige los cartones pendientes antes de guardar.", "warning");
+      return;
+    }
+    const existingNumbers = new Set(state.cards.map((card) => card.number.trim().toLowerCase()));
+    const numbers = importPreview.cards.map((card) => card.number.trim().toLowerCase());
+    const duplicates = numbers.filter((number, index) => existingNumbers.has(number) || numbers.indexOf(number) !== index);
+    if (duplicates.length) {
+      setImportWarnings([`Identificadores duplicados: ${[...new Set(duplicates)].join(", ")}. Corrígelos antes de guardar.`]);
+      notify("Hay identificadores duplicados en la vista previa.", "warning");
+      return;
+    }
+    try {
+      let imported = 0;
+      const byFile = new Map<string, BingoCard[]>();
+      importPreview.cards.forEach((card) => {
+        byFile.set(card.sourceFile, [...(byFile.get(card.sourceFile) ?? []), card]);
+      });
+      for (const [sourceFile, cards] of byFile) {
+        const result = await api<{ accepted: number }>({
+          action: "saveCards",
+          gameId: state.game.id,
+          importSource: sourceFile,
+          cards,
+        });
+        imported += result.accepted;
+      }
+      await refresh();
+      setImportPreview(null);
+      setImportWarnings([]);
+      notify(`${imported} cartones guardados correctamente.`);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "No se pudo guardar la importación.";
+      setImportWarnings([message]);
+      notify(message, "error");
     }
   };
 
@@ -1067,46 +1160,25 @@ export default function GameConsole() {
     setProcessingFiles(true);
     setImportWarnings([]);
     const warnings: string[] = [];
-    const existingFingerprints = new Set(state.cards.map(importedCardFingerprint));
-    const targetGameId = state.game.id;
-    let imported = 0;
-    let duplicateCount = 0;
+    const cards: BingoCard[] = [];
+    let pages = 0;
     try {
       for (const file of files) {
         const parsed = await parseBingoImportFile(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
+        pages += parsed.pages;
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const currentFileCards = parsed.cards.filter((card) => card.sourceFile === file.name);
-        if (currentFileCards.length !== parsed.cards.length) {
-          throw new Error(`${file.name}: se descartó un resultado que no pertenecía al archivo seleccionado.`);
-        }
-        const newCards = currentFileCards.filter((card) => {
-          if (existingFingerprints.has(importedCardFingerprint(card))) {
-            duplicateCount += 1;
-            return false;
-          }
-          existingFingerprints.add(importedCardFingerprint(card));
-          return true;
-        });
-        const uniqueCards = newCards;
-        if (!uniqueCards.length) {
-          warnings.push(`${file.name}: todos los cartones ya estaban cargados en esta partida.`);
-          continue;
-        }
-        const result = await api<{ accepted: number; duplicates: number }>({
-          action: "saveCards",
-          gameId: targetGameId,
-          importSource: file.name,
-          cards: uniqueCards,
-        });
-        imported += result.accepted;
-        duplicateCount += result.duplicates;
+        cards.push(...parsed.cards);
       }
-      await refresh();
+      if (!cards.length) throw new Error("No se detectaron cartones en los archivos seleccionados.");
+      const pending = cards.filter(needsImportReview).length;
+      setImportPreview({ cards, files: files.length, pages, warnings });
       setImportWarnings(warnings);
-      if (imported) notify(`${imported} cartones importados correctamente.`);
-      if (duplicateCount) notify(`${duplicateCount} elementos duplicados fueron omitidos.`, "warning");
+      notify(
+        `${cards.length} cartones detectados en ${pages} página(s). ${pending ? `${pending} requieren revisión.` : "Revisa y confirma antes de guardar."}`,
+        pending ? "warning" : "success",
+      );
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
       warnings.push(message);
@@ -1186,6 +1258,7 @@ export default function GameConsole() {
       return;
     }
     setEditingCardId(card.id);
+    setEditingPreviewCardId(null);
     setManualNumber(card.number);
     setManualSerial(card.serial ?? "");
     setManualGrid(card.grid.map(String));
@@ -1195,6 +1268,7 @@ export default function GameConsole() {
   const closeCardEditor = () => {
     setManualOpen(false);
     setEditingCardId(null);
+    setEditingPreviewCardId(null);
     setManualNumber("");
     setManualSerial("");
     setManualGrid(initialGrid);
@@ -1874,7 +1948,7 @@ export default function GameConsole() {
                 ) : (
                   <>
                     <span className="upload-icon"><UploadCloud size={29} /></span>
-                    <div><strong>Suelta aquí PDFs o imágenes de bingo</strong><p>Reconocemos tablas 5×5, Sabrosito y hojas de números; la aplicación asigna Tab #1, Tab #2 y continúa la secuencia.</p></div>
+                    <div><strong>Suelta aquí PDFs o imágenes de bingo</strong><p>Reconocemos tablas 5×5, Sabrosito y hojas de números; revisa cada cartón antes de guardarlo.</p></div>
                     <div className="upload-actions">
                       <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar archivos</button>
                       <button className="secondary-button" onClick={() => cameraInputRef.current?.click()} type="button"><Camera size={15} /> Usar cámara</button>
@@ -2080,6 +2154,36 @@ export default function GameConsole() {
       </section>
 
       <AnimatePresence>
+        {importPreview && (
+          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
+            <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal import-preview-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
+              <header>
+                <div><span className="eyebrow">REVISIÓN ANTES DE GUARDAR</span><h2>Cartones detectados</h2></div>
+                <button className="icon-button" onClick={() => setImportPreview(null)} type="button"><X size={19} /></button>
+              </header>
+              <div className="import-preview-summary">
+                <b>{importPreview.files} archivo(s)</b><b>{importPreview.pages} página(s)</b><b>{importPreview.cards.length} cartón(es)</b><b>{importPreview.cards.filter(needsImportReview).length} pendientes</b>
+              </div>
+              <p className="import-preview-note">Confirma la numeración impresa, el tipo de juego y las casillas. Los archivos originales se descartan al cerrar esta revisión y no se guardan en la base de datos.</p>
+              <div className="import-preview-list">
+                {importPreview.cards.map((card) => {
+                  const pending = needsImportReview(card) || validateCardGrid(card.grid).length > 0;
+                  return (
+                    <article className={pending ? "import-preview-card pending" : "import-preview-card"} key={card.id}>
+                      <div><strong>{card.number.startsWith("SIN-ID-") ? "Número pendiente" : `Tab #${card.number}`}</strong><small>{card.serial || "Cartón 5×5"} · pág. {card.sourcePage} · {card.sourceFile}</small></div>
+                      <span className={pending ? "preview-status pending" : "preview-status"}>{pending ? "Revisión requerida" : "Listo para guardar"}</span>
+                      <div className="import-preview-actions">
+                        <button className="secondary-button compact" onClick={() => openPreviewCardEditor(card)} type="button"><PencilLine size={14} /> Editar</button>
+                        <button className="ghost-button compact danger-button" onClick={() => setImportPreview((current) => current ? { ...current, cards: current.cards.filter((item) => item.id !== card.id) } : current)} type="button"><Trash2 size={14} /> Quitar</button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <footer><button className="ghost-button" onClick={() => setImportPreview(null)} type="button">Cancelar</button><button className="primary-button" disabled={!importPreview.cards.length} onClick={() => void saveImportPreview()} type="button"><Check size={17} /> Guardar cartones confirmados</button></footer>
+            </motion.section>
+          </motion.div>
+        )}
         {manualOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal manual-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>

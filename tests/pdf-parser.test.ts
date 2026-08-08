@@ -29,6 +29,8 @@ import {
   identifierFamilyFromOcrText,
   identifiersForDetectedGrids,
   isSupportedBingoImportFile,
+  needsImportReview,
+  validateBingoImportFileContent,
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
   reconcileTwoCardPageNumbers,
@@ -72,6 +74,15 @@ test("acepta PDF e imágenes compatibles para importación y cámara", () => {
   assert.equal(isSupportedBingoImportFile({ name: "foto.JPG", type: "" }), true);
   assert.equal(isSupportedBingoImportFile({ name: "captura.webp", type: "image/webp" }), true);
   assert.equal(isSupportedBingoImportFile({ name: "notas.txt", type: "text/plain" }), false);
+});
+
+test("valida el contenido real y no solo la extensión del archivo", async () => {
+  const pdf = new File([new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d])], "cartones.pdf", { type: "application/pdf" });
+  assert.equal(await validateBingoImportFileContent(pdf), "pdf");
+  const fakePdf = new File(["esto no es un PDF"], "cartones.pdf", { type: "application/pdf" });
+  await assert.rejects(() => validateBingoImportFileContent(fakePdf), /PDF válido/);
+  const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], "carton.png", { type: "image/png" });
+  assert.equal(await validateBingoImportFileContent(image), "image");
 });
 
 test("no confunde una hoja clásica de cuatro cartones con juegos especiales", () => {
@@ -780,6 +791,39 @@ test("detecta cuatro cartones aunque el escaneo deforme progresivamente las fila
   assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [24, 500, 24, 500]);
   assert.ok(rectangles.slice(0, 2).every((rectangle) => Math.abs(rectangle.y - 230) <= 3));
   assert.ok(rectangles.slice(2).every((rectangle) => Math.abs(rectangle.y - 680) <= 3));
+});
+
+test("detecta cuadrículas impresas con tinta naranja", () => {
+  const width = 700;
+  const height = 700;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const orange = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 205;
+    pixels[offset + 1] = 92;
+    pixels[offset + 2] = 16;
+    pixels[offset + 3] = 255;
+  };
+  const lines = [90, 180, 270, 360, 450, 540];
+  for (const x of lines) for (let y = lines[0]; y <= lines[5]; y += 1) orange(x, y);
+  for (const y of lines) for (let x = lines[0]; x <= lines[5]; x += 1) orange(x, y);
+
+  const rectangles = detectGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 1);
+  assert.deepEqual(rectangles[0].verticalLines, lines);
+  assert.deepEqual(rectangles[0].horizontalLines, lines);
+});
+
+test("marca un cartón sin identificador o con lectura incompleta para revisión", () => {
+  assert.equal(needsImportReview({
+    id: "pending", number: "SIN-ID-001-1", serial: "", grid: baseGrid,
+    sourceFile: "lote.pdf", sourcePage: 1, status: "active",
+  }), true);
+  assert.equal(needsImportReview({
+    id: "complete", number: "71248-1", serial: "", grid: baseGrid,
+    sourceFile: "lote.pdf", sourcePage: 1, status: "active",
+  }), false);
 });
 
 test("detecta los ocho cartones compactos de una hoja escaneada", () => {

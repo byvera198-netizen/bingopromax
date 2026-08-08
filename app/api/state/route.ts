@@ -565,6 +565,15 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
+      const pendingIdentifiers = cards.filter((card) =>
+        card.number.trim().startsWith("SIN-ID-"),
+      );
+      if (pendingIdentifiers.length) {
+        return Response.json(
+          { error: "Hay cartones sin numeración impresa confirmada. Corrige su número en la vista previa antes de guardarlos." },
+          { status: 400 },
+        );
+      }
       const existing = await db
         .prepare("SELECT number FROM cards WHERE game_id = ?")
         .bind(gameId)
@@ -572,23 +581,23 @@ export async function POST(request: Request) {
       const numbers = new Set(
         (existing.results ?? []).map((row) => row.number.trim().toLowerCase()),
       );
-      let renamed = 0;
-      const accepted = cards.flatMap((card) => {
-        if (validateCardGrid(card.grid).length > 0) return [];
-        const original = card.number.trim();
-        let candidate = original.startsWith("SIN-ID-") ? "" : original;
-        if (!candidate) candidate = String(numbers.size + 1);
-        if (numbers.has(candidate.toLowerCase())) {
-          const base = candidate;
-          let suffix = 2;
-          while (numbers.has(`${base}-${suffix}`.toLowerCase())) suffix += 1;
-          candidate = `${base}-${suffix}`;
-          renamed += 1;
-        }
-        numbers.add(candidate.toLowerCase());
-        return [{ ...card, number: candidate }];
-      });
-      const duplicates = cards.length - accepted.length;
+      const invalid = cards.filter((card) => validateCardGrid(card.grid).length > 0);
+      if (invalid.length) {
+        return Response.json(
+          { error: "Hay cartones con números o posiciones inválidas. Corrígelos antes de guardarlos." },
+          { status: 400 },
+        );
+      }
+      const duplicates = cards
+        .map((card) => card.number.trim().toLowerCase())
+        .filter((number, index, all) => numbers.has(number) || all.indexOf(number) !== index);
+      if (duplicates.length) {
+        return Response.json(
+          { error: `Ya existe el identificador ${[...new Set(duplicates)].join(", ")}. Corrige el duplicado antes de guardar.` },
+          { status: 409 },
+        );
+      }
+      const accepted = cards.map((card) => ({ ...card, number: card.number.trim() }));
       if (accepted.length) {
         await db.batch(
           accepted.map((card) =>
@@ -616,10 +625,10 @@ export async function POST(request: Request) {
         db,
         gameId,
         "IMPORT_CARDS",
-        `${accepted.length} guardados; ${duplicates} invÃ¡lidos; ${renamed} renumerados`,
+        `${accepted.length} guardados; ${invalid.length} inválidos; 0 renumerados`,
         actor,
       );
-      return Response.json({ accepted: accepted.length, duplicates, renamed });
+      return Response.json({ accepted: accepted.length, duplicates: 0, renamed: 0 });
     }
 
     if (action === "saveDraw") {

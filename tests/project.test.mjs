@@ -28,8 +28,8 @@ test("aísla cada selección de archivos durante la importación", async () => {
   const stateRoute = await read("app/api/state/route.ts");
 
   assert.match(page, /importBusyRef\.current/);
-  assert.match(page, /card\.sourceFile === file\.name/);
-  assert.match(page, /importSource: file\.name/);
+  assert.match(page, /byFile\.set\(card\.sourceFile/);
+  assert.match(page, /importSource: sourceFile/);
   assert.match(stateRoute, /cards\.some\(\(card\) => card\.sourceFile !== importSource\)/);
 });
 

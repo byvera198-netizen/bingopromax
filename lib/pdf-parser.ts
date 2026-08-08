@@ -105,6 +105,13 @@ export interface PdfParseResult {
   warnings: string[];
 }
 
+export function needsImportReview(card: BingoCard) {
+  return (
+    card.number.startsWith("SIN-ID-") ||
+    card.grid.some((value) => !Number.isInteger(value) || value < 0)
+  );
+}
+
 export interface GridRectangle {
   x: number;
   y: number;
@@ -220,23 +227,38 @@ export function detectGridRectangles(
   width: number,
   height: number,
 ) {
-  const isDark = (x: number, y: number) => {
+  const isGridInk = (x: number, y: number) => {
     const offset = (y * width + x) * 4;
     const red = rgba[offset];
     const green = rgba[offset + 1];
     const blue = rgba[offset + 2];
-    return red * 0.3 + green * 0.59 + blue * 0.11 < 112;
+    const luminance = red * 0.3 + green * 0.59 + blue * 0.11;
+    // Los cartones impresos no siempre usan tinta negra. Las hojas reales
+    // contienen cuadrículas naranjas o azules que antes se confundían con el
+    // fondo y no llegaban a la fase de OCR.
+    const orangeInk =
+      red >= 120 &&
+      red > green * 1.22 &&
+      green > blue * 1.12 &&
+      red - blue >= 65 &&
+      green < 205;
+    const blueInk =
+      blue >= 90 &&
+      blue > red * 1.18 &&
+      blue > green * 1.08 &&
+      blue - red >= 55;
+    return luminance < 112 || orangeInk || blueInk;
   };
   const horizontal = groupLineBands(
     Array.from({ length: height }, (_, y) => ({
       position: y,
-      strength: longestDarkRun(width, (x) => isDark(x, y), 3),
+      strength: longestDarkRun(width, (x) => isGridInk(x, y), 3),
     })).filter((line) => line.strength >= width * 0.16),
   );
   const vertical = groupLineBands(
     Array.from({ length: width }, (_, x) => ({
       position: x,
-      strength: longestDarkRun(height, (y) => isDark(x, y), 3),
+      strength: longestDarkRun(height, (y) => isGridInk(x, y), 3),
     })).filter((line) => line.strength >= height * 0.1),
   );
   const horizontalSequences = lineSequences(horizontal, height);
@@ -258,7 +280,7 @@ export function detectGridRectangles(
             for (let offsetX = -radius; offsetX <= radius; offsetX += 1) {
               const sampleX = Math.max(0, Math.min(width - 1, x + offsetX));
               const sampleY = Math.max(0, Math.min(height - 1, y + offsetY));
-              if (isDark(sampleX, sampleY)) {
+              if (isGridInk(sampleX, sampleY)) {
                 found = true;
                 break;
               }
@@ -272,7 +294,7 @@ export function detectGridRectangles(
         verticalLines.reduce((sum, x) => {
           let darkPixels = 0;
           for (let y = horizontalLines[0]; y <= horizontalLines[5]; y += 1) {
-            if (isDark(x, y)) darkPixels += 1;
+            if (isGridInk(x, y)) darkPixels += 1;
           }
           return sum + darkPixels / Math.max(1, rectangleHeight);
         }, 0) / 6;
@@ -280,7 +302,7 @@ export function detectGridRectangles(
         horizontalLines.reduce((sum, y) => {
           let darkPixels = 0;
           for (let x = verticalLines[0]; x <= verticalLines[5]; x += 1) {
-            if (isDark(x, y)) darkPixels += 1;
+            if (isGridInk(x, y)) darkPixels += 1;
           }
           return sum + darkPixels / Math.max(1, rectangleWidth);
         }, 0) / 6;
@@ -2603,6 +2625,27 @@ async function recognizeDetectedGrids(
   return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
 }
 
+function reviewCardsForUndecodedGrids(
+  rectangles: GridRectangle[],
+  recognizedCards: BingoCard[],
+  fileName: string,
+  pageNumber: number,
+) {
+  const missing = Math.max(0, rectangles.length - recognizedCards.length);
+  if (!missing) return [];
+  return Array.from({ length: missing }, (_, index): BingoCard => ({
+    id: crypto.randomUUID(),
+    number: `SIN-ID-${String(pageNumber).padStart(3, "0")}-REV-${index + 1}`,
+    serial: "Pendiente de revisión",
+    // Se muestra en la vista previa, pero nunca se guarda una lectura
+    // incompleta como si fuera un cartón válido.
+    grid: Array(25).fill(-1),
+    sourceFile: fileName,
+    sourcePage: pageNumber,
+    status: "active",
+  }));
+}
+
 const compactCellPositions = [
   {
     range: [1, 30] as const,
@@ -3510,6 +3553,15 @@ export async function runOcrCanvas(
       fileName,
       pageNumber,
     );
+    detectedCards = [
+      ...detectedCards,
+      ...reviewCardsForUndecodedGrids(
+        rectangles,
+        detectedCards,
+        fileName,
+        pageNumber,
+      ),
+    ];
   } else if (
     canvas.height > canvas.width &&
     canvas.height / canvas.width >= 1.25 &&
@@ -3655,6 +3707,40 @@ export async function runOcr(
 
 function imageExtension(fileName: string) {
   return fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+}
+
+const MAX_IMPORT_FILE_BYTES = 40 * 1024 * 1024;
+
+function startsWithBytes(bytes: Uint8Array, expected: number[]) {
+  return expected.every((value, index) => bytes[index] === value);
+}
+
+export async function validateBingoImportFileContent(file: File) {
+  if (!file.size) throw new Error("El archivo está vacío.");
+  if (file.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error("El archivo supera el límite de 40 MB para una importación segura.");
+  }
+  const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+  const extension = imageExtension(file.name);
+  const pdf = startsWithBytes(header, [0x25, 0x50, 0x44, 0x46]);
+  if (file.type === "application/pdf" || extension === "pdf") {
+    if (!pdf) throw new Error("El archivo no contiene un PDF válido.");
+    return "pdf" as const;
+  }
+  const png = startsWithBytes(header, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const jpeg = startsWithBytes(header, [0xff, 0xd8, 0xff]);
+  const gif = startsWithBytes(header, [0x47, 0x49, 0x46, 0x38]);
+  const bmp = startsWithBytes(header, [0x42, 0x4d]);
+  const webp = startsWithBytes(header, [0x52, 0x49, 0x46, 0x46]) &&
+    String.fromCharCode(...header.slice(8, 12)) === "WEBP";
+  const heifBrand = String.fromCharCode(...header.slice(8, 12)).toLowerCase();
+  const heif =
+    String.fromCharCode(...header.slice(4, 8)) === "ftyp" &&
+    ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(heifBrand);
+  if (!(png || jpeg || gif || bmp || webp || heif)) {
+    throw new Error("El archivo no contiene una imagen compatible válida.");
+  }
+  return "image" as const;
 }
 
 export function isSupportedBingoImportFile(file: Pick<File, "name" | "type">) {
@@ -3954,6 +4040,12 @@ export async function parseBingoPdf(
           `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`,
         );
       }
+      const pending = pageCards.filter(needsImportReview).length;
+      if (pending) {
+        warnings.push(
+          `Página ${pageNumber}: ${pending} cartón(es) detectado(s) necesitan revisión antes de guardarse.`,
+        );
+      }
       cards.push(...pageCards);
       page.cleanup();
     }
@@ -3968,11 +4060,9 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  const reconciledCards = reconcilePlainSequentialCardNumbers(
-    reconcileTwoCardPageNumbers(cards),
-  );
-  const numberedCards = assignSequentialCardNumbers(reconciledCards);
-  return { cards: numberedCards, pages: pageCount, warnings };
+  // Nunca se altera la numeración impresa. Un identificador ilegible queda
+  // pendiente de revisión en vez de sustituirse por una secuencia inventada.
+  return { cards, pages: pageCount, warnings };
 }
 
 export async function parseBingoImage(
@@ -4000,7 +4090,7 @@ export async function parseBingoImage(
     );
   }
   onProgress({ page: 1, pages: 1, stage: "Validando", percent: 100 });
-  return { cards: assignSequentialCardNumbers(cards), pages: 1, warnings };
+  return { cards, pages: 1, warnings };
 }
 
 export async function parseBingoImportFile(
@@ -4010,7 +4100,8 @@ export async function parseBingoImportFile(
   if (!isSupportedBingoImportFile(file)) {
     throw new Error(`${file.name} no es un PDF ni una imagen compatible.`);
   }
-  return file.type === "application/pdf" || imageExtension(file.name) === "pdf"
+  const kind = await validateBingoImportFileContent(file);
+  return kind === "pdf"
     ? parseBingoPdf(file, onProgress)
     : parseBingoImage(file, onProgress);
 }
