@@ -614,6 +614,28 @@ test("Yapa usa una cuadrícula 3×3 y gana únicamente con sus nueve números", 
   assert.equal(isWinningCard(yapa, new Set(yapa.grid), activePattern), true);
 });
 
+test("un juego especial inhabilitado deja de producir ganadores", () => {
+  const yapa: BingoCard = {
+    id: "yapa-disabled",
+    number: "23727-7",
+    serial: "Yapa",
+    grid: [6, 33, 54, 17, 41, 66, 18, 46, 69],
+    sourceFile: "yapa.pdf",
+    sourcePage: 1,
+    status: "active",
+  };
+
+  const winners = winningPatternsForCard(
+    yapa,
+    new Set(yapa.grid),
+    BUILTIN_PATTERNS,
+    new Set<string>(),
+    new Set(["yapa-completo"]),
+  );
+
+  assert.deepEqual(winners, []);
+});
+
 test("una hoja de números gana únicamente al completar su forma impresa", () => {
   const grid = [
     0, 0, 37, 0, 0,

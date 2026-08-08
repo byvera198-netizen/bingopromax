@@ -249,8 +249,21 @@ function nearestPatternForCard(
   called: Set<number>,
   patterns: BingoPattern[],
   wins: Winner[] = [],
+  disabledPatternIds = new Set<string>(),
 ) {
-  const applicablePatterns = patternsForCard(card, patterns);
+  const specialPattern = specialCardPatternForGrid(card.grid, card.serial);
+  if (specialPattern && disabledPatternIds.has(specialPattern.id)) {
+    return {
+      pattern: specialPattern,
+      progress: cardProgress(card, called, specialPattern),
+      disabled: true,
+    };
+  }
+  const applicablePatterns = patternsForCard(
+    card,
+    patterns,
+    disabledPatternIds,
+  );
   const wonPatternIds = new Set(wins.map((winner) => winner.patternId));
   const pendingPatterns = applicablePatterns.filter(
     (pattern) => !wonPatternIds.has(pattern.id),
@@ -261,6 +274,7 @@ function nearestPatternForCard(
   ).map((pattern) => ({
     pattern,
     progress: cardProgress(card, called, pattern),
+    disabled: false,
   }));
   return (
     progressOptions.sort(
@@ -268,6 +282,7 @@ function nearestPatternForCard(
     )[0] ?? {
       pattern: applicablePatterns[0] ?? BUILTIN_PATTERNS[0],
       progress: { completed: 0, total: 0, progress: 0 },
+      disabled: false,
     }
   );
 }
@@ -283,6 +298,7 @@ function CardPreview({
   showCalled = true,
   showPattern = true,
   showPending = true,
+  disabledPatternIds = [],
 }: {
   card: BingoCard;
   called: Set<number>;
@@ -294,9 +310,16 @@ function CardPreview({
   showCalled?: boolean;
   showPattern?: boolean;
   showPending?: boolean;
+  disabledPatternIds?: string[];
 }) {
   const wonPatternIds = new Set(wins.map((winner) => winner.patternId));
-  const nearest = nearestPatternForCard(card, called, patterns, wins);
+  const nearest = nearestPatternForCard(
+    card,
+    called,
+    patterns,
+    wins,
+    new Set(disabledPatternIds),
+  );
   return (
     <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
       <header>
@@ -332,7 +355,7 @@ function CardPreview({
       />
       <div className="ticket-next-pattern">
         <span>{wonPatternIds.size ? "Siguiente" : "Más cerca"}</span>
-        <b>{nearest.pattern.name}</b>
+        <b>{nearest.disabled ? `${nearest.pattern.name} · Inhabilitado` : nearest.pattern.name}</b>
       </div>
       <div className="ticket-progress">
         <span><i style={{ width: `${Math.round(nearest.progress.progress * 100)}%` }} /></span>
@@ -675,32 +698,53 @@ export default function GameConsole() {
     ],
     [state?.customPatterns, state?.removedPatternIds],
   );
+  const specialGamePatterns = useMemo(() => {
+    const patterns = new Map<string, BingoPattern>();
+    for (const card of state?.cards ?? []) {
+      const pattern = specialCardPatternForGrid(card.grid, card.serial);
+      if (pattern) patterns.set(pattern.id, pattern);
+    }
+    return [...patterns.values()];
+  }, [state?.cards]);
+  const manageablePatterns = useMemo(
+    () => [...availablePatterns, ...specialGamePatterns],
+    [availablePatterns, specialGamePatterns],
+  );
   const gamePatterns = useMemo(
+    () =>
+      manageablePatterns.filter(
+        (pattern) => !state?.disabledPatternIds.includes(pattern.id),
+      ),
+    [manageablePatterns, state?.disabledPatternIds],
+  );
+  const allPatterns = useMemo(
     () =>
       availablePatterns.filter(
         (pattern) => !state?.disabledPatternIds.includes(pattern.id),
       ),
     [availablePatterns, state?.disabledPatternIds],
   );
-  const allPatterns = useMemo(
-    () => [
-      ...gamePatterns,
-      ...(state?.cards.some((card) => card.grid.length === 5) &&
-      !state?.disabledPatternIds.includes(COMPACT_CARD_PATTERN.id)
-        ? [COMPACT_CARD_PATTERN]
-        : []),
-    ],
-    [gamePatterns, state?.cards, state?.disabledPatternIds],
+  const specialGamePatternIds = useMemo(
+    () => new Set(specialGamePatterns.map((pattern) => pattern.id)),
+    [specialGamePatterns],
   );
   const patternStatuses = useMemo(
     () =>
       gamePatterns.map((pattern) => {
         const compatibleCards = (state?.cards ?? []).filter(
-          (card) =>
-            card.status === "active" &&
-            (pattern.id === COMPACT_CARD_PATTERN.id
-              ? card.grid.length === 5
-              : card.grid.length === 25 && !numberSheetFormForGrid(card.grid)),
+          (card) => {
+            if (card.status !== "active") return false;
+            const specialPattern = specialCardPatternForGrid(
+              card.grid,
+              card.serial,
+            );
+            if (specialPattern) return specialPattern.id === pattern.id;
+            return (
+              !specialGamePatternIds.has(pattern.id) &&
+              card.grid.length === 25 &&
+              !numberSheetFormForGrid(card.grid)
+            );
+          },
         );
         const nearest = compatibleCards.reduce(
           (best, card) =>
@@ -717,7 +761,7 @@ export default function GameConsole() {
           winners,
         };
       }),
-    [called, gamePatterns, state?.cards, state?.winners],
+    [called, gamePatterns, specialGamePatternIds, state?.cards, state?.winners],
   );
   const lastDraw = state?.draws[state.draws.length - 1];
   const elapsed = game?.startedAt
@@ -774,6 +818,7 @@ export default function GameConsole() {
                 .filter((winner) => winner.cardId === card.id)
                 .map((winner) => winner.patternId),
             ),
+            new Set(state.disabledPatternIds),
           ).map<Winner>((pattern) => ({
             id: crypto.randomUUID(),
             cardId: card.id,
@@ -1524,12 +1569,14 @@ export default function GameConsole() {
             called,
             allPatterns,
             state.winners.filter((winner) => winner.cardId === b.id),
+            new Set(state.disabledPatternIds),
           ).progress.progress -
           nearestPatternForCard(
             a,
             called,
             allPatterns,
             state.winners.filter((winner) => winner.cardId === a.id),
+            new Set(state.disabledPatternIds),
           ).progress.progress,
       );
   }, [allPatterns, called, search, state]);
@@ -1875,12 +1922,14 @@ export default function GameConsole() {
                               called,
                               allPatterns,
                               state.winners.filter((winner) => winner.cardId === b.id),
+                              new Set(state.disabledPatternIds),
                             ).progress.progress -
                             nearestPatternForCard(
                               a,
                               called,
                               allPatterns,
                               state.winners.filter((winner) => winner.cardId === a.id),
+                              new Set(state.disabledPatternIds),
                             ).progress.progress,
                         )
                         .slice(0, 12)
@@ -1888,6 +1937,7 @@ export default function GameConsole() {
                           <CardPreview
                             called={called}
                             card={card}
+                            disabledPatternIds={state.disabledPatternIds}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
                             onEditNumber={openCardEditor}
@@ -2013,6 +2063,7 @@ export default function GameConsole() {
                     <CardPreview
                       card={card}
                       called={called}
+                      disabledPatternIds={state.disabledPatternIds}
                       key={card.id}
                       onDelete={deleteCard}
                       onEditNumber={openCardEditor}
@@ -2047,16 +2098,17 @@ export default function GameConsole() {
                   <span className="eyebrow"><Zap size={14} /> VERIFICACIÓN SIMULTÁNEA</span>
                   <h3>{gamePatterns.length} patrones habilitados</h3>
                   <p>Solo las figuras habilitadas se verifican con cada bolilla. Los cambios afectan únicamente al juego actual.</p>
-                  <div><b>{BUILTIN_PATTERNS.length} oficiales</b><b>{availablePatterns.filter((pattern) => pattern.custom).length} personalizados</b><b>{state.disabledPatternIds.length} inhabilitados</b></div>
+                  <div><b>{BUILTIN_PATTERNS.length} oficiales</b><b>{specialGamePatterns.length} juegos especiales</b><b>{state.disabledPatternIds.length} inhabilitados</b></div>
                 </div>
                 <div className="pattern-stack-preview">
                   {gamePatterns.slice(0, 4).map((pattern) => <PatternMini key={pattern.id} pattern={pattern} />)}
                 </div>
               </section>
               <div className="pattern-grid">
-                {availablePatterns.map((pattern) => {
+                {manageablePatterns.map((pattern) => {
                   const enabled = !state.disabledPatternIds.includes(pattern.id);
                   const hasWinner = state.winners.some((winner) => winner.patternId === pattern.id);
+                  const isSpecialGame = specialGamePatternIds.has(pattern.id);
                   return (
                   <article className={`pattern-card ${enabled ? "active" : "disabled"}`} key={pattern.id}>
                       <div className="pattern-card-top"><PatternMini pattern={pattern} /><span>{enabled ? <Check size={14} /> : <Pause size={14} />} {enabled ? "En juego" : "Inhabilitado"}</span></div>
@@ -2067,8 +2119,8 @@ export default function GameConsole() {
                         <button className={enabled ? "ghost-button" : "secondary-button"} onClick={() => void togglePattern(pattern, !enabled)} type="button">
                           {enabled ? "Inhabilitar" : "Habilitar"}
                         </button>
-                        <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={15} /></button>
-                        <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>
+                        {!isSpecialGame && <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={15} /></button>}
+                        {!isSpecialGame && <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>}
                       </div>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
                   </article>

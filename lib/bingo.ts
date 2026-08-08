@@ -374,11 +374,16 @@ export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
 export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
+  disabledPatternIds = new Set<string>(),
 ) {
   const specialPattern = specialCardPatternForGrid(card.grid, card.serial);
   return specialPattern
-    ? [specialPattern]
-    : activePatterns.filter((pattern) => pattern.id !== COMPACT_CARD_PATTERN.id);
+    ? disabledPatternIds.has(specialPattern.id) ? [] : [specialPattern]
+    : activePatterns.filter(
+        (pattern) =>
+          pattern.id !== COMPACT_CARD_PATTERN.id &&
+          !disabledPatternIds.has(pattern.id),
+      );
 }
 
 export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
@@ -431,8 +436,9 @@ export function winningPatternsForCard(
   called: Set<number>,
   activePatterns: BingoPattern[],
   alreadyWonPatternIds = new Set<string>(),
+  disabledPatternIds = new Set<string>(),
 ) {
-  return patternsForCard(card, activePatterns).filter(
+  return patternsForCard(card, activePatterns, disabledPatternIds).filter(
     (pattern) =>
       !alreadyWonPatternIds.has(pattern.id) &&
       isWinningCard(card, called, pattern),

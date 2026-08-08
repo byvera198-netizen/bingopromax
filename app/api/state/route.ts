@@ -598,9 +598,11 @@ export async function POST(request: Request) {
         );
       }
       const accepted = cards.map((card) => ({ ...card, number: card.number.trim() }));
-      if (accepted.length) {
+      const saveBatchSize = 100;
+      for (let offset = 0; offset < accepted.length; offset += saveBatchSize) {
+        const cardBatch = accepted.slice(offset, offset + saveBatchSize);
         await db.batch(
-          accepted.map((card) =>
+          cardBatch.map((card) =>
             db
               .prepare(
                 `INSERT INTO cards (
