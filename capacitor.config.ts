@@ -2,11 +2,11 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.bingocontrolpro.ecuador",
-  appName: "Bingo Control Pro",
+  appName: "Bingo ProMax",
   webDir: "mobile-web",
   server: {
     androidScheme: "https",
-    allowNavigation: ["bingo-control-pro-ecuador.eemite.chatgpt.site"],
+    allowNavigation: ["bingopromax.pages.dev"],
   },
   android: {
     allowMixedContent: false,
