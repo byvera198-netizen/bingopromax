@@ -2515,7 +2515,17 @@ async function recognizeDetectedGrids(
       gridQuality(grid) < 8 ||
       grid.some((value, index) => shouldRereadBingoCell(value, index))
     ) {
-      grid = await recognizeMissingCells(source, rectangle, grid, worker);
+      // En una hoja impresa de cuatro cartones, una primera pasada OCR suele
+      // leer dos cuadrículas y dejar otras dos incompletas por el diseño,
+      // tinta o marca de agua. Releer todas las casillas solo de la cuadrícula
+      // dudosa evita descartar un cartón sin sustituir números por estimaciones.
+      grid = await recognizeMissingCells(
+        source,
+        rectangle,
+        grid,
+        worker,
+        isFourCardPortraitSheet && gridQuality(grid) < 8,
+      );
     }
     if (gridQuality(grid) < 8 && rectangle.nextHorizontalLine) {
       const shiftedRectangle: GridRectangle = {
@@ -2554,6 +2564,56 @@ async function recognizeDetectedGrids(
         }
       }
     }
+    // Algunas hojas separan los dos cartones con una franja vertical de
+    // publicidad. La detección de líneas puede tomar esa franja como la
+    // primera columna del cartón derecho. Solo cuando la lectura normal no
+    // valida, se prueba el desplazamiento de una celda a la derecha; se acepta
+    // exclusivamente si las 24 cifras respetan las columnas B-I-N-G-O.
+    const leftSibling = eligibleRectangles
+      .filter(
+        (candidate) =>
+          candidate !== rectangle &&
+          candidate.x < rectangle.x &&
+          Math.abs(candidate.y - rectangle.y) <= rectangle.height * 0.35 &&
+          Math.abs(candidate.x + candidate.width - rectangle.x) <=
+            Math.max(5, rectangle.width * 0.08),
+      )
+      .sort((a, b) => b.x - a.x)[0];
+    if (gridQuality(grid) < 8 && leftSibling) {
+      const columnSpacing = median(
+        rectangle.verticalLines
+          .slice(1)
+          .map((position, index) => position - rectangle.verticalLines[index]),
+      );
+      if (columnSpacing > 0) {
+        const shiftedRightRectangle: GridRectangle = {
+          ...rectangle,
+          x: rectangle.verticalLines[1],
+          width: rectangle.verticalLines[5] + columnSpacing - rectangle.verticalLines[1],
+          verticalLines: [
+            ...rectangle.verticalLines.slice(1),
+            rectangle.verticalLines[5] + columnSpacing,
+          ],
+          horizontalLines: rectangle.nextHorizontalLine
+            ? [...rectangle.horizontalLines.slice(1), rectangle.nextHorizontalLine]
+            : [...rectangle.horizontalLines],
+        };
+        const shiftedRightGrid = await recognizeMissingCells(
+          source,
+          shiftedRightRectangle,
+          Array.from({ length: 25 }, (_, index) => (index === 12 ? 0 : -1)),
+          worker,
+          true,
+        );
+        if (gridQuality(shiftedRightGrid) >= 8) {
+          grid = shiftedRightGrid;
+          rectangle.x = shiftedRightRectangle.x;
+          rectangle.width = shiftedRightRectangle.width;
+          rectangle.verticalLines = shiftedRightRectangle.verticalLines;
+          rectangle.horizontalLines = shiftedRightRectangle.horizontalLines;
+        }
+      }
+    }
     if (gridQuality(grid) < 8) continue;
     const rectangleIndex = eligibleRectangles.indexOf(rectangle);
     const centerMetadata = await recognizeNumberSheetMetadata(
@@ -2562,7 +2622,8 @@ async function recognizeDetectedGrids(
       worker,
     );
     const headerIdentifier =
-      source.width > source.height && eligibleRectangles.length === 2
+      (isFourCardPortraitSheet ||
+        (source.width > source.height && eligibleRectangles.length === 2))
         ? identifiers[rectangleIndex]?.value
         : undefined;
     detected.push({
@@ -3038,8 +3099,8 @@ const gorditoSpecialCards: SpecialPageCard[] = [
     x: 0.25,
     y: 0.60,
     cells: [
-      cell(0.087, 0.574, [1, 30], 0.07, 0.04), cell(0.196, 0.574, [16, 45], 0.07, 0.04), cell(0.305, 0.574, [31, 60], 0.07, 0.04), cell(0.414, 0.574, [46, 75], 0.07, 0.04),
-      cell(0.142, 0.614, [1, 30], 0.065, 0.038), cell(0.251, 0.614, [16, 45], 0.065, 0.038), cell(0.360, 0.614, [46, 75], 0.065, 0.038),
+      cell(0.101, 0.550, [1, 30], 0.07, 0.045), cell(0.217, 0.550, [16, 45], 0.07, 0.045), cell(0.336, 0.550, [31, 60], 0.07, 0.045), cell(0.427, 0.550, [46, 75], 0.07, 0.045),
+      cell(0.161, 0.598, [1, 30], 0.07, 0.045), cell(0.276, 0.598, [16, 45], 0.07, 0.045), cell(0.373, 0.598, [46, 75], 0.07, 0.045),
     ],
   },
   {
@@ -3048,8 +3109,8 @@ const gorditoSpecialCards: SpecialPageCard[] = [
     x: 0.75,
     y: 0.60,
     cells: [
-      cell(0.577, 0.574, [1, 75], 0.07, 0.04), cell(0.687, 0.574, [1, 75], 0.07, 0.04), cell(0.796, 0.574, [1, 75], 0.07, 0.04), cell(0.905, 0.574, [1, 75], 0.07, 0.04),
-      cell(0.577, 0.614, [1, 75], 0.065, 0.038), cell(0.687, 0.614, [1, 75], 0.065, 0.038), cell(0.796, 0.614, [1, 75], 0.065, 0.038), cell(0.905, 0.614, [1, 75], 0.065, 0.038),
+      cell(0.560, 0.550, [1, 75], 0.07, 0.045), cell(0.659, 0.550, [1, 75], 0.07, 0.045), cell(0.783, 0.550, [1, 75], 0.07, 0.045), cell(0.907, 0.550, [1, 75], 0.07, 0.045),
+      cell(0.560, 0.591, [1, 75], 0.07, 0.045), cell(0.659, 0.591, [1, 75], 0.07, 0.045), cell(0.783, 0.591, [1, 75], 0.07, 0.045), cell(0.907, 0.591, [1, 75], 0.07, 0.045),
     ],
   },
 ];
@@ -3074,7 +3135,10 @@ export function specialPageLayoutFromOcrText(
     labelText.includes(label),
   ).length;
   const formaLabelCount = labelText.match(/FORMA/g)?.length ?? 0;
-  if (isPortrait && rectangleCount >= 4 && firstTop < 0.32 && gorditoLabelCount >= 2) {
+  // Algunas emisiones incluyen únicamente la Yapa junto a los cuatro cartones
+  // clásicos. Basta la etiqueta YAPA y la geometría de la hoja; los otros
+  // juegos especiales se validan por sus propias cifras antes de agregarse.
+  if (isPortrait && rectangleCount >= 4 && firstTop < 0.32 && gorditoLabelCount >= 1) {
     return "gordito" as const;
   }
   if (
@@ -3442,12 +3506,20 @@ async function recognizeSpecialPageCards(
     ordered.length,
     firstTop,
   );
+  // La palabra Yapa puede no aparecer en el OCR de un escaneo. En una hoja
+  // vertical con cuatro cuadrículas en la mitad inferior se intenta solamente
+  // el recorte 3×3 conocido; este se incorpora si sus nueve números validan,
+  // por lo que no se confunde una zona decorativa con un juego.
+  const mayHaveStandaloneYapa =
+    isPortrait && ordered.length >= 4 && firstTop < 0.32;
   const layouts = specialLayout === "gordito"
     ? gorditoSpecialCards
     : specialLayout === "number-sheet"
       ? numberSheetExtraCards
       : specialLayout === "line-loco"
         ? lineAndLocoCards
+        : mayHaveStandaloneYapa
+          ? gorditoSpecialCards
         : [];
   if (!layouts.length) {
     await worker.setParameters({
@@ -3506,7 +3578,8 @@ async function recognizeSpecialPageCards(
     if (layout.label === "Yapa" && !directValues) values = repairAscendingSpecialColumns(values, candidates);
     if (
       values.some((value) => value < 1 || value > 75) ||
-      new Set(values).size !== values.length
+      new Set(values).size !== values.length ||
+      (layout.label === "Yapa" && !validYapaGrid(values))
     ) {
       continue;
     }

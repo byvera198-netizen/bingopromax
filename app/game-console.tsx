@@ -418,6 +418,8 @@ export default function GameConsole() {
   const [manualNumber, setManualNumber] = useState("");
   const [manualSerial, setManualSerial] = useState("");
   const [manualGrid, setManualGrid] = useState(initialGrid);
+  const [editingSpecialGrid, setEditingSpecialGrid] = useState<number[] | null>(null);
+  const [manualSpecialValues, setManualSpecialValues] = useState("");
   const [patternName, setPatternName] = useState("");
   const [patternDescription, setPatternDescription] = useState("");
   const [patternCells, setPatternCells] = useState<number[]>([10, 11, 12, 13, 14]);
@@ -1005,8 +1007,16 @@ export default function GameConsole() {
 
   const saveManualCard = async () => {
     if (!state) return;
-    const grid = manualGrid.map((value) => Number(value));
+    const grid = editingSpecialGrid
+      ? manualSpecialValues
+          .split(/[\s,;]+/)
+          .filter(Boolean)
+          .map((value) => Number(value))
+      : manualGrid.map((value) => Number(value));
     const errors = validateCardGrid(grid);
+    if (editingSpecialGrid && grid.length !== editingSpecialGrid.length) {
+      errors.unshift(`Este juego debe tener ${editingSpecialGrid.length} número(s).`);
+    }
     if (!manualNumber.trim()) errors.unshift("Asigna un número al cartón.");
     const duplicateInGame = state.cards.some((card) => card.id !== editingCardId && card.number.toLowerCase() === manualNumber.trim().toLowerCase());
     const duplicateInPreview = importPreview?.cards.some((card) =>
@@ -1042,6 +1052,8 @@ export default function GameConsole() {
       setManualNumber("");
       setManualSerial("");
       setManualGrid(initialGrid);
+      setEditingSpecialGrid(null);
+      setManualSpecialValues("");
       setImportWarnings([]);
       notify(`Cartón #${updated.number} corregido en la vista previa.`);
       return;
@@ -1076,6 +1088,8 @@ export default function GameConsole() {
       setManualNumber("");
       setManualSerial("");
       setManualGrid(initialGrid);
+      setEditingSpecialGrid(null);
+      setManualSpecialValues("");
       setImportWarnings([]);
       notify(currentCard ? `Cartón #${card.number} actualizado.` : `Cartón #${card.number} guardado.`);
     } catch (caught) {
@@ -1085,16 +1099,19 @@ export default function GameConsole() {
 
   const openPreviewCardEditor = (card: BingoCard) => {
     if (card.grid.length !== 25) {
-      const number = window.prompt("Número impreso del cartón:", card.number)?.trim();
-      if (!number || number === card.number) return;
-      setImportPreview((current) => current
-        ? { ...current, cards: current.cards.map((item) => item.id === card.id ? { ...item, number } : item) }
-        : current,
-      );
+      setEditingCardId(null);
+      setEditingPreviewCardId(card.id);
+      setEditingSpecialGrid(card.grid);
+      setManualSpecialValues(card.grid.filter((value) => value > 0).join(", "));
+      setManualNumber(card.number.startsWith("SIN-ID-") ? "" : card.number);
+      setManualSerial(card.serial ?? "");
+      setManualOpen(true);
       return;
     }
     setEditingCardId(null);
     setEditingPreviewCardId(card.id);
+    setEditingSpecialGrid(null);
+    setManualSpecialValues("");
     setManualNumber(card.number.startsWith("SIN-ID-") ? "" : card.number);
     setManualSerial(card.serial ?? "");
     setManualGrid(card.grid.map((value) => value > 0 ? String(value) : value === 0 ? "0" : ""));
@@ -1164,12 +1181,18 @@ export default function GameConsole() {
     let pages = 0;
     try {
       for (const file of files) {
-        const parsed = await parseBingoImportFile(file, (progress) =>
-          setPdfProgress({ ...progress, file: file.name }),
-        );
-        pages += parsed.pages;
-        warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        cards.push(...parsed.cards);
+        try {
+          const parsed = await parseBingoImportFile(file, (progress) =>
+            setPdfProgress({ ...progress, file: file.name }),
+          );
+          pages += parsed.pages;
+          warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
+          cards.push(...parsed.cards);
+        } catch (caught) {
+          warnings.push(
+            `${file.name} · ${caught instanceof Error ? caught.message : "No se pudo procesar este archivo."}`,
+          );
+        }
       }
       if (!cards.length) throw new Error("No se detectaron cartones en los archivos seleccionados.");
       const pending = cards.filter(needsImportReview).length;
@@ -1254,11 +1277,19 @@ export default function GameConsole() {
 
   const openCardEditor = (card: BingoCard) => {
     if (card.grid.length !== 25) {
-      void editCardNumber(card);
+      setEditingCardId(card.id);
+      setEditingPreviewCardId(null);
+      setEditingSpecialGrid(card.grid);
+      setManualSpecialValues(card.grid.filter((value) => value > 0).join(", "));
+      setManualNumber(card.number);
+      setManualSerial(card.serial ?? "");
+      setManualOpen(true);
       return;
     }
     setEditingCardId(card.id);
     setEditingPreviewCardId(null);
+    setEditingSpecialGrid(null);
+    setManualSpecialValues("");
     setManualNumber(card.number);
     setManualSerial(card.serial ?? "");
     setManualGrid(card.grid.map(String));
@@ -1272,6 +1303,8 @@ export default function GameConsole() {
     setManualNumber("");
     setManualSerial("");
     setManualGrid(initialGrid);
+    setEditingSpecialGrid(null);
+    setManualSpecialValues("");
   };
 
   const openPatternEditor = (pattern?: BingoPattern) => {
@@ -2191,13 +2224,21 @@ export default function GameConsole() {
               <div className="manual-layout">
                 <div className="manual-fields">
                   <label>Número del cartón<input onChange={(event) => setManualNumber(event.target.value)} placeholder="Ej. A-001" value={manualNumber} /></label>
-                  <label>Serie <small>opcional</small><input onChange={(event) => setManualSerial(event.target.value)} placeholder="Ej. LOTE-2026" value={manualSerial} /></label>
-                  <div className="manual-note"><ShieldCheck size={17} /><p><strong>Validación automática</strong>Comprobaremos casillas vacías, duplicados y números fuera de rango.</p></div>
-                  <label className="free-toggle"><input checked={manualGrid[12] === "0"} onChange={(event) => setManualGrid((current) => current.map((value, index) => index === 12 ? (event.target.checked ? "0" : "") : value))} type="checkbox" /><span /><div><strong>Centro libre</strong><small>La casilla central contará como marcada.</small></div></label>
+                  <label>{editingSpecialGrid ? "Tipo de juego" : "Serie"} <small>{editingSpecialGrid ? "editable" : "opcional"}</small><input onChange={(event) => setManualSerial(event.target.value)} placeholder={editingSpecialGrid ? "Ej. Yapa o Bom Bom Bum" : "Ej. LOTE-2026"} value={manualSerial} /></label>
+                  {editingSpecialGrid ? (
+                    <label>Números del juego <small>{editingSpecialGrid.length} requeridos, separados por coma o espacio</small><textarea onChange={(event) => setManualSpecialValues(event.target.value.replace(/[^0-9,;\s]/g, ""))} rows={4} value={manualSpecialValues} /></label>
+                  ) : (
+                    <>
+                      <div className="manual-note"><ShieldCheck size={17} /><p><strong>Validación automática</strong>Comprobaremos casillas vacías, duplicados y números fuera de rango.</p></div>
+                      <label className="free-toggle"><input checked={manualGrid[12] === "0"} onChange={(event) => setManualGrid((current) => current.map((value, index) => index === 12 ? (event.target.checked ? "0" : "") : value))} type="checkbox" /><span /><div><strong>Centro libre</strong><small>La casilla central contará como marcada.</small></div></label>
+                    </>
+                  )}
                 </div>
-                <div className="manual-grid">
-                  <div className="manual-bingo-head">{BINGO.map((letter) => <span key={letter}>{letter}</span>)}</div>
-                  <div>
+                <div className={`manual-grid ${editingSpecialGrid ? "special-grid-preview" : ""}`}>
+                  {editingSpecialGrid ? (
+                    <><span>Vista previa</span><div className="compact-number-grid">{manualSpecialValues.split(/[\s,;]+/).filter(Boolean).map((value, index) => <b key={`${value}-${index}`}>{value}</b>)}</div></>
+                  ) : (
+                    <><div className="manual-bingo-head">{BINGO.map((letter) => <span key={letter}>{letter}</span>)}</div><div>
                     {manualGrid.map((value, index) => (
                       <input
                         aria-label={`Casilla ${index + 1}`}
@@ -2212,7 +2253,8 @@ export default function GameConsole() {
                         value={index === 12 && value === "0" ? "LIBRE" : value}
                       />
                     ))}
-                  </div>
+                    </div></>
+                  )}
                 </div>
               </div>
               <footer><button className="ghost-button" onClick={closeCardEditor} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveManualCard()} type="button"><Check size={17} /> {editingCardId ? "Guardar cambios" : "Guardar cartón"}</button></footer>
