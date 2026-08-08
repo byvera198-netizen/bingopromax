@@ -88,6 +88,7 @@ type ImportPreview = {
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
 const WHATSAPP_NUMBER = "593985280991";
+const IMPORT_SAVE_CHUNK_SIZE = 20;
 const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
   { id: "all", label: "Todos" },
   { id: "bom-bom-bum", label: "Bom Bom Bum" },
@@ -475,6 +476,7 @@ export default function GameConsole() {
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [savingImport, setSavingImport] = useState(false);
   const [manualNumber, setManualNumber] = useState("");
   const [manualSerial, setManualSerial] = useState("");
   const [manualGrid, setManualGrid] = useState(initialGrid);
@@ -1262,7 +1264,7 @@ export default function GameConsole() {
   };
 
   const saveImportPreview = async () => {
-    if (!state || !importPreview) return;
+    if (!state || !importPreview || savingImport) return;
     const invalidCards = importPreview.cards.filter((card) =>
       needsImportReview(card) || validateCardGrid(card.grid).length > 0,
     );
@@ -1279,29 +1281,46 @@ export default function GameConsole() {
       notify("Hay identificadores duplicados en la vista previa.", "warning");
       return;
     }
+    setSavingImport(true);
+    let imported = 0;
+    const savedCardIds = new Set<string>();
     try {
-      let imported = 0;
       const byFile = new Map<string, BingoCard[]>();
       importPreview.cards.forEach((card) => {
         byFile.set(card.sourceFile, [...(byFile.get(card.sourceFile) ?? []), card]);
       });
       for (const [sourceFile, cards] of byFile) {
-        const result = await api<{ accepted: number }>({
-          action: "saveCards",
-          gameId: state.game.id,
-          importSource: sourceFile,
-          cards,
-        });
-        imported += result.accepted;
+        for (let offset = 0; offset < cards.length; offset += IMPORT_SAVE_CHUNK_SIZE) {
+          const cardBatch = cards.slice(offset, offset + IMPORT_SAVE_CHUNK_SIZE);
+          const result = await api<{ accepted: number }>({
+            action: "saveCards",
+            gameId: state.game.id,
+            importSource: sourceFile,
+            cards: cardBatch,
+          });
+          imported += result.accepted;
+          cardBatch.forEach((card) => savedCardIds.add(card.id));
+        }
       }
       await refresh();
       setImportPreview(null);
       setImportWarnings([]);
       notify(`${imported} cartones guardados correctamente.`);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "No se pudo guardar la importación.";
+      if (savedCardIds.size) {
+        await refresh();
+        setImportPreview((current) => current
+          ? { ...current, cards: current.cards.filter((card) => !savedCardIds.has(card.id)) }
+          : current);
+      }
+      const reason = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
+      const message = imported
+        ? `${imported} cartones fueron guardados. Quedan ${importPreview.cards.length - imported} por guardar. ${reason}`
+        : reason;
       setImportWarnings([message]);
       notify(message, "error");
+    } finally {
+      setSavingImport(false);
     }
   };
 
@@ -2390,7 +2409,7 @@ export default function GameConsole() {
                   );
                 })}
               </div>
-              <footer><button className="ghost-button" onClick={() => setImportPreview(null)} type="button">Cancelar</button><button className="primary-button" disabled={!importPreview.cards.length} onClick={() => void saveImportPreview()} type="button"><Check size={17} /> Guardar cartones confirmados</button></footer>
+              <footer><button className="ghost-button" disabled={savingImport} onClick={() => setImportPreview(null)} type="button">Cancelar</button><button className="primary-button" disabled={!importPreview.cards.length || savingImport} onClick={() => void saveImportPreview()} type="button"><Check size={17} /> {savingImport ? "Guardando cartones..." : "Guardar cartones confirmados"}</button></footer>
             </motion.section>
           </motion.div>
         )}
