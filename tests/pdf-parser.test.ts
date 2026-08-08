@@ -316,7 +316,35 @@ test("conserva las formas nuevas EE, Doble LL, 23 y 51", () => {
   assert.deepEqual(cells("letra-ee"), [0, 1, 3, 4, 5, 8, 10, 11, 13, 14, 15, 18, 20, 21, 23, 24]);
   assert.deepEqual(cells("doble-ll"), [0, 3, 5, 8, 10, 13, 15, 18, 20, 21, 23, 24]);
   assert.deepEqual(cells("patron-23"), [0, 1, 3, 4, 6, 9, 10, 11, 13, 14, 15, 19, 20, 21, 23, 24]);
-  assert.deepEqual(cells("patron-51"), [0, 1, 4, 5, 8, 9, 10, 11, 14, 16, 19, 20, 21, 23, 24]);
+  assert.deepEqual(cells("patron-51"), [0, 1, 2, 4, 5, 9, 10, 11, 12, 14, 17, 19, 20, 21, 22, 24]);
+});
+
+test("usa globalmente las formas editadas por el administrador", () => {
+  const expected: Record<string, number[]> = {
+    "patron-a": [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 19, 20, 24],
+    "patron-b": [1, 2, 3, 6, 9, 11, 12, 13, 16, 19, 21, 22, 23],
+    "patron-c": [0, 1, 2, 3, 4, 5, 10, 15, 20, 21, 22, 23, 24],
+    "patron-d": [0, 1, 2, 3, 4, 6, 9, 11, 14, 16, 19, 20, 21, 22, 23, 24],
+    "patron-g": [1, 2, 3, 4, 6, 11, 12, 13, 14, 16, 19, 21, 22, 23, 24],
+    "patron-j": [0, 1, 2, 3, 4, 7, 12, 15, 17, 20, 21, 22],
+    "patron-o": [1, 2, 3, 5, 9, 10, 14, 15, 19, 21, 22, 23],
+    "patron-p": [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 20],
+    "patron-q": [0, 1, 2, 3, 5, 8, 10, 13, 15, 16, 17, 18, 24],
+    "patron-r": [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 18, 20, 24],
+    "patron-s": [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 24],
+    "patron-u": [0, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24],
+    "patron-1": [2, 6, 7, 10, 12, 17, 20, 21, 22, 23, 24],
+    "patron-2": [0, 1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24],
+    "patron-3": [0, 1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 24],
+    "patron-4": [0, 4, 5, 9, 10, 11, 12, 13, 14, 19, 24],
+    "patron-8": [1, 2, 3, 6, 8, 11, 12, 13, 16, 18, 21, 22, 23],
+    "patron-9": [0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 19, 20, 21, 22, 23, 24],
+    "patron-51": [0, 1, 2, 4, 5, 9, 10, 11, 12, 14, 17, 19, 20, 21, 22, 24],
+  };
+
+  for (const [id, cells] of Object.entries(expected)) {
+    assert.deepEqual(BUILTIN_PATTERNS.find((pattern) => pattern.id === id)?.cells, cells, id);
+  }
 });
 
 test("oculta patrones ajenos al catálogo y conserva los reemplazos editados", () => {
