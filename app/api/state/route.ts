@@ -211,21 +211,25 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS memberships_status_idx ON memberships(status)",
 ];
 
+let schemaInitialization: Promise<void> | null = null;
+
 async function ensureSchema(db: D1) {
-  await db.batch(schemaStatements.map((statement) => db.prepare(statement)));
-  for (const statement of [
-    "ALTER TABLE memberships ADD COLUMN membership_months INTEGER NOT NULL DEFAULT 1",
-    "ALTER TABLE memberships ADD COLUMN access_code TEXT",
-    "ALTER TABLE memberships ADD COLUMN activation_verified INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE games ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''",
-  ]) {
-    try {
-      await db.prepare(statement).run();
-    } catch {
-      // The column already exists.
-    }
+  if (!schemaInitialization) {
+    schemaInitialization = (async () => {
+      const existing = await db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'games'")
+        .first<{ name: string }>();
+      if (existing) return;
+      await db.batch(schemaStatements.map((statement) => db.prepare(statement)));
+      await db
+        .prepare("CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)")
+        .run();
+    })().catch((error) => {
+      schemaInitialization = null;
+      throw error;
+    });
   }
-  await db.prepare("CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)").run();
+  await schemaInitialization;
 }
 
 async function audit(db: D1, gameId: string | null, action: string, detail: string, actor: string) {
@@ -389,10 +393,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const db = getDb();
-    await ensureSchema(db);
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "");
     const gameId = body.gameId ? String(body.gameId) : null;
+    if (action !== "saveCards") await ensureSchema(db);
 
     if (action === "requestMembership") {
       const authorization = request.headers.get("authorization") || "";
@@ -574,13 +578,6 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
-      const existing = await db
-        .prepare("SELECT number FROM cards WHERE game_id = ?")
-        .bind(gameId)
-        .all<{ number: string }>();
-      const numbers = new Set(
-        (existing.results ?? []).map((row) => row.number.trim().toLowerCase()),
-      );
       const invalid = cards.filter((card) => validateCardGrid(card.grid).length > 0);
       if (invalid.length) {
         return Response.json(
@@ -588,20 +585,59 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
-      const duplicates = cards
-        .map((card) => card.number.trim().toLowerCase())
-        .filter((number, index, all) => numbers.has(number) || all.indexOf(number) !== index);
-      if (duplicates.length) {
+      const accepted = cards.map((card) => ({ ...card, number: card.number.trim() }));
+      const incomingNumbers = accepted.map((card) => card.number.toLowerCase());
+      const incomingIds = accepted.map((card) => card.id);
+      const duplicateNumbers = incomingNumbers.filter(
+        (number, index, all) => all.indexOf(number) !== index,
+      );
+      const duplicateIds = incomingIds.filter(
+        (id, index, all) => all.indexOf(id) !== index,
+      );
+      if (duplicateNumbers.length || duplicateIds.length) {
         return Response.json(
-          { error: `Ya existe el identificador ${[...new Set(duplicates)].join(", ")}. Corrige el duplicado antes de guardar.` },
+          { error: "La revisión contiene identificadores internos repetidos. Vuelve a abrir la revisión antes de guardar." },
           { status: 409 },
         );
       }
-      const accepted = cards.map((card) => ({ ...card, number: card.number.trim() }));
+
+      const numberPlaceholders = incomingNumbers.map(() => "?").join(", ");
+      const idPlaceholders = incomingIds.map(() => "?").join(", ");
+      const existing = await db
+        .prepare(
+          `SELECT id, game_id, number FROM cards
+           WHERE (game_id = ? AND LOWER(number) IN (${numberPlaceholders}))
+              OR id IN (${idPlaceholders})`,
+        )
+        .bind(gameId, ...incomingNumbers, ...incomingIds)
+        .all<{ id: string; game_id: string; number: string }>();
+      const existingById = new Map((existing.results ?? []).map((row) => [row.id, row]));
+      const existingByNumber = new Map(
+        (existing.results ?? []).map((row) => [row.number.trim().toLowerCase(), row]),
+      );
+      const conflicts = accepted.filter((card) => {
+        const byId = existingById.get(card.id);
+        const byNumber = existingByNumber.get(card.number.toLowerCase());
+        if (!byId && !byNumber) return false;
+        return !(
+          byId &&
+          byNumber &&
+          byId.id === byNumber.id &&
+          byId.game_id === gameId &&
+          byId.number.trim().toLowerCase() === card.number.toLowerCase()
+        );
+      });
+      if (conflicts.length) {
+        return Response.json(
+          { error: `Ya existe el identificador ${conflicts[0].number}. Actualiza la partida y vuelve a intentarlo.` },
+          { status: 409 },
+        );
+      }
+      const newCards = accepted.filter((card) => !existingById.has(card.id));
       const cardsPerInsert = 10;
       const insertStatements: D1Statement[] = [];
-      for (let offset = 0; offset < accepted.length; offset += cardsPerInsert) {
-        const cardBatch = accepted.slice(offset, offset + cardsPerInsert);
+      for (let offset = 0; offset < newCards.length; offset += cardsPerInsert) {
+        const cardBatch = newCards.slice(offset, offset + cardsPerInsert);
         const placeholders = cardBatch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
         const values = cardBatch.flatMap((card) => [
           card.id,
@@ -624,15 +660,30 @@ export async function POST(request: Request) {
             .bind(...values),
         );
       }
-      await db.batch(insertStatements);
-      await audit(
-        db,
-        gameId,
-        "IMPORT_CARDS",
-        `${accepted.length} guardados; ${invalid.length} inválidos; 0 renumerados`,
-        actor,
-      );
-      return Response.json({ accepted: accepted.length, duplicates: 0, renamed: 0 });
+      if (insertStatements.length) {
+        insertStatements.push(
+          db
+            .prepare(
+              "INSERT INTO audit_logs (id, game_id, action, detail, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(
+              crypto.randomUUID(),
+              gameId,
+              "IMPORT_CARDS",
+              `${newCards.length} guardados; ${accepted.length - newCards.length} ya confirmados`,
+              actor,
+              now(),
+            ),
+        );
+        await db.batch(insertStatements);
+      }
+      return Response.json({
+        accepted: accepted.length,
+        inserted: newCards.length,
+        alreadySaved: accepted.length - newCards.length,
+        duplicates: 0,
+        renamed: 0,
+      });
     }
 
     if (action === "saveDraw") {

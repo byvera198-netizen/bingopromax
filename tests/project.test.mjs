@@ -80,6 +80,10 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(route, /x-device-id/);
   assert.match(route, /WHERE owner_email = \?/);
   assert.match(route, /cardsPerInsert = 10/);
+  assert.match(route, /action !== "saveCards"/);
+  assert.match(route, /alreadySaved/);
+  assert.match(page, /IMPORT_SAVE_CHUNK_SIZE = 10/);
+  assert.match(page, /await response\.text\(\)/);
   assert.match(page, /specialGamePatterns/);
   assert.match(page, /new Set\(state\.disabledPatternIds\)/);
   assert.match(bingo, /isWinningCard/);

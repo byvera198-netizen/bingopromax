@@ -89,7 +89,7 @@ type ImportPreview = {
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
 const WHATSAPP_NUMBER = "593985280991";
-const IMPORT_SAVE_CHUNK_SIZE = 20;
+const IMPORT_SAVE_CHUNK_SIZE = 10;
 const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
   { id: "all", label: "Todos" },
   { id: "bom-bom-bum", label: "Bom Bom Bum" },
@@ -138,7 +138,20 @@ async function api<T>(body: Record<string, unknown>): Promise<T> {
       },
       body: JSON.stringify(body),
     });
-    const payload = (await response.json()) as T & { error?: string; access?: AccessState };
+    const responseText = await response.text();
+    if (!responseText.trim()) {
+      throw new Error(
+        "El servidor no completó la respuesta. No se confirmó ningún cartón; vuelve a intentarlo.",
+      );
+    }
+    let payload: T & { error?: string; access?: AccessState };
+    try {
+      payload = JSON.parse(responseText) as T & { error?: string; access?: AccessState };
+    } catch {
+      throw new Error(
+        "El servidor devolvió una respuesta incompleta. No se confirmó ningún cartón; vuelve a intentarlo.",
+      );
+    }
     return { response, payload };
   };
   let { response, payload } = await send();
