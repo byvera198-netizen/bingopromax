@@ -16,6 +16,7 @@ import {
 } from "../lib/bingo";
 import {
   assignSequentialCardNumbers,
+  ensureUniqueImportIdentifiers,
   reconcilePlainSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
@@ -67,6 +68,23 @@ test("conserva la numeración impresa y completa solo los cartones ilegibles", (
     assignSequentialCardNumbers(cards).map((card) => card.number),
     ["94238-1", "94238-2", "94238-3", "94238-4"],
   );
+});
+
+test("conserva todos los cartones y completa identificadores repetidos antes de guardar", () => {
+  const cards: BingoCard[] = [
+    { id: "a", number: "069138-3", serial: "", grid: Array(25).fill(1), sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+    { id: "a", number: "069138-3", serial: "Yapa", grid: Array(9).fill(2), sourceFile: "lote.pdf", sourcePage: 1, status: "active" },
+    { id: "c", number: "069138-6", serial: "", grid: Array(25).fill(3), sourceFile: "lote.pdf", sourcePage: 2, status: "active" },
+    { id: "d", number: "069138-6", serial: "Eche Leche", grid: Array(7).fill(4), sourceFile: "lote.pdf", sourcePage: 2, status: "active" },
+  ];
+  const prepared = ensureUniqueImportIdentifiers(cards, ["069138-7"]);
+  assert.deepEqual(
+    prepared.cards.map((card) => card.number),
+    ["069138-3", "069138-8", "069138-6", "069138-9"],
+  );
+  assert.equal(new Set(prepared.cards.map((card) => card.id)).size, cards.length);
+  assert.equal(prepared.adjustedNumbers, 2);
+  assert.equal(prepared.adjustedIds, 1);
 });
 
 test("acepta PDF e imágenes compatibles para importación y cámara", () => {

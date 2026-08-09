@@ -68,6 +68,7 @@ import {
   type Winner,
 } from "@/lib/bingo";
 import {
+  ensureUniqueImportIdentifiers,
   isSupportedBingoImportFile,
   needsImportReview,
   parseBingoImportFile,
@@ -1265,7 +1266,15 @@ export default function GameConsole() {
 
   const saveImportPreview = async () => {
     if (!state || !importPreview || savingImport) return;
-    const invalidCards = importPreview.cards.filter((card) =>
+    const prepared = ensureUniqueImportIdentifiers(
+      importPreview.cards,
+      state.cards.map((card) => card.number),
+    );
+    const previewCards = prepared.cards;
+    if (prepared.adjustedNumbers || prepared.adjustedIds) {
+      setImportPreview((current) => current ? { ...current, cards: previewCards } : current);
+    }
+    const invalidCards = previewCards.filter((card) =>
       needsImportReview(card) || validateCardGrid(card.grid).length > 0,
     );
     if (invalidCards.length) {
@@ -1274,7 +1283,7 @@ export default function GameConsole() {
       return;
     }
     const existingNumbers = new Set(state.cards.map((card) => card.number.trim().toLowerCase()));
-    const numbers = importPreview.cards.map((card) => card.number.trim().toLowerCase());
+    const numbers = previewCards.map((card) => card.number.trim().toLowerCase());
     const duplicates = numbers.filter((number, index) => existingNumbers.has(number) || numbers.indexOf(number) !== index);
     if (duplicates.length) {
       setImportWarnings([`Identificadores duplicados: ${[...new Set(duplicates)].join(", ")}. Corrígelos antes de guardar.`]);
@@ -1286,7 +1295,7 @@ export default function GameConsole() {
     const savedCardIds = new Set<string>();
     try {
       const byFile = new Map<string, BingoCard[]>();
-      importPreview.cards.forEach((card) => {
+      previewCards.forEach((card) => {
         byFile.set(card.sourceFile, [...(byFile.get(card.sourceFile) ?? []), card]);
       });
       for (const [sourceFile, cards] of byFile) {
@@ -1315,7 +1324,7 @@ export default function GameConsole() {
       }
       const reason = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
       const message = imported
-        ? `${imported} cartones fueron guardados. Quedan ${importPreview.cards.length - imported} por guardar. ${reason}`
+        ? `${imported} cartones fueron guardados. Quedan ${previewCards.length - imported} por guardar. ${reason}`
         : reason;
       setImportWarnings([message]);
       notify(message, "error");
@@ -1357,11 +1366,20 @@ export default function GameConsole() {
         }
       }
       if (!cards.length) throw new Error("No se detectaron cartones en los archivos seleccionados.");
-      const pending = cards.filter(needsImportReview).length;
-      setImportPreview({ cards, files: files.length, pages, warnings });
+      const prepared = ensureUniqueImportIdentifiers(
+        cards,
+        state.cards.map((card) => card.number),
+      );
+      if (prepared.adjustedNumbers) {
+        warnings.push(
+          `${prepared.adjustedNumbers} identificador(es) repetido(s) fueron completados automáticamente para conservar todos los cartones.`,
+        );
+      }
+      const pending = prepared.cards.filter(needsImportReview).length;
+      setImportPreview({ cards: prepared.cards, files: files.length, pages, warnings });
       setImportWarnings(warnings);
       notify(
-        `${cards.length} cartones detectados en ${pages} página(s). ${pending ? `${pending} requieren revisión.` : "Revisa y confirma antes de guardar."}`,
+        `${prepared.cards.length} cartones detectados en ${pages} página(s). ${pending ? `${pending} requieren revisión.` : "Revisa y confirma antes de guardar."}`,
         pending ? "warning" : "success",
       );
     } catch (caught) {

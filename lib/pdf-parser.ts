@@ -4226,6 +4226,74 @@ export function assignSequentialCardNumbers(cards: BingoCard[]) {
   return resolved;
 }
 
+export function ensureUniqueImportIdentifiers(
+  cards: BingoCard[],
+  existingCardNumbers: Iterable<string> = [],
+) {
+  const existing = [...existingCardNumbers]
+    .map((number) => number.trim())
+    .filter(Boolean);
+  const occupied = new Set(existing.map((number) => number.toLowerCase()));
+  const reserved = [...existing, ...cards.map((card) => card.number.trim())];
+  const nextByPrefix = new Map<string, { value: number; width: number }>();
+
+  for (const number of reserved) {
+    const parts = sequentialNumberParts(number);
+    if (!parts) continue;
+    const key = parts.prefix.toLowerCase();
+    const current = nextByPrefix.get(key);
+    if (!current || parts.value > current.value) {
+      nextByPrefix.set(key, { value: parts.value, width: parts.width });
+    }
+  }
+
+  const usedIds = new Set<string>();
+  let adjustedNumbers = 0;
+  let adjustedIds = 0;
+  const resolved = cards.map((card) => {
+    let id = card.id;
+    if (!id || usedIds.has(id)) {
+      id = crypto.randomUUID();
+      adjustedIds += 1;
+    }
+    usedIds.add(id);
+
+    const original = card.number.trim();
+    if (original && !occupied.has(original.toLowerCase())) {
+      occupied.add(original.toLowerCase());
+      return { ...card, id, number: original };
+    }
+
+    const parts = sequentialNumberParts(original);
+    let candidate = "";
+    if (parts) {
+      const key = parts.prefix.toLowerCase();
+      const sequence = nextByPrefix.get(key) ?? {
+        value: parts.value,
+        width: parts.width,
+      };
+      do {
+        sequence.value += 1;
+        candidate = `${parts.prefix}${String(sequence.value).padStart(sequence.width, "0")}`;
+      } while (occupied.has(candidate.toLowerCase()));
+      nextByPrefix.set(key, sequence);
+    } else {
+      const base = original || fallbackNumberFromPdf(card, adjustedNumbers);
+      let suffix = 2;
+      candidate = base;
+      while (occupied.has(candidate.toLowerCase())) {
+        candidate = `${base}-${suffix}`;
+        suffix += 1;
+      }
+    }
+    occupied.add(candidate.toLowerCase());
+    adjustedNumbers += 1;
+    return { ...card, id, number: candidate };
+  });
+
+  return { cards: resolved, adjustedNumbers, adjustedIds };
+}
+
 export function reconcileTwoCardPageNumbers(cards: BingoCard[]) {
   const pages = new Map<number, BingoCard[]>();
   for (const card of cards) {
