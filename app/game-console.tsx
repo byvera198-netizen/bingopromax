@@ -682,7 +682,10 @@ export default function GameConsole() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      setAuthUser(session?.user ?? null);
+      const sessionUser = session?.user ?? null;
+      setAuthUser(sessionUser);
+      const registeredName = String(sessionUser?.user_metadata?.name ?? "").trim();
+      if (registeredName) setMembershipName((current) => current || registeredName);
       setAuthReady(true);
       const recovery =
         window.location.hash.includes("type=invite") ||
@@ -694,7 +697,10 @@ export default function GameConsole() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      setAuthUser(session?.user ?? null);
+      const sessionUser = session?.user ?? null;
+      setAuthUser(sessionUser);
+      const registeredName = String(sessionUser?.user_metadata?.name ?? "").trim();
+      if (registeredName) setMembershipName((current) => current || registeredName);
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
       if (!session) {
         setState(null);
@@ -709,12 +715,6 @@ export default function GameConsole() {
     const timer = window.setTimeout(() => void refresh(), 0);
     return () => window.clearTimeout(timer);
   }, [authReady, authUser, refresh]);
-
-  useEffect(() => {
-    if (!authUser || membershipName.trim()) return;
-    const registeredName = String(authUser.user_metadata?.name ?? "").trim();
-    if (registeredName) setMembershipName(registeredName);
-  }, [authUser, membershipName]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1448,23 +1448,6 @@ export default function GameConsole() {
       notify(`Patrón “${pattern.name}” guardado y activo en la partida.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el patrón.", "error");
-    }
-  };
-
-  const editCardNumber = async (card: BingoCard) => {
-    if (!state) return;
-    const value = window.prompt("Número del cartón:", card.number)?.trim().replace(/^Tab\s*#?\s*/i, "");
-    if (!value || value === card.number) return;
-    try {
-      await api({ action: "updateCardNumber", gameId: state.game.id, cardId: card.id, number: value });
-      setState({
-        ...state,
-        cards: state.cards.map((item) => item.id === card.id ? { ...item, number: value } : item),
-        winners: state.winners.map((winner) => winner.cardId === card.id ? { ...winner, cardNumber: value } : winner),
-      });
-      notify(`Cartón actualizado a Tab #${value}.`);
-    } catch (caught) {
-      notify(caught instanceof Error ? caught.message : "No se pudo cambiar el número del cartón.", "error");
     }
   };
 
