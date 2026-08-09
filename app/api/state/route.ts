@@ -598,31 +598,33 @@ export async function POST(request: Request) {
         );
       }
       const accepted = cards.map((card) => ({ ...card, number: card.number.trim() }));
-      const saveBatchSize = 100;
-      for (let offset = 0; offset < accepted.length; offset += saveBatchSize) {
-        const cardBatch = accepted.slice(offset, offset + saveBatchSize);
-        await db.batch(
-          cardBatch.map((card) =>
-            db
-              .prepare(
-                `INSERT INTO cards (
-                  id, game_id, number, serial, grid_json, source_file, source_page, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .bind(
-                card.id,
-                gameId,
-                card.number,
-                card.serial ?? "",
-                JSON.stringify(card.grid),
-                card.sourceFile,
-                card.sourcePage,
-                card.status,
-                now(),
-              ),
-          ),
+      const cardsPerInsert = 10;
+      const insertStatements: D1Statement[] = [];
+      for (let offset = 0; offset < accepted.length; offset += cardsPerInsert) {
+        const cardBatch = accepted.slice(offset, offset + cardsPerInsert);
+        const placeholders = cardBatch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const values = cardBatch.flatMap((card) => [
+          card.id,
+          gameId,
+          card.number,
+          card.serial ?? "",
+          JSON.stringify(card.grid),
+          card.sourceFile,
+          card.sourcePage,
+          card.status,
+          now(),
+        ]);
+        insertStatements.push(
+          db
+            .prepare(
+              `INSERT INTO cards (
+                id, game_id, number, serial, grid_json, source_file, source_page, status, created_at
+              ) VALUES ${placeholders}`,
+            )
+            .bind(...values),
         );
       }
+      await db.batch(insertStatements);
       await audit(
         db,
         gameId,

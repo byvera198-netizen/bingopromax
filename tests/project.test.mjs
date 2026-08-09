@@ -79,7 +79,7 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(route, /approveMembership/);
   assert.match(route, /x-device-id/);
   assert.match(route, /WHERE owner_email = \?/);
-  assert.match(route, /saveBatchSize = 100/);
+  assert.match(route, /cardsPerInsert = 10/);
   assert.match(page, /specialGamePatterns/);
   assert.match(page, /new Set\(state\.disabledPatternIds\)/);
   assert.match(bingo, /isWinningCard/);
