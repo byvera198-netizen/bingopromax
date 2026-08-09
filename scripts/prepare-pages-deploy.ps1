@@ -61,7 +61,7 @@ if (-not $defaultExport.Success) {
 }
 
 $serverHandler = $defaultExport.Groups[1].Value
-$pagesHandler = 'var pagesStaticHandler={async fetch(e,t,r){if(t&&t.ASSETS){let a=await t.ASSETS.fetch(e);if(a.status!==404)return a}return ' + $serverHandler + '.fetch(e,t,r)}};export{pagesStaticHandler as default};'
+$pagesHandler = 'var pagesStaticHandler={async fetch(e,t,r){let u=new URL(e.url);if(e.method!=="GET"&&e.method!=="HEAD"||u.pathname.startsWith("/api/"))return ' + $serverHandler + '.fetch(e,t,r);if(t&&t.ASSETS){let s=await t.ASSETS.fetch(e);if(s.status!==404)return s}return ' + $serverHandler + '.fetch(e,t,r)}};export{pagesStaticHandler as default};'
 $workerSource = $workerSource.Remove($defaultExport.Index, $defaultExport.Length).Insert($defaultExport.Index, $pagesHandler)
 [System.IO.File]::WriteAllText($workerPath, $workerSource, [System.Text.UTF8Encoding]::new($false))
 

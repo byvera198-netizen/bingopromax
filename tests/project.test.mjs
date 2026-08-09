@@ -26,11 +26,14 @@ test("declara persistencia para partidas, membresías y archivos PDF", async () 
 test("aísla cada selección de archivos durante la importación", async () => {
   const page = await read("app/game-console.tsx");
   const stateRoute = await read("app/api/state/route.ts");
+  const pagesDeploy = await read("scripts/prepare-pages-deploy.ps1");
 
   assert.match(page, /importBusyRef\.current/);
   assert.match(page, /byFile\.set\(card\.sourceFile/);
   assert.match(page, /importSource: sourceFile/);
   assert.match(stateRoute, /cards\.some\(\(card\) => card\.sourceFile !== importSource\)/);
+  assert.match(pagesDeploy, /e\.method!=="GET"&&e\.method!=="HEAD"/);
+  assert.match(pagesDeploy, /pathname\.startsWith\("\/api\/"\)/);
 });
 
 test("incluye los flujos operativos y administrativos principales", async () => {
