@@ -47,6 +47,19 @@ test("conserva los cartones al reiniciar y solo abre una partida vacia por accio
   assert.doesNotMatch(route, /if \(action === "createGame"\)[\s\S]{0,1600}DELETE FROM cards/);
 });
 
+test("una cuenta eliminada puede crear una nueva solicitud pendiente", async () => {
+  const route = await read("app/api/state/route.ts");
+  const requestMembership = route.slice(
+    route.indexOf('if (action === "requestMembership")'),
+    route.indexOf('if (action === "activateMembership")'),
+  );
+
+  assert.match(requestMembership, /DELETE FROM blocked_users WHERE email = \?/);
+  assert.match(requestMembership, /INSERT INTO memberships/);
+  assert.match(requestMembership, /status = 'pending'/);
+  assert.doesNotMatch(requestMembership, /Esta cuenta fue eliminada\. Contacta al administrador/);
+});
+
 test("incluye los flujos operativos y administrativos principales", async () => {
   const page = await read("app/game-console.tsx");
   const route = await read("app/api/state/route.ts");

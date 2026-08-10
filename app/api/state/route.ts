@@ -414,10 +414,9 @@ export async function POST(request: Request) {
       const name = String(body.name ?? "").trim();
       const accessCode = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
       if (!email || !email.includes("@")) return Response.json({ error: "Correo inválido." }, { status: 400 });
-      const blocked = await db.prepare("SELECT email FROM blocked_users WHERE email = ?").bind(email).first<{ email: string }>();
-      if (blocked) return Response.json({ error: "Esta cuenta fue eliminada. Contacta al administrador." }, { status: 403 });
-      await db
-        .prepare(
+      await db.batch([
+        db.prepare("DELETE FROM blocked_users WHERE email = ?").bind(email),
+        db.prepare(
           `INSERT INTO memberships (
              id, email, name, plan, membership_months, access_code,
              activation_verified, status, requested_at
@@ -427,8 +426,8 @@ export async function POST(request: Request) {
              access_code = excluded.access_code, activation_verified = 0,
              status = 'pending', requested_at = excluded.requested_at`,
         )
-        .bind(crypto.randomUUID(), email, name, accessCode, now())
-        .run();
+          .bind(crypto.randomUUID(), email, name, accessCode, now()),
+      ]);
       return Response.json({
         ok: true,
         adminEmail: ADMIN_EMAIL,
