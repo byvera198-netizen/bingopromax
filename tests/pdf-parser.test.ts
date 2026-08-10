@@ -16,6 +16,7 @@ import {
 } from "../lib/bingo";
 import {
   assignSequentialCardNumbers,
+  cardIdentifierFromOcrText,
   ensureUniqueImportIdentifiers,
   reconcilePlainSequentialCardNumbers,
   detectCompactRectangles,
@@ -86,6 +87,22 @@ test("repara una secuencia numÃ©rica simple cuando el OCR repite un cartÃ³n"
     serial: "",
     grid: Array.from({ length: 25 }, (_, cell) => cell === 12 ? 0 : cell + 1),
     sourceFile: "lote.pdf",
+    sourcePage: 1,
+    status: "active" as const,
+  }));
+  assert.deepEqual(
+    reconcilePlainSequentialCardNumbers(cards).map((card) => card.number),
+    ["0311297", "0311298", "0311299", "0311300"],
+  );
+});
+
+test("repara una secuencia simple cuando varias cifras OCR son inexactas", () => {
+  const cards = ["0311295", "0311299", "0311300", "0311300"].map((number, index) => ({
+    id: String(index),
+    number,
+    serial: "",
+    grid: Array.from({ length: 25 }, (_, cell) => cell === 12 ? 0 : cell + 1),
+    sourceFile: "membrete-variable.pdf",
     sourcePage: 1,
     status: "active" as const,
   }));
@@ -897,6 +914,19 @@ test("conserva el número impreso y la forma leídos en la casilla central", () 
     form: "9",
     identifier: "24146-6",
   });
+  assert.deepEqual(numberSheetMetadataFromOcrText("Tab#23726-1"), {
+    form: null,
+    identifier: "23726-1",
+  });
+});
+
+test("conserva identificadores simples aunque cambie el membrete del PDF", () => {
+  assert.equal(cardIdentifierFromOcrText("#0311297"), "0311297");
+  assert.equal(cardIdentifierFromOcrText("TABLA Tab#71248-3"), "71248-3");
+  assert.equal(cardIdentifierFromOcrText("Serie: 137286-2"), "137286-2");
+  assert.equal(cardIdentifierFromOcrText("Membrete distinto\nCartón 0045821"), "0045821");
+  assert.equal(cardIdentifierFromOcrText("PREMIO 30078"), null);
+  assert.equal(cardIdentifierFromOcrText("Tab #30078"), "30078");
 });
 
 test("ignora marcas de agua fuera de las casillas de una Forma #3", () => {
@@ -978,6 +1008,56 @@ test("separa dos cuadrículas escaneadas por sus líneas", () => {
 
   assert.equal(rectangles.length, 2);
   assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [50, 550]);
+});
+
+test("recupera una cuadrícula cuyo borde izquierdo fue recortado por la foto", () => {
+  const width = 540;
+  const height = 640;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  const vertical = [52, 104, 156, 208, 260];
+  const horizontal = [70, 118, 166, 214, 262, 310];
+  for (const x of vertical) for (let y = horizontal[0]; y <= horizontal[5]; y += 1) drawPixel(x, y);
+  for (const y of horizontal) for (let x = 0; x <= vertical[4]; x += 1) drawPixel(x, y);
+
+  const rectangles = detectGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 1);
+  assert.equal(rectangles[0].x, 0);
+  assert.deepEqual(rectangles[0].verticalLines, [0, ...vertical]);
+});
+
+test("detecta dos cartones que ocupan casi toda la altura de una imagen horizontal", () => {
+  const width = 860;
+  const height = 480;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  const horizontal = [77, 153, 230, 306, 382, 458];
+  for (const vertical of [
+    [9, 88, 168, 247, 326, 405],
+    [460, 539, 618, 697, 776, 855],
+  ]) {
+    for (const x of vertical) for (let y = horizontal[0]; y <= horizontal[5]; y += 1) drawPixel(x, y);
+    for (const y of horizontal) for (let x = vertical[0]; x <= vertical[5]; x += 1) drawPixel(x, y);
+  }
+
+  const rectangles = detectGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 2);
+  assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [9, 460]);
 });
 
 test("detecta cuatro cartones aunque el escaneo deforme progresivamente las filas", () => {
