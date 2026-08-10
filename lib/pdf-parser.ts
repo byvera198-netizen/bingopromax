@@ -2973,10 +2973,12 @@ export function compactIdentifierFamily(
     const normalized = text
       .replace(/[Oo]/g, "0")
       .replace(/[Il|]/g, "1")
-      .replace(/\s+/g, "")
-      .replace(/[^\d-]/g, "");
+      .replace(/[‐‑–—_]/g, "-");
+    const suffix = (index % 8) + 1;
+    // Cada recorte conserva sus intentos separados; así un teléfono, premio o
+    // lectura concatenada más larga no aporta una familia falsa.
     const match = normalized.match(
-      new RegExp(`^(0\\d{5})-${(index % 8) + 1}$`),
+      new RegExp(`(?:^|\\D)(0\\d{5})\\s*-\\s*${suffix}(?!\\d)`),
     );
     return match ? [match[1]] : [];
   });
@@ -2987,33 +2989,33 @@ export function compactIdentifierFamily(
         exactZeroPrefixed.filter((value) => value === a).length,
     )[0];
   }
-  const candidates = readings
-    .map((text, index) => {
-      const digits = text.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/\D/g, "");
-      if (digits.length < 6) return null;
-      const suffix = String((index % 8) + 1);
-      return digits.endsWith(suffix) ? digits.slice(0, -suffix.length) : digits;
-    })
-    .filter((value): value is string => Boolean(value));
+  const candidates = readings.flatMap((text) => {
+    const normalized = text.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1");
+    return [...normalized.matchAll(/(?:^|\D)(0\d{5})(?!\d)/g)].map(
+      (match) => match[1],
+    );
+  });
   const vertical = verticalReading.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1").replace(/\D/g, "");
   const verticalTail = vertical.match(/(0\d{5})$/)?.[1] ?? null;
   if (!candidates.length && verticalTail) return verticalTail;
-  const lengths = [...candidates, vertical].filter(Boolean).map((value) => value.length);
+  const lengths = [...candidates, verticalTail ?? ""]
+    .filter(Boolean)
+    .map((value) => value.length);
   if (!lengths.length) return null;
   const modalLength = [...new Set(lengths)].sort(
     (a, b) => lengths.filter((value) => value === b).length - lengths.filter((value) => value === a).length,
   )[0];
   const comparable = candidates.filter((value) => value.length === modalLength);
-  if (!comparable.length && vertical.length === modalLength) return vertical;
+  if (!comparable.length && verticalTail?.length === modalLength) return verticalTail;
   if (!comparable.length) return null;
   const consensus = Array.from({ length: modalLength }, (_, position) => {
     const counts = new Map<string, number>();
     for (const value of comparable) counts.set(value[position], (counts.get(value[position]) ?? 0) + 1);
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
   });
-  if (vertical.length === modalLength) {
+  if (verticalTail?.length === modalLength) {
     for (let index = 0; index < modalLength; index += 1) {
-      if (vertical[index] === "0" && /[689]/.test(consensus[index])) consensus[index] = "0";
+      if (verticalTail[index] === "0" && /[689]/.test(consensus[index])) consensus[index] = "0";
     }
   }
   return consensus.join("");
@@ -3031,26 +3033,69 @@ async function recognizeCompactIdentifiers(
     preserve_interword_spaces: "1",
   });
   const readings: string[] = [];
-  for (const rectangle of ordered) {
-    const target = makeCanvas(1440, 264);
-    if (!target) {
-      readings.push("");
-      continue;
+  for (const [index, rectangle] of ordered.entries()) {
+    const suffix = (index % 8) + 1;
+    const variants = [
+      {
+        x: 0.36,
+        y: 0.43,
+        width: 0.28,
+        height: 0.12,
+        threshold: 170,
+        targetHeight: 220,
+      },
+      {
+        x: 0.36,
+        y: 0.43,
+        width: 0.28,
+        height: 0.12,
+        threshold: 205,
+        targetHeight: 220,
+      },
+      {
+        x: 0.32,
+        y: 0.41,
+        width: 0.36,
+        height: 0.15,
+        threshold: 220,
+        targetHeight: 260,
+      },
+      {
+        x: 0.28,
+        y: 0.4,
+        width: 0.44,
+        height: 0.2,
+        threshold: 175,
+        targetHeight: 320,
+      },
+    ];
+    const attempts: string[] = [];
+    for (const variant of variants) {
+      const target = makeCanvas(1200, variant.targetHeight);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        rectangle.x + rectangle.width * variant.x,
+        rectangle.y + rectangle.height * variant.y,
+        rectangle.width * variant.width,
+        rectangle.height * variant.height,
+        0,
+        0,
+        target.canvas.width,
+        target.canvas.height,
+      );
+      binarizeNumbers(target.canvas, target.context, variant.threshold, 90);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const text = result.data.text ?? "";
+      attempts.push(text);
+      const normalized = text
+        .replace(/[Oo]/g, "0")
+        .replace(/[Il|]/g, "1")
+        .replace(/\s+/g, "")
+        .replace(/[^\d-]/g, "");
+      if (new RegExp(`0\\d{5}-?${suffix}(?!\\d)`).test(normalized)) break;
     }
-    target.context.drawImage(
-      source,
-      rectangle.x + rectangle.width * 0.288,
-      rectangle.y + rectangle.height * 0.412,
-      rectangle.width * 0.447,
-      rectangle.height * 0.13,
-      0,
-      0,
-      target.canvas.width,
-      target.canvas.height,
-    );
-    binarizeNumbers(target.canvas, target.context, 225);
-    const result = await worker.recognize(target.canvas, {}, { text: true });
-    readings.push(result.data.text ?? "");
+    readings.push(attempts.join("\n"));
   }
 
   let verticalReading = "";
@@ -3222,7 +3267,9 @@ async function recognizeCompactCards(
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
-  return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers);
+  return cardsFromDetectedGrids(detected, fileName, pageNumber, identifiers).map(
+    (card) => ({ ...card, serial: "Sabrosito" }),
+  );
 }
 
 interface RelativeNumberCell {
