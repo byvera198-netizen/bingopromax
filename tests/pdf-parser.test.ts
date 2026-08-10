@@ -34,12 +34,21 @@ import {
   validateBingoImportFileContent,
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
+  recommendedOcrConcurrency,
   reconcileTwoCardPageNumbers,
   specialPageLayoutFromOcrText,
   shouldRereadBingoCell,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("limita el OCR paralelo segun el dispositivo y la cantidad de paginas", () => {
+  assert.equal(recommendedOcrConcurrency(3, 16, 8, false), 1);
+  assert.equal(recommendedOcrConcurrency(12, 2, 8, false), 1);
+  assert.equal(recommendedOcrConcurrency(12, 8, 8, false), 3);
+  assert.equal(recommendedOcrConcurrency(12, 6, 6, true), 2);
+  assert.equal(recommendedOcrConcurrency(12, 4, 4, true), 1);
+});
 
 test("repara una secuencia numÃ©rica simple cuando el OCR repite un cartÃ³n", () => {
   const cards = ["0311297", "0311298", "0311298", "0311300"].map((number, index) => ({

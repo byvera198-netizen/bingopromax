@@ -1813,6 +1813,9 @@ export default function GameConsole() {
     const awaitingCode = access.membership?.status === "approved" && !access.membership.activationVerified;
     const canRequest = !access.membership || access.membership.status === "rejected" || access.membership.status === "expired";
     const membershipEmail = access.email || authUser?.email || "";
+    const whatsappRequestText = awaitingCode
+      ? `Hola, solicito el código de acceso de Bingo ProMax para la cuenta ${membershipEmail}.`
+      : `Hola, solicito la activación o renovación de Bingo ProMax para la cuenta ${membershipEmail}. Nombre: ${membershipName || "Usuario"}.`;
     return (
       <main className="membership-screen">
         <section className="membership-card">
@@ -1836,6 +1839,14 @@ export default function GameConsole() {
               <button className="primary-button" onClick={() => void activateMembership()} type="button">Activar membresía</button>
             </div>
           )}
+          <a
+            className="whatsapp-button"
+            href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(whatsappRequestText)}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            <MessageCircle size={16} /> {awaitingCode ? "Solicitar código al administrador por WhatsApp" : "Solicitar activación o renovación por WhatsApp"}
+          </a>
           <button className="auth-link" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión y volver al inicio</button>
           {error && <div className="membership-error">{error}</div>}
         </section>

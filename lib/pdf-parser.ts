@@ -2182,10 +2182,11 @@ async function recognizeMissingNumberSheetCells(
     const value = normalized[index];
     return value < 0 || (counts.get(value) ?? 0) > 1;
   });
-  const cellsToRecognize = [...new Set([
-    ...NUMBER_SHEET_FORM_CELLS[form],
-    ...missing,
-  ])];
+  // La primera lectura ya procesa la cuadrícula completa. Repetir OCR sobre
+  // todas las casillas válidas multiplicaba el tiempo por cada página sin
+  // aportar información nueva. Solo se releen cifras ausentes o duplicadas;
+  // la ruta exhaustiva inferior se conserva para cualquier fila incompleta.
+  const cellsToRecognize = [...new Set(missing)];
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
     tessedit_pageseg_mode: "8",
@@ -3228,7 +3229,15 @@ const lineAndLocoCards: SpecialPageCard[] = [
   },
 ];
 
-function valueFromRelativeSymbols(
+interface RelativeSymbolReading {
+  value: number;
+  confidence: number;
+  digits: number;
+  normalizedDistance: number;
+  score: number;
+}
+
+function readingFromRelativeSymbols(
   symbols: OcrSymbol[],
   sourceWidth: number,
   sourceHeight: number,
@@ -3251,7 +3260,7 @@ function valueFromRelativeSymbols(
       );
     })
     .sort((a, b) => a.bbox.x0 - b.bbox.x0);
-  const values: Array<{ value: number; score: number }> = [];
+  const values: RelativeSymbolReading[] = [];
   for (let start = 0; start < candidates.length; start += 1) {
     for (const length of [2, 1]) {
       const selection = candidates.slice(start, start + length);
@@ -3264,17 +3273,33 @@ function valueFromRelativeSymbols(
         (Math.min(...selection.map((symbol) => symbol.bbox.x0)) +
           Math.max(...selection.map((symbol) => symbol.bbox.x1))) /
         2;
+      const confidence =
+        selection.reduce((sum, symbol) => sum + symbol.confidence, 0) /
+        selection.length;
+      const normalizedDistance =
+        Math.abs(center - expectedX) / Math.max(1, boxWidth);
       values.push({
         value,
-        score:
-          selection.reduce((sum, symbol) => sum + symbol.confidence, 0) /
-            selection.length -
-          (Math.abs(center - expectedX) / Math.max(1, boxWidth)) * 30 +
-          (length === 2 ? 45 : 0),
+        confidence,
+        digits: digits.length,
+        normalizedDistance,
+        score: confidence - normalizedDistance * 30 + (length === 2 ? 45 : 0),
       });
     }
   }
-  return values.sort((a, b) => b.score - a.score)[0]?.value ?? null;
+  return values.sort((a, b) => b.score - a.score)[0] ?? null;
+}
+
+function isReliableTwoDigitSymbol(
+  reading: RelativeSymbolReading | null,
+): reading is RelativeSymbolReading {
+  return Boolean(
+    reading &&
+      reading.digits === 2 &&
+      reading.value >= 10 &&
+      reading.confidence >= 85 &&
+      reading.normalizedDistance <= 0.3,
+  );
 }
 
 function valueFromCellText(text: string, range: readonly [number, number]) {
@@ -3298,7 +3323,6 @@ async function recognizeRelativeCell(
   const width = Math.min(source.width - left, position.width * source.width);
   const height = Math.min(source.height - top, position.height * source.height);
   const range = position.range ?? [1, 75];
-  const readings: Array<{ value: number; confidence: number }> = [];
   for (const maxChroma of position.preferSymbols ? [256, 58] : [58]) {
     for (const pageSegMode of ["8", "7"]) {
       await worker.setParameters({
@@ -3306,65 +3330,139 @@ async function recognizeRelativeCell(
         tessedit_pageseg_mode: pageSegMode,
         preserve_interword_spaces: "1",
       });
-      for (const threshold of [100, 135, 165, 195, 225]) {
+      for (const threshold of [165, 100, 135, 195, 225]) {
         const target = makeCanvas(400, 300);
         if (!target) continue;
         target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
         binarizeNumbers(target.canvas, target.context, threshold, maxChroma);
         const result = await worker.recognize(target.canvas, {}, { text: true });
         const value = valueFromCellText(result.data.text ?? "", range);
-        if (value !== null) {
-          readings.push({ value, confidence: result.data.confidence ?? 0 });
-        }
-      }
-    }
-    if (readings.length) break;
-  }
-  if (!readings.length) {
-    const insetLeft = left + width * 0.14;
-    const insetTop = top + height * 0.14;
-    const insetWidth = width * 0.72;
-    const insetHeight = height * 0.72;
-    for (const pageSegMode of ["8", "7"]) {
-      await worker.setParameters({
-        tessedit_char_whitelist: "0123456789",
-        tessedit_pageseg_mode: pageSegMode,
-        preserve_interword_spaces: "1",
-      });
-      for (const threshold of [100, 135, 165, 195, 225]) {
-        const target = makeCanvas(420, 280);
-        if (!target) continue;
-        target.context.drawImage(
-          source,
-          insetLeft,
-          insetTop,
-          insetWidth,
-          insetHeight,
-          0,
-          0,
-          target.canvas.width,
-          target.canvas.height,
-        );
-        binarizeNumbers(target.canvas, target.context, threshold, 58);
-        const result = await worker.recognize(target.canvas, {}, { text: true });
-        const value = valueFromCellText(result.data.text ?? "", range);
-        if (value !== null) {
-          readings.push({ value, confidence: result.data.confidence ?? 0 });
-        }
+        if (value !== null) return value;
       }
     }
   }
-  const grouped = new Map<number, { count: number; confidence: number }>();
-  for (const reading of readings) {
-    const current = grouped.get(reading.value) ?? { count: 0, confidence: 0 };
-    grouped.set(reading.value, {
-      count: current.count + 1,
-      confidence: Math.max(current.confidence, reading.confidence),
+  const insetLeft = left + width * 0.14;
+  const insetTop = top + height * 0.14;
+  const insetWidth = width * 0.72;
+  const insetHeight = height * 0.72;
+  for (const pageSegMode of ["8", "7"]) {
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: pageSegMode,
+      preserve_interword_spaces: "1",
     });
+    for (const threshold of [165, 100, 135, 195, 225]) {
+      const target = makeCanvas(420, 280);
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        insetLeft,
+        insetTop,
+        insetWidth,
+        insetHeight,
+        0,
+        0,
+        target.canvas.width,
+        target.canvas.height,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold, 58);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const value = valueFromCellText(result.data.text ?? "", range);
+      if (value !== null) return value;
+    }
   }
-  return [...grouped.entries()].sort(
-    (a, b) => b[1].confidence - a[1].confidence || b[1].count - a[1].count,
-  )[0]?.[0] ?? null;
+  return null;
+}
+
+function validSpecialLayoutValues(
+  layout: SpecialPageCard,
+  values: number[],
+) {
+  return (
+    values.length === layout.cells.length &&
+    values.every((value, index) => {
+      const [minimum, maximum] = layout.cells[index].range ?? [1, 75];
+      return value >= minimum && value <= maximum;
+    }) &&
+    new Set(values).size === values.length &&
+    (layout.label !== "Yapa" || validYapaGrid(values))
+  );
+}
+
+async function recognizeSpecialLayoutCrop(
+  source: HTMLCanvasElement,
+  layout: SpecialPageCard,
+  worker: OcrWorker,
+) {
+  const left = Math.max(
+    0,
+    Math.min(...layout.cells.map((position) => position.x - position.width / 2)) - 0.02,
+  );
+  const right = Math.min(
+    1,
+    Math.max(...layout.cells.map((position) => position.x + position.width / 2)) + 0.02,
+  );
+  const top = Math.max(
+    0,
+    Math.min(...layout.cells.map((position) => position.y - position.height / 2)) - 0.02,
+  );
+  const bottom = Math.min(
+    1,
+    Math.max(...layout.cells.map((position) => position.y + position.height / 2)) + 0.02,
+  );
+  const normalizedWidth = right - left;
+  const normalizedHeight = bottom - top;
+  const targetWidth = 1400;
+  const targetHeight = Math.max(
+    300,
+    Math.round(targetWidth * normalizedHeight / normalizedWidth),
+  );
+  const relativePositions = layout.cells.map((position) => ({
+    ...position,
+    x: (position.x - left) / normalizedWidth,
+    y: (position.y - top) / normalizedHeight,
+    width: position.width / normalizedWidth,
+    height: position.height / normalizedHeight,
+  }));
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  for (const threshold of [165, 135]) {
+    const target = makeCanvas(targetWidth, targetHeight);
+    if (!target) continue;
+    target.context.drawImage(
+      source,
+      left * source.width,
+      top * source.height,
+      normalizedWidth * source.width,
+      normalizedHeight * source.height,
+      0,
+      0,
+      target.canvas.width,
+      target.canvas.height,
+    );
+    binarizeNumbers(target.canvas, target.context, threshold);
+    const result = await worker.recognize(
+      target.canvas,
+      {},
+      { blocks: true, text: true },
+    );
+    const symbols = result.data.blocks?.length
+      ? flattenOcrSymbols(ocrWords(result.data.blocks))
+      : [];
+    const values = relativePositions.map((position) =>
+      readingFromRelativeSymbols(
+        symbols,
+        target.canvas.width,
+        target.canvas.height,
+        position,
+      )?.value ?? -1,
+    );
+    if (validSpecialLayoutValues(layout, values)) return values;
+  }
+  return null;
 }
 
 function familyFromCards(cards: BingoCard[]) {
@@ -3789,20 +3887,27 @@ async function recognizeSpecialPageCards(
     : [];
   const cards: BingoCard[] = [];
   for (const layout of layouts) {
-    const directValues = layout.label === "Yapa"
+    const directValues = await recognizeSpecialLayoutCrop(
+      source,
+      layout,
+      worker,
+    ) ?? (layout.label === "Yapa"
       ? await recognizeYapaGridCrop(source, worker)
-      : null;
+      : null);
     let values: number[] = directValues ? [...directValues] : [];
     const candidates: number[][] = [];
     const positions = directValues ? [] : layout.cells;
     for (const [positionIndex, position] of positions.entries()) {
-      const symbolValue = valueFromRelativeSymbols(
+      const symbolReading = readingFromRelativeSymbols(
         symbols,
         source.width,
         source.height,
         position,
       );
-      let croppedValue = await recognizeRelativeCell(source, position, worker);
+      const symbolValue = symbolReading?.value ?? null;
+      let croppedValue = isReliableTwoDigitSymbol(symbolReading)
+        ? symbolReading.value
+        : await recognizeRelativeCell(source, position, worker);
       if (
         layout.label === "Keke Keke" &&
         positionIndex === 4
@@ -4035,6 +4140,18 @@ export async function runOcr(
   if (!target) return [];
   await pageProxy.render({ canvas: target.canvas, canvasContext: target.context, viewport }).promise;
   return runOcrCanvas(target.canvas, worker, fileName, pageNumber);
+}
+
+export function recommendedOcrConcurrency(
+  pageCount: number,
+  hardwareThreads: number,
+  deviceMemoryGb: number,
+  mobileDevice: boolean,
+) {
+  if (pageCount < 4 || hardwareThreads < 4 || deviceMemoryGb < 4) return 1;
+  if (mobileDevice) return hardwareThreads >= 6 && deviceMemoryGb >= 6 ? 2 : 1;
+  if (hardwareThreads >= 8 && deviceMemoryGb >= 8) return 3;
+  return 2;
 }
 
 function imageExtension(fileName: string) {
@@ -4390,67 +4507,103 @@ export async function parseBingoPdf(
     isEvalSupported: false,
   }).promise;
   const pageCount = pdf.numPages;
-  const cards: BingoCard[] = [];
-  const warnings: string[] = [];
-  let ocrWorker: OcrWorker | null = null;
+  const pageResults: Array<PdfParseResult | undefined> = new Array(pageCount);
+  const browserNavigator = typeof navigator === "undefined" ? null : navigator;
+  const hardwareThreads = browserNavigator?.hardwareConcurrency ?? 2;
+  const deviceMemoryGb =
+    (browserNavigator as (Navigator & { deviceMemory?: number }) | null)
+      ?.deviceMemory ?? 4;
+  const mobileDevice = browserNavigator
+    ? /Android|iPhone|iPad|iPod/i.test(browserNavigator.userAgent)
+    : false;
+  const concurrency = recommendedOcrConcurrency(
+    pageCount,
+    hardwareThreads,
+    deviceMemoryGb,
+    mobileDevice,
+  );
+  let nextPage = 1;
+  let completedPages = 0;
 
   try {
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
-      onProgress({
-        page: pageNumber,
-        pages: pageCount,
-        stage: "Leyendo texto",
-        percent: Math.round(((pageNumber - 1) / pageCount) * 100),
-      });
-      const page = await pdf.getPage(pageNumber);
-      const text = await page.getTextContent();
-      const items = text.items.flatMap<PdfTextItem>((item) =>
-        "str" in item && "transform" in item
-          ? [
-              {
-                str: item.str,
-                transform: [...item.transform],
-                width: "width" in item ? item.width : undefined,
-                height: "height" in item ? item.height : undefined,
-              },
-            ]
-          : [],
-      );
-      let pageCards = extractCardsFromTextItems(items, file.name, pageNumber);
+    const processPages = async () => {
+      let ocrWorker: OcrWorker | null = null;
+      try {
+        while (nextPage <= pageCount) {
+          const pageNumber = nextPage;
+          nextPage += 1;
+          const pageWarnings: string[] = [];
+          onProgress({
+            page: pageNumber,
+            pages: pageCount,
+            stage: "Leyendo texto",
+            percent: Math.round((completedPages / pageCount) * 100),
+          });
+          const page = await pdf.getPage(pageNumber);
+          let pageCards: BingoCard[] = [];
+          try {
+            const text = await page.getTextContent();
+            const items = text.items.flatMap<PdfTextItem>((item) =>
+              "str" in item && "transform" in item
+                ? [
+                    {
+                      str: item.str,
+                      transform: [...item.transform],
+                      width: "width" in item ? item.width : undefined,
+                      height: "height" in item ? item.height : undefined,
+                    },
+                  ]
+                : [],
+            );
+            pageCards = extractCardsFromTextItems(items, file.name, pageNumber);
 
-      if (!pageCards.length) {
-        onProgress({
-          page: pageNumber,
-          pages: pageCount,
-          stage: "Aplicando OCR",
-          percent: Math.round(((pageNumber - 0.5) / pageCount) * 100),
-        });
-        try {
-          ocrWorker ??= await createOcrWorker();
-          pageCards = await runOcr(page, ocrWorker, file.name, pageNumber);
-        } catch (error) {
-          warnings.push(
-            `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
-          );
+            if (!pageCards.length) {
+              onProgress({
+                page: pageNumber,
+                pages: pageCount,
+                stage: "Aplicando OCR",
+                percent: Math.round(((completedPages + 0.5) / pageCount) * 100),
+              });
+              try {
+                ocrWorker ??= await createOcrWorker();
+                pageCards = await runOcr(page, ocrWorker, file.name, pageNumber);
+              } catch (error) {
+                pageWarnings.push(
+                  `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
+                );
+              }
+            }
+
+            if (!pageCards.length) {
+              pageWarnings.push(
+                `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`,
+              );
+            }
+            const pending = pageCards.filter(needsImportReview).length;
+            if (pending) {
+              pageWarnings.push(
+                `Página ${pageNumber}: ${pending} cartón(es) detectado(s) necesitan revisión antes de guardarse.`,
+              );
+            }
+            pageResults[pageNumber - 1] = {
+              cards: pageCards,
+              pages: 1,
+              warnings: pageWarnings,
+            };
+          } finally {
+            page.cleanup();
+            completedPages += 1;
+          }
         }
+      } finally {
+        await ocrWorker?.terminate().catch(() => undefined);
       }
+    };
 
-      if (!pageCards.length) {
-        warnings.push(
-          `Página ${pageNumber}: no se encontró un cartón de bingo válido. Puedes crearlo con “Ingreso manual”.`,
-        );
-      }
-      const pending = pageCards.filter(needsImportReview).length;
-      if (pending) {
-        warnings.push(
-          `Página ${pageNumber}: ${pending} cartón(es) detectado(s) necesitan revisión antes de guardarse.`,
-        );
-      }
-      cards.push(...pageCards);
-      page.cleanup();
-    }
+    await Promise.all(
+      Array.from({ length: concurrency }, () => processPages()),
+    );
   } finally {
-    await ocrWorker?.terminate().catch(() => undefined);
     await pdf.destroy();
   }
 
@@ -4462,7 +4615,11 @@ export async function parseBingoPdf(
   });
   // Nunca se altera la numeración impresa. Un identificador ilegible queda
   // pendiente de revisión en vez de sustituirse por una secuencia inventada.
-  return { cards, pages: pageCount, warnings };
+  return {
+    cards: pageResults.flatMap((result) => result?.cards ?? []),
+    pages: pageCount,
+    warnings: pageResults.flatMap((result) => result?.warnings ?? []),
+  };
 }
 
 export async function parseBingoImage(

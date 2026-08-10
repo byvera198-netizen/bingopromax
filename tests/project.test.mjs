@@ -36,6 +36,17 @@ test("aísla cada selección de archivos durante la importación", async () => {
   assert.match(pagesDeploy, /pathname\.startsWith\("\/api\/"\)/);
 });
 
+test("conserva los cartones al reiniciar y solo abre una partida vacia por accion del usuario", async () => {
+  const page = await read("app/game-console.tsx");
+  const route = await read("app/api/state/route.ts");
+
+  assert.match(route, /SELECT \* FROM games WHERE owner_email = \? ORDER BY created_at DESC LIMIT 1/);
+  assert.match(route, /SELECT \* FROM cards WHERE game_id = \? ORDER BY created_at DESC/);
+  assert.match(route, /if \(action === "createGame"\)/);
+  assert.match(page, /onClick=\{\(\) => void createNewGame\(\)\}/);
+  assert.doesNotMatch(route, /if \(action === "createGame"\)[\s\S]{0,1600}DELETE FROM cards/);
+});
+
 test("incluye los flujos operativos y administrativos principales", async () => {
   const page = await read("app/game-console.tsx");
   const route = await read("app/api/state/route.ts");
@@ -76,6 +87,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /membershipEmail = access\.email \|\| authUser\?\.email/);
   assert.match(page, /Cerrar sesión y volver al inicio/);
   assert.match(page, /capture="environment"/);
+  assert.match(page, /Solicitar código al administrador por WhatsApp/);
+  assert.match(page, /https:\/\/wa\.me\/\$\{WHATSAPP_NUMBER\}\?text=/);
   assert.doesNotMatch(page, /assignApplicationCardNumbers/);
   assert.match(parser, /assignSequentialCardNumbers/);
   assert.match(route, /addAdmin/);
