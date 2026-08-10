@@ -36,6 +36,7 @@ import {
   orderCardsByPdfPosition,
   recommendedOcrConcurrency,
   reconcileTwoCardPageNumbers,
+  selectGridRectangles,
   specialPageLayoutFromOcrText,
   shouldRereadBingoCell,
   type OcrBlock,
@@ -48,6 +49,31 @@ test("limita el OCR paralelo segun el dispositivo y la cantidad de paginas", () 
   assert.equal(recommendedOcrConcurrency(12, 8, 8, false), 3);
   assert.equal(recommendedOcrConcurrency(12, 6, 6, true), 2);
   assert.equal(recommendedOcrConcurrency(12, 4, 4, true), 1);
+});
+
+test("prioriza la cuadricula completa sobre lineas publicitarias superpuestas", () => {
+  const rectangle = (x: number, y: number, score: number) => ({
+    x,
+    y,
+    width: 420,
+    height: 250,
+    verticalLines: [0, 1, 2, 3, 4, 5].map((index) => x + index * 84),
+    horizontalLines: [0, 1, 2, 3, 4, 5].map((index) => y + index * 50),
+    score,
+  });
+  const selected = selectGridRectangles([
+    rectangle(35, 189, 73),
+    rectangle(535, 189, 72),
+    rectangle(35, 302, 92),
+    rectangle(535, 302, 91),
+    rectangle(35, 707, 92),
+    rectangle(535, 707, 88),
+  ]).sort((a, b) => a.y - b.y || a.x - b.x);
+
+  assert.deepEqual(
+    selected.map(({ x, y }) => [x, y]),
+    [[35, 302], [535, 302], [35, 707], [535, 707]],
+  );
 });
 
 test("repara una secuencia numÃ©rica simple cuando el OCR repite un cartÃ³n", () => {

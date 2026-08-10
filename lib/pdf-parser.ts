@@ -321,34 +321,11 @@ export function detectGridRectangles(
     }
   }
 
-  const selected: GridRectangle[] = [];
+  const selected = selectGridRectangles(rectangles);
   // En hojas con dos cartones contiguos puede aparecer una secuencia falsa que
   // empieza en la segunda columna del cartón izquierdo y termina en el borde
-  // del derecho. Elegir primero la cuadrícula más a la izquierda conserva los
-  // cinco límites reales del cartón antes de descartar solapamientos.
-  for (const rectangle of rectangles.sort(
-    (a, b) => a.y - b.y || a.x - b.x || b.score - a.score,
-  )) {
-    const duplicate = selected.some((other) => {
-      const intersectionWidth = Math.max(
-        0,
-        Math.min(rectangle.x + rectangle.width, other.x + other.width) -
-          Math.max(rectangle.x, other.x),
-      );
-      const intersectionHeight = Math.max(
-        0,
-        Math.min(rectangle.y + rectangle.height, other.y + other.height) -
-          Math.max(rectangle.y, other.y),
-      );
-      const intersection = intersectionWidth * intersectionHeight;
-      const smallerArea = Math.min(
-        rectangle.width * rectangle.height,
-        other.width * other.height,
-      );
-      return intersection / Math.max(1, smallerArea) > 0.12;
-    });
-    if (!duplicate) selected.push(rectangle);
-  }
+  // del derecho. Si todavía invade al vecino, se recupera el borde anterior
+  // antes de entregar las coordenadas definitivas al OCR.
   const ordered = selected.sort((a, b) => a.y - b.y || a.x - b.x);
   for (const rectangle of ordered) {
     const rightNeighbor = ordered
@@ -404,6 +381,37 @@ export function detectGridRectangles(
       )[0]?.position;
   }
   return ordered;
+}
+
+export function selectGridRectangles(rectangles: GridRectangle[]) {
+  const selected: GridRectangle[] = [];
+  // Los anuncios y recuadros situados encima de un cartón pueden formar una
+  // secuencia falsa superpuesta. La cuadrícula completa conserva más
+  // intersecciones y densidad, por lo que su puntuación debe prevalecer.
+  for (const rectangle of [...rectangles].sort(
+    (a, b) => b.score - a.score || a.y - b.y || a.x - b.x,
+  )) {
+    const duplicate = selected.some((other) => {
+      const intersectionWidth = Math.max(
+        0,
+        Math.min(rectangle.x + rectangle.width, other.x + other.width) -
+          Math.max(rectangle.x, other.x),
+      );
+      const intersectionHeight = Math.max(
+        0,
+        Math.min(rectangle.y + rectangle.height, other.y + other.height) -
+          Math.max(rectangle.y, other.y),
+      );
+      const intersection = intersectionWidth * intersectionHeight;
+      const smallerArea = Math.min(
+        rectangle.width * rectangle.height,
+        other.width * other.height,
+      );
+      return intersection / Math.max(1, smallerArea) > 0.12;
+    });
+    if (!duplicate) selected.push(rectangle);
+  }
+  return selected;
 }
 
 export function detectCompactRectangles(
