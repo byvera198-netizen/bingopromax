@@ -2,7 +2,7 @@
 
 ## Abrir la aplicación
 
-### [▶ Abrir Bingo Control Pro](https://bingo-control-pro-online.yesisol.chatgpt.site)
+### [▶ Abrir Bingo ProMax](https://bingopromax.pages.dev/)
 
 Esta página de GitHub conserva el código fuente y la documentación. La aplicación
 funcional se abre desde el botón anterior.
