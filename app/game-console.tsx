@@ -72,6 +72,7 @@ import {
   isSupportedBingoImportFile,
   needsImportReview,
   parseBingoImportFile,
+  sortCardsByPdfOrder,
   type PdfParseProgress,
 } from "@/lib/pdf-parser";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
@@ -1685,33 +1686,17 @@ export default function GameConsole() {
   const filteredCards = useMemo(() => {
     if (!state) return [];
     const term = search.trim().toLowerCase();
-    return state.cards
-      .filter(
+    return sortCardsByPdfOrder(
+      state.cards.filter(
         (card) =>
           (cardTypeFilter === "all" || cardType(card) === cardTypeFilter) &&
           (!term ||
             card.number.toLowerCase().includes(term) ||
             card.sourceFile.toLowerCase().includes(term) ||
             card.serial?.toLowerCase().includes(term)),
-      )
-      .sort(
-        (a, b) =>
-          nearestPatternForCard(
-            b,
-            called,
-            allPatterns,
-            state.winners.filter((winner) => winner.cardId === b.id),
-            new Set(state.disabledPatternIds),
-          ).progress.progress -
-          nearestPatternForCard(
-            a,
-            called,
-            allPatterns,
-            state.winners.filter((winner) => winner.cardId === a.id),
-            new Set(state.disabledPatternIds),
-          ).progress.progress,
-      );
-  }, [allPatterns, called, cardTypeFilter, search, state]);
+      ),
+    );
+  }, [cardTypeFilter, search, state]);
 
   const allFilteredCardsSelected = filteredCards.length > 0 && filteredCards.every((card) => selectedCardIds.has(card.id));
 
@@ -2203,7 +2188,7 @@ export default function GameConsole() {
               )}
               <div className="cards-toolbar">
                 <div className="search-box"><Search size={17} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
-                <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
+                <div><span>{filteredCards.length} cartones · ordenados como el PDF</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
               </div>
               <div className="card-legend" aria-label="Controles de visualización del cartón">
                 <button aria-pressed={cardLayers.called} className={cardLayers.called ? "active" : ""} onClick={() => setCardLayers((current) => ({ ...current, called: !current.called }))} type="button"><i className="called-number" /> Número sorteado</button>

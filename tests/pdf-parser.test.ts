@@ -26,6 +26,7 @@ import {
   extractNumberSheetGridFromKnownOcrBlocks,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  filterEnabledImportGames,
   identifierFamilyConsensus,
   identifierFamilyFromOcrText,
   identifiersForDetectedGrids,
@@ -35,8 +36,10 @@ import {
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
   recommendedOcrConcurrency,
+  reconcilePdfPageFamilies,
   reconcileTwoCardPageNumbers,
   selectGridRectangles,
+  sortCardsByPdfOrder,
   specialPageLayoutFromOcrText,
   shouldRereadBingoCell,
   type OcrBlock,
@@ -269,6 +272,99 @@ test("reconstruye la serie de una hoja aunque el OCR mezcle guiones y letras", (
   const text = "PLAN PREMIO 17000 10000 N TABLA #87020 Tab#87020-1 Tab#87020-2";
   assert.equal(identifierFamilyFromOcrText(text), "87020");
   assert.equal(identifierFamilyFromOcrText("Tab#87O21-3"), "87021");
+  assert.equal(identifierFamilyFromOcrText("JUEGO #58997 PREMIO 250 TELEFONO 593979488348"), "58997");
+});
+
+test("repara familias que perdieron el primer dÃ­gito usando hojas equivalentes vecinas", () => {
+  const makePage = (page: number, family: string): BingoCard[] => [
+    ...[1, 2, 3, 4].map((suffix) => ({
+      id: `${page}-${suffix}`,
+      number: `${family}-${suffix}`,
+      serial: "",
+      grid: baseGrid,
+      sourceFile: "sorteo.pdf",
+      sourcePage: page,
+      status: "active" as const,
+    })),
+    {
+      id: `${page}-7`,
+      number: `${family}-7`,
+      serial: "Yapa",
+      grid: [6, 33, 54, 17, 41, 66, 18, 46, 69],
+      sourceFile: "sorteo.pdf",
+      sourcePage: page,
+      status: "active" as const,
+    },
+  ];
+  const repaired = reconcilePdfPageFamilies([
+    ...makePage(7, "137286"),
+    ...makePage(8, "37287"),
+    ...makePage(9, "137288"),
+    ...makePage(11, "37292"),
+    ...makePage(13, "137294"),
+  ]);
+  assert.deepEqual(
+    [...new Set(repaired.filter((card) => card.sourcePage === 8).map((card) => card.number.split("-")[0]))],
+    ["137287"],
+  );
+  assert.deepEqual(
+    [...new Set(repaired.filter((card) => card.sourcePage === 11).map((card) => card.number.split("-")[0]))],
+    ["137292"],
+  );
+});
+
+test("muestra los cartones en el orden visual del PDF y no por avance", () => {
+  const makeCard = (number: string, page: number, serial = ""): BingoCard => ({
+    id: `${page}-${number}`,
+    number,
+    serial,
+    grid: serial === "Yapa" ? [6, 33, 54, 17, 41, 66, 18, 46, 69] : baseGrid,
+    sourceFile: "sorteo.pdf",
+    sourcePage: page,
+    status: "active",
+  });
+  const unordered = [
+    makeCard("137287-4", 8),
+    makeCard("137286-3", 7),
+    makeCard("137286-1", 7),
+    makeCard("137286-7", 7, "Yapa"),
+    makeCard("137286-4", 7),
+    makeCard("137286-2", 7),
+  ];
+  assert.deepEqual(
+    sortCardsByPdfOrder(unordered).map((card) => card.number),
+    ["137286-7", "137286-1", "137286-2", "137286-3", "137286-4", "137287-4"],
+  );
+});
+
+test("ignora juegos retirados y conserva Yapa, Sabrosito y formas 1-3-5-9", () => {
+  const makeCard = (id: string, serial: string, grid: number[]): BingoCard => ({
+    id,
+    number: `${id}-1`,
+    serial,
+    grid,
+    sourceFile: "sorteo.pdf",
+    sourcePage: 1,
+    status: "active",
+  });
+  const formOne = baseGrid.map((value, index) =>
+    [2, 6, 7, 10, 17, 20, 21, 22, 23, 24].includes(index) ? value : 0,
+  );
+  const cards = [
+    makeCard("normal", "", baseGrid),
+    makeCard("yapa", "Yapa", [6, 33, 54, 17, 41, 66, 18, 46, 69]),
+    makeCard("sabrosito", "Sabrosito", [8, 38, 52, 14, 73]),
+    makeCard("forma", "Forma #1", formOne),
+    makeCard("keke", "Keke Keke", [8, 51, 26, 30, 13, 63]),
+    makeCard("bom", "Bom Bom Bum", [4, 26, 45, 60, 21, 39, 57, 71]),
+    makeCard("eche", "Eche Leche", [2, 25, 45, 74, 7, 38, 73]),
+    makeCard("linea", "LÃ­nea", [29, 59, 9, 16, 35, 47, 75]),
+    makeCard("loco", "Loco", [34, 12, 28, 38, 49, 70, 44, 29, 31, 50]),
+  ];
+  assert.deepEqual(
+    filterEnabledImportGames(cards).map((card) => card.id),
+    ["normal", "yapa", "sabrosito", "forma"],
+  );
 });
 
 test("recupera la familia de cuatro cartones aunque el OCR confunda 9 con 0", () => {

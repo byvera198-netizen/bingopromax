@@ -904,6 +904,7 @@ function cardsFromDetectedGrids(
 
   const usedIdentifiers = new Set<Identifier>();
   return orderedGrids.map((detected, index) => {
+    const numberSheetForm = numberSheetFormForGrid(detected.grid);
     const identifier = detected.identifier
       ? undefined
       : orderedIdentifiers
@@ -917,7 +918,7 @@ function cardsFromDetectedGrids(
     return {
       id: crypto.randomUUID(),
       number: detected.identifier ?? identifier?.value ?? missingIdentifier(index),
-      serial: "",
+      serial: numberSheetForm ? `Forma #${numberSheetForm}` : "",
       grid: detected.grid,
       sourceFile: fileName,
       sourcePage: page,
@@ -1825,21 +1826,31 @@ function cropGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
   return target.canvas;
 }
 
-export function identifierFamilyFromOcrText(text: string) {
+type IdentifierEvidence = { family: string; score: number };
+
+function identifierEvidenceFromOcrText(text: string): IdentifierEvidence | null {
   const scores = new Map<string, number>();
   const add = (value: string, score: number) => {
     if (value.length < 5 || value.length > 10 || /^0+$/.test(value)) return;
     scores.set(value, (scores.get(value) ?? 0) + score);
   };
   const normalized = text.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1");
-  for (const match of normalized.matchAll(/tab(?:la)?\D{0,12}(\d{5,10})/gi)) add(match[1], 8);
-  for (const match of normalized.matchAll(/(\d{5,10})\s*[-_]\s*([1-4])(?!\d)/g)) add(match[1], 5);
+  for (const match of normalized.matchAll(/tab(?:la)?\D{0,12}(\d{5,10})/gi)) add(match[1], 12);
+  for (const match of normalized.matchAll(/jueg[0o]\D{0,12}(\d{5,10})/gi)) add(match[1], 10);
+  for (const match of normalized.matchAll(/(\d{5,10})\s*[-_]\s*([1-9])(?!\d)/g)) add(match[1], 8);
   for (const match of normalized.matchAll(/(?<!\d)(\d{6,11})(?!\d)/g)) {
     const joined = match[1];
     if (/[1-4]$/.test(joined)) add(joined.slice(0, -1), 3);
   }
   for (const match of normalized.matchAll(/(?<!\d)(\d{5,8})(?!\d)/g)) add(match[1], 1);
-  return [...scores.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] ?? null;
+  const winner = [...scores.entries()].sort(
+    (a, b) => b[1] - a[1] || b[0].length - a[0].length,
+  )[0];
+  return winner ? { family: winner[0], score: winner[1] } : null;
+}
+
+export function identifierFamilyFromOcrText(text: string) {
+  return identifierEvidenceFromOcrText(text)?.family ?? null;
 }
 
 export function identifierFamilyConsensus(families: string[]) {
@@ -1935,7 +1946,7 @@ async function recognizeGridIdentifiers(
 ) {
   const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
   await worker.setParameters({
-    tessedit_char_whitelist: "0123456789-_#TabOoIl",
+    tessedit_char_whitelist: "0123456789-_#TabJUEGOjuegoOoIl",
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
@@ -1950,23 +1961,8 @@ async function recognizeGridIdentifiers(
     pageHeader.context.drawImage(source, 0, 0, source.width, headerHeight, 0, 0, source.width, headerHeight);
     binarizeNumbers(pageHeader.canvas, pageHeader.context);
     const result = await worker.recognize(pageHeader.canvas, {}, { text: true });
-    family = identifierFamilyFromOcrText(result.data.text ?? "");
-  }
-
-  if (!family) {
-    const texts: string[] = [];
-    for (const rectangle of ordered) {
-      const margin = Math.max(28, rectangle.height * 0.25);
-      const top = Math.max(0, rectangle.y - margin);
-      const height = Math.max(1, rectangle.y - top);
-      const target = makeCanvas(rectangle.width * 2, height * 2);
-      if (!target) continue;
-      target.context.drawImage(source, rectangle.x, top, rectangle.width, height, 0, 0, target.canvas.width, target.canvas.height);
-      binarizeNumbers(target.canvas, target.context);
-      const result = await worker.recognize(target.canvas, {}, { text: true });
-      texts.push(result.data.text ?? "");
-    }
-    family = identifierFamilyFromOcrText(texts.join("\n"));
+    const evidence = identifierEvidenceFromOcrText(result.data.text ?? "");
+    family = evidence && evidence.score >= 8 ? evidence.family : null;
   }
 
   const identifierValues = family
@@ -3195,47 +3191,172 @@ export function orderCardsByPdfPosition(cards: BingoCard[]) {
     .map(({ card }) => card);
 }
 
-const numberSheetExtraCards: SpecialPageCard[] = [
-  {
-    suffix: 1,
-    label: "Keke Keke",
-    x: 0.25,
-    y: 0.18,
-    cells: [
-      cell(0.102, 0.077, [1, 75], 0.09, 0.075), cell(0.423, 0.077, [1, 75], 0.09, 0.075),
-      cell(0.204, 0.178, [1, 75], 0.09, 0.075), cell(0.335, 0.178, [1, 75], 0.09, 0.075),
-      cell(0.095, 0.280, [1, 75], 0.075, 0.07), cell(0.423, 0.280, [1, 75], 0.075, 0.07),
-    ],
-  },
-];
+function importPageLayoutKey(cards: BingoCard[]) {
+  const serials = new Set(cards.map((card) => card.serial ?? ""));
+  if (serials.has("Yapa")) return "gordito";
+  if (
+    cards.length > 0 &&
+    cards.every((card) => numberSheetFormForGrid(card.grid) !== null)
+  ) {
+    return "number-sheet";
+  }
+  if (serials.has("Keke Keke")) return "number-sheet";
+  if (serials.has("LÃ­nea") || serials.has("Loco")) return "line-loco";
+  if (cards.length === 2 && cards.every((card) => card.grid.length === 25)) {
+    return "two-card";
+  }
+  return `standard-${cards.length}`;
+}
 
-const lineAndLocoCards: SpecialPageCard[] = [
-  {
-    suffix: 1,
-    label: "Linea",
-    x: 0.27,
-    y: 0.58,
-    cells: [
-      cell(0.197, 0.370, [16, 30], 0.07, 0.09), cell(0.355, 0.370, [46, 60], 0.07, 0.09),
-      cell(0.117, 0.477, [1, 15], 0.07, 0.09), cell(0.197, 0.477, [16, 30], 0.07, 0.09), cell(0.276, 0.477, [31, 45], 0.07, 0.09), cell(0.355, 0.477, [46, 60], 0.07, 0.09), cell(0.435, 0.477, [61, 75], 0.07, 0.09),
-      cell(0.197, 0.583, [16, 30], 0.07, 0.09), cell(0.355, 0.583, [46, 60], 0.07, 0.09),
-      cell(0.117, 0.692, [1, 15], 0.07, 0.08), cell(0.197, 0.692, [16, 30], 0.07, 0.08), cell(0.276, 0.692, [31, 45], 0.07, 0.08), cell(0.355, 0.692, [46, 60], 0.07, 0.08), cell(0.435, 0.692, [61, 75], 0.07, 0.08),
-      cell(0.197, 0.797, [16, 30], 0.07, 0.09), cell(0.355, 0.797, [46, 60], 0.07, 0.09),
-    ],
-  },
-  {
-    suffix: 2,
-    label: "Loco",
-    x: 0.75,
-    y: 0.58,
-    cells: [
-      cell(0.724, 0.370, [31, 45], 0.07, 0.09),
-      cell(0.566, 0.477, [1, 15], 0.07, 0.09), cell(0.645, 0.477, [16, 30], 0.07, 0.09), cell(0.724, 0.477, [31, 45], 0.07, 0.09), cell(0.803, 0.477, [46, 60], 0.07, 0.09), cell(0.880, 0.477, [61, 75], 0.07, 0.09),
-      cell(0.724, 0.696, [31, 45], 0.07, 0.09),
-      cell(0.645, 0.796, [16, 30], 0.07, 0.09), cell(0.724, 0.796, [31, 45], 0.07, 0.09), cell(0.803, 0.796, [46, 60], 0.07, 0.09),
-    ],
-  },
-];
+function replaceCardFamily(card: BingoCard, family: string) {
+  const suffix = card.number.match(/-(\d+)$/)?.[1];
+  return suffix ? { ...card, number: `${family}-${suffix}` } : card;
+}
+
+function closestFamilyWithInsertedDigit(
+  shortFamily: string,
+  expectedLength: number,
+  references: Array<{ page: number; family: string }>,
+  page: number,
+) {
+  if (shortFamily.length + 1 !== expectedLength || !/^\d+$/.test(shortFamily)) {
+    return null;
+  }
+  const nearestBefore = references
+    .filter((reference) => reference.page < page)
+    .sort((a, b) => b.page - a.page)[0];
+  const nearestAfter = references
+    .filter((reference) => reference.page > page)
+    .sort((a, b) => a.page - b.page)[0];
+  const neighbors = [nearestBefore, nearestAfter].filter(
+    (reference): reference is { page: number; family: string } => Boolean(reference),
+  );
+  if (!neighbors.length) return null;
+
+  const candidates = new Set<string>();
+  for (let position = 0; position <= shortFamily.length; position += 1) {
+    for (let digit = 0; digit <= 9; digit += 1) {
+      const candidate = `${shortFamily.slice(0, position)}${digit}${shortFamily.slice(position)}`;
+      if (candidate.length === expectedLength && !candidate.startsWith("0")) {
+        candidates.add(candidate);
+      }
+    }
+  }
+  const distance = (left: bigint, right: bigint) => left >= right ? left - right : right - left;
+  return [...candidates].sort((left, right) => {
+    const leftValue = BigInt(left);
+    const rightValue = BigInt(right);
+    const leftScore = neighbors.reduce(
+      (score, neighbor) => score + distance(leftValue, BigInt(neighbor.family)),
+      BigInt(0),
+    );
+    const rightScore = neighbors.reduce(
+      (score, neighbor) => score + distance(rightValue, BigInt(neighbor.family)),
+      BigInt(0),
+    );
+    return leftScore < rightScore ? -1 : leftScore > rightScore ? 1 : left.localeCompare(right);
+  })[0] ?? null;
+}
+
+/**
+ * Corrige Ãºnicamente familias OCR incompletas cuando otras hojas del mismo
+ * formato aportan evidencia suficiente. No inventa una serie si no existe un
+ * vecino confiable y conserva siempre el sufijo impreso de cada juego.
+ */
+export function reconcilePdfPageFamilies(cards: BingoCard[]) {
+  const pageGroups = new Map<number, BingoCard[]>();
+  for (const card of cards) {
+    const pageCards = pageGroups.get(card.sourcePage) ?? [];
+    pageCards.push(card);
+    pageGroups.set(card.sourcePage, pageCards);
+  }
+  const pages = [...pageGroups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([page, pageCards]) => ({
+      page,
+      cards: pageCards,
+      layout: importPageLayoutKey(pageCards),
+      family: familyFromCards(pageCards),
+    }));
+  const replacements = new Map<number, string>();
+
+  for (const layout of new Set(pages.map((item) => item.layout))) {
+    const comparable = pages.filter(
+      (item) => item.layout === layout && item.family && layout !== "two-card",
+    ) as Array<(typeof pages)[number] & { family: string }>;
+    if (comparable.length < 2) continue;
+    const lengths = comparable.map((item) => item.family.length);
+    const expectedLength = [...new Set(lengths)].sort(
+      (a, b) => lengths.filter((length) => length === b).length - lengths.filter((length) => length === a).length,
+    )[0];
+    const references = comparable
+      .filter((item) => item.family.length === expectedLength)
+      .map((item) => ({ page: item.page, family: item.family }));
+    if (!references.length) continue;
+    for (const item of comparable) {
+      if (item.family.length === expectedLength) continue;
+      const repaired = closestFamilyWithInsertedDigit(
+        item.family,
+        expectedLength,
+        references,
+        item.page,
+      );
+      if (repaired) replacements.set(item.page, repaired);
+    }
+  }
+
+  return cards.map((card) => {
+    const family = replacements.get(card.sourcePage);
+    return family ? replaceCardFamily(card, family) : { ...card };
+  });
+}
+
+/** Conserva el orden de archivo, pÃ¡gina y posiciÃ³n visual del PDF. */
+export function sortCardsByPdfOrder(cards: BingoCard[]) {
+  const fileRank = new Map<string, number>();
+  const pageRank = new Map<string, number>();
+  for (const card of cards) {
+    if (!fileRank.has(card.sourceFile)) fileRank.set(card.sourceFile, fileRank.size);
+  }
+  const pages = new Map<string, BingoCard[]>();
+  for (const card of cards) {
+    const key = `${card.sourceFile}\u0000${card.sourcePage}`;
+    pages.set(key, [...(pages.get(key) ?? []), card]);
+  }
+  for (const [key, pageCards] of pages) {
+    orderCardsByPdfPosition(pageCards).forEach((card, index) => {
+      pageRank.set(`${key}\u0000${card.id}`, index);
+    });
+  }
+  return [...cards].sort((left, right) => {
+    const leftFile = fileRank.get(left.sourceFile) ?? 0;
+    const rightFile = fileRank.get(right.sourceFile) ?? 0;
+    if (leftFile !== rightFile) return leftFile - rightFile;
+    if (left.sourcePage !== right.sourcePage) return left.sourcePage - right.sourcePage;
+    const leftKey = `${left.sourceFile}\u0000${left.sourcePage}\u0000${left.id}`;
+    const rightKey = `${right.sourceFile}\u0000${right.sourcePage}\u0000${right.id}`;
+    return (pageRank.get(leftKey) ?? 0) - (pageRank.get(rightKey) ?? 0);
+  });
+}
+
+export function filterEnabledImportGames(cards: BingoCard[]) {
+  return cards.filter((card) => {
+    const serial = (card.serial ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    const isRemovedSpecialGame =
+      serial.includes("keke") ||
+      serial.includes("bom bom bum") ||
+      serial.includes("eche leche") ||
+      serial.includes("loco") ||
+      /^l.*nea\b/.test(serial);
+    if (isRemovedSpecialGame) {
+      return false;
+    }
+    return true;
+  });
+}
 
 interface RelativeSymbolReading {
   value: number;
@@ -3488,48 +3609,6 @@ function gameFamilyFromOcrText(text: string) {
   const match = text.match(/JUEGO\s*#?\s*([\d\s]{4,20})/i)?.[1];
   const digits = match?.replace(/\D/g, "") ?? "";
   return /^\d{4,12}$/.test(digits) ? digits : null;
-}
-
-async function lineLocoFamilyFromPrintedIds(
-  source: HTMLCanvasElement,
-  worker: OcrWorker,
-) {
-  // En estas dos figuras el identificador se imprime debajo de LINEA/LOCO.
-  // El OCR general suele confundirlo con el teléfono publicitario, por eso se
-  // lee solo la franja de los dos identificadores impresos.
-  const candidates = new Map<string, number>();
-  for (const x of [0.27, 0.75]) {
-    for (const height of [0.025, 0.03]) {
-      for (const threshold of [100, 145, 190]) {
-        const target = makeCanvas(600, 180);
-        if (!target) continue;
-        target.context.drawImage(
-          source,
-          (x - 0.075) * source.width,
-          (0.611 - height / 2) * source.height,
-          0.15 * source.width,
-          height * source.height,
-          0,
-          0,
-          target.canvas.width,
-          target.canvas.height,
-        );
-        binarizeNumbers(target.canvas, target.context, threshold, 80);
-        await worker.setParameters({
-          tessedit_char_whitelist: "0123456789-_",
-          tessedit_pageseg_mode: "7",
-          preserve_interword_spaces: "1",
-        });
-        const result = await worker.recognize(target.canvas, {}, { text: true });
-        const family = (result.data.text ?? "").match(/(\d{4,12})(?:\s*[-_]\s*[12])?/)?.[1];
-        if (family) candidates.set(family, (candidates.get(family) ?? 0) + 1);
-      }
-    }
-  }
-  const best = [...candidates.entries()]
-    .filter(([family, count]) => family.length >= 5 && count >= 2)
-    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0];
-  return best?.[0] ?? null;
 }
 
 function repairAscendingSpecialColumns(
@@ -3847,22 +3926,26 @@ async function recognizeSpecialPageCards(
     ordered.length,
     firstTop,
   );
+  if (specialLayout === "line-loco") {
+    detectedCards.splice(0, detectedCards.length);
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "11",
+      preserve_interword_spaces: "1",
+    });
+    return [];
+  }
   // La palabra Yapa puede no aparecer en el OCR de un escaneo. En una hoja
   // vertical con cuatro cuadrículas en la mitad inferior se intenta solamente
   // el recorte 3×3 conocido; este se incorpora si sus nueve números validan,
   // por lo que no se confunde una zona decorativa con un juego.
   const mayHaveStandaloneYapa =
     isPortrait && ordered.length >= 4 && firstTop < 0.32;
-  const layouts = specialLayout === "gordito"
-    ? gorditoSpecialCards
-    : specialLayout === "number-sheet"
-      ? numberSheetExtraCards
-      : specialLayout === "line-loco"
-        ? lineAndLocoCards
-        : mayHaveStandaloneYapa
-          ? gorditoSpecialCards
-        : [];
-  if (!layouts.length) {
+  const yapaLayouts = gorditoSpecialCards.filter((layout) => layout.label === "Yapa");
+  const layouts = specialLayout === "gordito" || mayHaveStandaloneYapa
+    ? yapaLayouts
+    : [];
+  if (!layouts.length && specialLayout !== "number-sheet") {
     await worker.setParameters({
       tessedit_char_whitelist: "0123456789",
       tessedit_pageseg_mode: "11",
@@ -3873,14 +3956,9 @@ async function recognizeSpecialPageCards(
   const symbols = result.data.blocks?.length
     ? flattenOcrSymbols(ocrWords(result.data.blocks))
     : [];
-  const lineLocoFamily = specialLayout === "line-loco"
-    ? await lineLocoFamilyFromPrintedIds(source, worker)
-    : null;
-  const family = specialLayout === "line-loco"
-    ? lineLocoFamily
-    : gameFamilyFromOcrText(result.data.text ?? "") ??
-      familyFromCards(detectedCards) ??
-      identifierFamilyFromOcrText(result.data.text ?? "");
+  const family = familyFromCards(detectedCards) ??
+    gameFamilyFromOcrText(result.data.text ?? "") ??
+    identifierFamilyFromOcrText(result.data.text ?? "");
   const hasCompleteNumberSheet =
     detectedCards.filter((card) => numberSheetFormForGrid(card.grid) !== null).length === 4;
   const numberSheetCards = specialLayout === "number-sheet" && !hasCompleteNumberSheet
@@ -3905,7 +3983,7 @@ async function recognizeSpecialPageCards(
     let values: number[] = directValues ? [...directValues] : [];
     const candidates: number[][] = [];
     const positions = directValues ? [] : layout.cells;
-    for (const [positionIndex, position] of positions.entries()) {
+    for (const position of positions) {
       const symbolReading = readingFromRelativeSymbols(
         symbols,
         source.width,
@@ -3913,25 +3991,9 @@ async function recognizeSpecialPageCards(
         position,
       );
       const symbolValue = symbolReading?.value ?? null;
-      let croppedValue = isReliableTwoDigitSymbol(symbolReading)
+      const croppedValue = isReliableTwoDigitSymbol(symbolReading)
         ? symbolReading.value
         : await recognizeRelativeCell(source, position, worker);
-      if (
-        layout.label === "Keke Keke" &&
-        positionIndex === 4
-      ) {
-        const alternateValue = await recognizeRelativeCell(
-          source,
-          { ...position, x: 0.102 },
-          worker,
-        );
-        if (
-          croppedValue === null ||
-          (croppedValue < 10 && (alternateValue ?? 0) >= 10)
-        ) {
-          croppedValue = alternateValue;
-        }
-      }
       const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
       candidates.push(
@@ -4621,10 +4683,14 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  // Nunca se altera la numeración impresa. Un identificador ilegible queda
-  // pendiente de revisión en vez de sustituirse por una secuencia inventada.
+  // Se conserva la numeración impresa y solo se repara una familia a la que
+  // le falta un dígito cuando las hojas vecinas equivalentes la confirman.
+  const detectedCards = filterEnabledImportGames(
+    pageResults.flatMap((result) => result?.cards ?? []),
+  );
+  const reconciledCards = reconcilePdfPageFamilies(detectedCards);
   return {
-    cards: pageResults.flatMap((result) => result?.cards ?? []),
+    cards: sortCardsByPdfOrder(reconciledCards),
     pages: pageCount,
     warnings: pageResults.flatMap((result) => result?.warnings ?? []),
   };
@@ -4641,7 +4707,9 @@ export async function parseBingoImage(
   const warnings: string[] = [];
   let cards: BingoCard[] = [];
   try {
-    cards = await runOcrCanvas(canvas, worker, file.name, 1);
+    cards = filterEnabledImportGames(
+      await runOcrCanvas(canvas, worker, file.name, 1),
+    );
   } catch (error) {
     warnings.push(
       `La imagen no pudo reconocerse (${error instanceof Error ? error.message : "error desconocido"}).`,
