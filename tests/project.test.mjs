@@ -79,8 +79,9 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /deleteVoidedCards/);
   assert.match(page, /deleteSelectedCards/);
   assert.match(page, /disableSelectedCards/);
-  assert.match(page, /Bom Bom Bum/);
-  assert.match(page, /Eche Leche/);
+  assert.match(page, /Sabrositos/);
+  assert.doesNotMatch(page, /Bom Bom Bum/);
+  assert.doesNotMatch(page, /Eche Leche/);
   assert.match(route, /deleteCards/);
   assert.match(route, /updateCardStatusBulk/);
   assert.match(page, /cardLayers/);

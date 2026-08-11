@@ -78,7 +78,7 @@ import {
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
-type CardTypeFilter = "all" | "bom-bom-bum" | "eche-leche" | "yapa" | "number-sheet";
+type CardTypeFilter = "all" | "sabrositos" | "yapa" | "number-sheet";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
 type ImportPreview = {
   cards: BingoCard[];
@@ -93,15 +93,13 @@ const WHATSAPP_NUMBER = "593985280991";
 const IMPORT_SAVE_CHUNK_SIZE = 10;
 const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
   { id: "all", label: "Todos" },
-  { id: "bom-bom-bum", label: "Bom Bom Bum" },
-  { id: "eche-leche", label: "Eche Leche" },
+  { id: "sabrositos", label: "Sabrositos" },
   { id: "yapa", label: "Yapa" },
   { id: "number-sheet", label: "Números 1 · 3 · 5 · 9" },
 ];
 
 function cardType(card: BingoCard): CardTypeFilter | "other" {
-  if (card.grid.length === 8) return "bom-bom-bum";
-  if (card.grid.length === 7) return "eche-leche";
+  if (card.grid.length === 5) return "sabrositos";
   if (card.grid.length === 9) return "yapa";
   if (numberSheetFormForGrid(card.grid)) return "number-sheet";
   return "other";
@@ -109,11 +107,9 @@ function cardType(card: BingoCard): CardTypeFilter | "other" {
 
 function cardTypeLabel(card: BingoCard) {
   const type = cardType(card);
-  if (type === "bom-bom-bum") return "Bom Bom Bum";
-  if (type === "eche-leche") return "Eche Leche";
+  if (type === "sabrositos") return "Sabrosito";
   if (type === "yapa") return "Yapa";
   if (type === "number-sheet") return `Número ${numberSheetFormForGrid(card.grid)}`;
-  if (card.grid.length === 5) return "Sabrosito";
   return card.serial || (card.grid.length === 25 ? "Cartón 5×5" : "Cartón especial");
 }
 
@@ -2430,7 +2426,7 @@ export default function GameConsole() {
               <div className="manual-layout">
                 <div className="manual-fields">
                   <label>Número del cartón<input onChange={(event) => setManualNumber(event.target.value)} placeholder="Ej. A-001" value={manualNumber} /></label>
-                  <label>{editingSpecialGrid ? "Tipo de juego" : "Serie"} <small>{editingSpecialGrid ? "editable" : "opcional"}</small><input onChange={(event) => setManualSerial(event.target.value)} placeholder={editingSpecialGrid ? "Ej. Yapa o Bom Bom Bum" : "Ej. LOTE-2026"} value={manualSerial} /></label>
+                  <label>{editingSpecialGrid ? "Tipo de juego" : "Serie"} <small>{editingSpecialGrid ? "editable" : "opcional"}</small><input onChange={(event) => setManualSerial(event.target.value)} placeholder={editingSpecialGrid ? "Ej. Yapa o Sabrosito" : "Ej. LOTE-2026"} value={manualSerial} /></label>
                   {editingSpecialGrid ? (
                     <label>Números del juego <small>{editingSpecialGrid.length} requeridos, separados por coma o espacio</small><textarea onChange={(event) => setManualSpecialValues(event.target.value.replace(/[^0-9,;\s]/g, ""))} rows={4} value={manualSpecialValues} /></label>
                   ) : (
