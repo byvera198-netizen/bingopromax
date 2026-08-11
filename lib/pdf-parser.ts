@@ -1011,7 +1011,17 @@ function validNumberForCell(value: number, index: number) {
 }
 
 export function shouldRereadBingoCell(value: number, index: number) {
-  return index % 5 === 0 && value >= 1 && value <= 9;
+  return index % 5 === 0 && ((value >= 1 && value <= 9) || value === 11);
+}
+
+export function resolveOneElevenCandidates(
+  originalValue: number,
+  candidates: number[],
+) {
+  const ones = candidates.filter((value) => value === 1).length;
+  const elevens = candidates.filter((value) => value === 11).length;
+  if (ones === elevens) return originalValue;
+  return ones > elevens ? 1 : 11;
 }
 
 export function normalizeNumberSheetGrid(
@@ -2462,7 +2472,13 @@ async function recognizeMissingCells(
       rectangle.horizontalLines[row + 1] - top - 5,
     );
     let value: number | null = null;
-    for (const threshold of [100, 145, 195]) {
+    const compareOneEleven =
+      column === 0 && (originalValue === 1 || originalValue === 11);
+    const oneElevenCandidates: number[] = [];
+    const thresholds = compareOneEleven
+      ? [100, 145, 195, 225]
+      : [100, 145, 195];
+    for (const threshold of thresholds) {
       const target = makeCanvas(240, 190);
       if (!target) continue;
       target.context.drawImage(
@@ -2503,7 +2519,15 @@ async function recognizeMissingCells(
           value = 17;
         }
       }
+      if (compareOneEleven) {
+        if (value === 1 || value === 11) oneElevenCandidates.push(value);
+        value = null;
+        continue;
+      }
       if (value !== null) break;
+    }
+    if (compareOneEleven) {
+      value = resolveOneElevenCandidates(originalValue, oneElevenCandidates);
     }
     resolved[index] = value ?? (validNumberForCell(originalValue, index)
       ? originalValue

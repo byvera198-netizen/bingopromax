@@ -43,6 +43,7 @@ import {
   sortCardsByPdfOrder,
   specialPageLayoutFromOcrText,
   shouldRereadBingoCell,
+  resolveOneElevenCandidates,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -185,8 +186,16 @@ test("reconoce Línea y Loco en una hoja vertical y relee cifras B que pueden es
   );
   assert.equal(shouldRereadBingoCell(1, 0), true);
   assert.equal(shouldRereadBingoCell(9, 20), true);
-  assert.equal(shouldRereadBingoCell(11, 0), false);
+  assert.equal(shouldRereadBingoCell(11, 0), true);
   assert.equal(shouldRereadBingoCell(1, 1), false);
+});
+
+test("resuelve 1 y 11 por consenso sin alterar un empate", () => {
+  assert.equal(resolveOneElevenCandidates(1, [11, 1, 1, 1]), 1);
+  assert.equal(resolveOneElevenCandidates(1, [11, 11, 1]), 11);
+  assert.equal(resolveOneElevenCandidates(11, [1, 1, 11]), 1);
+  assert.equal(resolveOneElevenCandidates(11, [1, 11]), 11);
+  assert.equal(resolveOneElevenCandidates(1, []), 1);
 });
 
 test("separa las tres cifras de una fila Yapa aunque el OCR las una", () => {
