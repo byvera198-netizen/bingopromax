@@ -1139,6 +1139,8 @@ export default function GameConsole() {
         number: manualNumber.trim(),
         serial: manualSerial.trim(),
         grid,
+        importReview: undefined,
+        printedNumber: undefined,
       };
       setImportPreview((current) => current
         ? {
@@ -2405,7 +2407,12 @@ export default function GameConsole() {
                   const pending = needsImportReview(card) || validateCardGrid(card.grid).length > 0;
                   return (
                     <article className={pending ? "import-preview-card pending" : "import-preview-card"} key={card.id}>
-                      <div><strong>{card.number.startsWith("SIN-ID-") ? "Número pendiente" : `Tab #${card.number}`}</strong><small>{card.serial || "Cartón 5×5"} · pág. {card.sourcePage} · {card.sourceFile}</small></div>
+                      <div>
+                        <strong>{card.number.startsWith("SIN-ID-") ? "Número pendiente" : `Tab #${card.number}`}</strong>
+                        <small>{card.serial || "Cartón 5×5"} · pág. {card.sourcePage} · {card.sourceFile}</small>
+                        {card.printedNumber && card.printedNumber !== card.number && <small>Lectura original: {card.printedNumber}</small>}
+                        {card.importReview?.map((reason) => <small key={reason}>{reason}</small>)}
+                      </div>
                       <span className={pending ? "preview-status pending" : "preview-status"}>{pending ? "Revisión requerida" : "Listo para guardar"}</span>
                       <div className="import-preview-actions">
                         <button className="secondary-button compact" onClick={() => openPreviewCardEditor(card)} type="button"><PencilLine size={14} /> Editar</button>

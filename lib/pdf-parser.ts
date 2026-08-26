@@ -40,6 +40,8 @@ interface DetectedGrid {
   score: number;
   rowIds: string[];
   identifier?: string;
+  serial?: string;
+  importReview?: string[];
 }
 
 interface Identifier {
@@ -108,8 +110,21 @@ export interface PdfParseResult {
 export function needsImportReview(card: BingoCard) {
   return (
     card.number.startsWith("SIN-ID-") ||
+    Boolean(card.importReview?.length) ||
     card.grid.some((value) => !Number.isInteger(value) || value < 0)
   );
+}
+
+function addImportReview(
+  card: BingoCard,
+  reason: string,
+  printedNumber = card.printedNumber,
+): BingoCard {
+  return {
+    ...card,
+    printedNumber,
+    importReview: [...new Set([...(card.importReview ?? []), reason])],
+  };
 }
 
 export interface GridRectangle {
@@ -626,6 +641,67 @@ function gridQuality(grid: number[]) {
   return score;
 }
 
+function cellLooksBlank(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  index: number,
+) {
+  const context = source.getContext("2d", { willReadFrequently: true });
+  if (!context) return false;
+  const row = Math.floor(index / 5);
+  const column = index % 5;
+  const cellLeft = rectangle.verticalLines[column];
+  const cellTop = rectangle.horizontalLines[row];
+  const cellWidth = rectangle.verticalLines[column + 1] - cellLeft;
+  const cellHeight = rectangle.horizontalLines[row + 1] - cellTop;
+  const marginX = Math.max(3, Math.round(cellWidth * 0.18));
+  const marginY = Math.max(3, Math.round(cellHeight * 0.16));
+  const width = Math.max(1, Math.floor(cellWidth - marginX * 2));
+  const height = Math.max(1, Math.floor(cellHeight - marginY * 2));
+  const pixels = context.getImageData(
+    Math.max(0, Math.floor(cellLeft + marginX)),
+    Math.max(0, Math.floor(cellTop + marginY)),
+    width,
+    height,
+  ).data;
+  let dark = 0;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    const luminance =
+      pixels[offset] * 0.3 + pixels[offset + 1] * 0.59 + pixels[offset + 2] * 0.11;
+    if (luminance < 105) dark += 1;
+  }
+  return dark / Math.max(1, pixels.length / 4) < 0.012;
+}
+
+function recoverMaskedGridForReview(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  grid: number[],
+) {
+  if (grid.length !== 25) return null;
+  const seen = new Set<number>();
+  const recovered = grid.map((value, index) => {
+    if (index === 12 && !validNumberForCell(value, index)) return 0;
+    if (validNumberForCell(value, index) && !seen.has(value)) {
+      seen.add(value);
+      return value;
+    }
+    return cellLooksBlank(source, rectangle, index) ? 0 : -1;
+  });
+  const recognized = recovered.filter((value) => value > 0).length;
+  const printedBlanks = recovered.filter((value, index) => index !== 12 && value === 0).length;
+  const unresolved = recovered.filter((value) => value < 0).length;
+  if (
+    recognized < 5 ||
+    recognized >= 24 ||
+    printedBlanks < 2 ||
+    unresolved > 6
+  ) {
+    return null;
+  }
+  return recovered;
+}
+
 function numberMatches(text: string) {
   return [...text.matchAll(/(?<![\d])(?:[1-9]|[1-6]\d|7[0-5])(?![\d])/g)];
 }
@@ -963,7 +1039,8 @@ function cardsFromDetectedGrids(
     return {
       id: crypto.randomUUID(),
       number: detected.identifier ?? identifier?.value ?? missingIdentifier(index),
-      serial: numberSheetForm ? `Forma #${numberSheetForm}` : "",
+      serial: detected.serial ?? (numberSheetForm ? `Forma #${numberSheetForm}` : ""),
+      importReview: detected.importReview,
       grid: detected.grid,
       sourceFile: fileName,
       sourcePage: page,
@@ -1151,6 +1228,13 @@ const numberSheetFormBySuffix: Partial<Record<number, NumberSheetForm>> = {
   4: "3",
   5: "5",
   6: "9",
+};
+
+const numberSheetSuffixByForm: Record<NumberSheetForm, number> = {
+  "1": 3,
+  "3": 4,
+  "5": 5,
+  "9": 6,
 };
 
 function dominantNumberSheetFamily(
@@ -2472,10 +2556,14 @@ async function recognizeMissingCells(
       rectangle.horizontalLines[row + 1] - top - 5,
     );
     let value: number | null = null;
+    const repeatedOriginal = (counts.get(originalValue) ?? 0) > 1;
     const compareOneEleven =
-      column === 0 && (originalValue === 1 || originalValue === 11);
+      !repeatedOriginal &&
+      column === 0 &&
+      (originalValue === 1 || originalValue === 11);
     const oneElevenCandidates: number[] = [];
-    const thresholds = compareOneEleven
+    const repeatedCandidates: number[] = [];
+    const thresholds = compareOneEleven || repeatedOriginal
       ? [100, 145, 195, 225]
       : [100, 145, 195];
     for (const threshold of thresholds) {
@@ -2524,14 +2612,77 @@ async function recognizeMissingCells(
         value = null;
         continue;
       }
+      if (repeatedOriginal) {
+        if (value !== null) repeatedCandidates.push(value);
+        value = null;
+        continue;
+      }
       if (value !== null) break;
     }
     if (compareOneEleven) {
       value = resolveOneElevenCandidates(originalValue, oneElevenCandidates);
+    } else if (repeatedOriginal && repeatedCandidates.length) {
+      const frequency = new Map<number, number>();
+      repeatedCandidates.forEach((candidate) =>
+        frequency.set(candidate, (frequency.get(candidate) ?? 0) + 1),
+      );
+      value = [...frequency.entries()].sort(
+        (left, right) =>
+          right[1] - left[1] ||
+          Number(left[0] === originalValue) - Number(right[0] === originalValue),
+      )[0][0];
     }
     resolved[index] = value ?? (validNumberForCell(originalValue, index)
       ? originalValue
       : -1);
+  }
+  const resolvedCounts = new Map<number, number>();
+  resolved
+    .filter((value) => value > 0)
+    .forEach((value) => resolvedCounts.set(value, (resolvedCounts.get(value) ?? 0) + 1));
+  const rowsToRepair = [...new Set(
+    resolved
+      .map((value, index) => ({ value, index }))
+      .filter(({ value, index }) =>
+        index !== 12 &&
+        (!validNumberForCell(value, index) || (resolvedCounts.get(value) ?? 0) > 1),
+      )
+      .map(({ index }) => Math.floor(index / 5)),
+  )];
+  for (const row of rowsToRepair) {
+    const left = rectangle.verticalLines[0] + 3;
+    const top = rectangle.horizontalLines[row] + 3;
+    const width = Math.max(1, rectangle.verticalLines[5] - left - 3);
+    const height = Math.max(1, rectangle.horizontalLines[row + 1] - top - 3);
+    let decoded: number[] | null = null;
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "7",
+      preserve_interword_spaces: "1",
+    });
+    for (const threshold of [125, 160, 195, 225]) {
+      const target = makeCanvas(1100, 220);
+      if (!target) continue;
+      target.context.drawImage(source, left, top, width, height, 20, 20, 1060, 180);
+      binarizeNumbers(target.canvas, target.context, threshold);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const candidate = decodeBingoRowDigits(result.data.text ?? "", row === 2);
+      if (!candidate) continue;
+      const replaced = [...resolved];
+      candidate.forEach((value, column) => {
+        replaced[row * 5 + column] = value;
+      });
+      const values = replaced.filter((value) => value > 0);
+      if (new Set(values).size === values.length) {
+        decoded = candidate;
+        break;
+      }
+    }
+    if (decoded) {
+      decoded.forEach((value, column) => {
+        resolved[row * 5 + column] = value;
+      });
+    }
   }
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -2604,6 +2755,8 @@ async function recognizeDetectedGrids(
       original.width,
       original.height,
     );
+    let detectedSerial: string | undefined;
+    let detectedImportReview: string[] | undefined;
     if (likelyNumberSheetPage) {
       const rectangleIndex = eligibleRectangles.indexOf(rectangle);
       if (!numberSheetMetadataCache && eligibleRectangles.length === 4) {
@@ -2668,6 +2821,47 @@ async function recognizeDetectedGrids(
               ? `${numberSheetFamily}-${metadataSuffix}`
               : metadata?.identifier ??
               `SIN-ID-${String(pageNumber).padStart(3, "0")}-${eligibleRectangles.indexOf(rectangle) + 1}`,
+          });
+          continue;
+        }
+      }
+    }
+    if (gridQuality(grid) < 8) {
+      const inferredForm = inferNumberSheetForm(grid);
+      if (
+        inferredForm &&
+        await matchesNumberSheetSignature(
+          source,
+          rectangle,
+          grid,
+          inferredForm,
+          worker,
+        )
+      ) {
+        const numberSheetGrid = await recognizeMissingNumberSheetCells(
+          source,
+          rectangle,
+          grid,
+          inferredForm,
+          worker,
+        );
+        if (isPlausibleNumberSheetGrid(numberSheetGrid, inferredForm)) {
+          const rectangleIndex = eligibleRectangles.indexOf(rectangle);
+          const detectedIdentifier = identifiers[rectangleIndex]?.value;
+          const family =
+            numberSheetFamily ??
+            detectedIdentifier?.match(/^(\d{5,12})(?:-\d{1,3})?$/)?.[1] ??
+            null;
+          detected.push({
+            grid: numberSheetGrid,
+            x: rectangle.x + rectangle.width / 2,
+            y: source.height - rectangle.y,
+            score: rectangle.score,
+            rowIds: [],
+            serial: `Forma #${inferredForm}`,
+            identifier: family
+              ? `${family}-${numberSheetSuffixByForm[inferredForm]}`
+              : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${numberSheetSuffixByForm[inferredForm]}`,
           });
           continue;
         }
@@ -2798,7 +2992,57 @@ async function recognizeDetectedGrids(
         }
       }
     }
-    if (gridQuality(grid) < 8) continue;
+    if (gridQuality(grid) < 8) {
+      const inferredForm = inferNumberSheetForm(grid);
+      if (
+        inferredForm &&
+        await matchesNumberSheetSignature(
+          source,
+          rectangle,
+          grid,
+          inferredForm,
+          worker,
+        )
+      ) {
+        const numberSheetGrid = await recognizeMissingNumberSheetCells(
+          source,
+          rectangle,
+          grid,
+          inferredForm,
+          worker,
+        );
+        if (isPlausibleNumberSheetGrid(numberSheetGrid, inferredForm)) {
+          grid = numberSheetGrid;
+          detectedSerial = `Forma #${inferredForm}`;
+        }
+      }
+    }
+    if (gridQuality(grid) < 8 && !numberSheetFormForGrid(grid)) {
+      const maskedGrid = recoverMaskedGridForReview(source, rectangle, grid);
+      if (maskedGrid) {
+        grid = maskedGrid;
+        const unresolved = grid.filter((value) => value < 0).length;
+        detectedSerial = "Forma detectada";
+        detectedImportReview = [
+          unresolved
+            ? `Se detectó una forma nueva con ${unresolved} casilla(s) que debes confirmar.`
+            : "Se detectó una forma nueva. Confirma sus casillas antes de guardarla.",
+        ];
+      }
+    }
+    if (
+      gridQuality(grid) < 8 &&
+      !numberSheetFormForGrid(grid) &&
+      !detectedSerial
+    ) {
+      const unresolved = grid.filter((value) => value < 0).length;
+      detectedSerial = "Cartón 5×5 · pendiente de revisión";
+      detectedImportReview = [
+        unresolved
+          ? `El cartón fue localizado, pero ${unresolved} casilla(s) no tuvieron una lectura segura. Corrígelas antes de guardar.`
+          : "El cartón fue localizado, pero sus columnas necesitan confirmación antes de guardar.",
+      ];
+    }
     const rectangleIndex = eligibleRectangles.indexOf(rectangle);
     const centerMetadata = await recognizeNumberSheetMetadata(
       source,
@@ -2814,19 +3058,29 @@ async function recognizeDetectedGrids(
       identifiers.length === eligibleRectangles.length
         ? identifiers[rectangleIndex]?.value
         : undefined;
+    const fallbackIdentifier =
+      headerIdentifier ??
+      (identifiers.length === 0 ? centerMetadata?.identifier : undefined);
+    const recoveredForm = numberSheetFormForGrid(grid);
+    const recoveredFamily =
+      numberSheetFamily ??
+      fallbackIdentifier?.match(/^(\d{5,12})(?:-\d{1,3})?$/)?.[1] ??
+      null;
     detected.push({
       grid,
       x: rectangle.x + rectangle.width / 2,
       y: source.height - rectangle.y,
       score: rectangle.score,
       rowIds: [],
+      serial: detectedSerial,
+      importReview: detectedImportReview,
       // En cartones 5x5 el centro puede contener logotipos, fechas y números
       // promocionales. Si existe al menos una lectura de encabezado, conservar
       // esas posiciones y completar las faltantes por secuencia; solo recurrir
       // al centro cuando no se pudo leer ningún encabezado de la página.
-      identifier:
-        headerIdentifier ??
-        (identifiers.length === 0 ? centerMetadata?.identifier : undefined),
+      identifier: recoveredForm && recoveredFamily
+        ? `${recoveredFamily}-${numberSheetSuffixByForm[recoveredForm]}`
+        : fallbackIdentifier,
     });
   }
   const identifierParts = detected.flatMap((item) => {
@@ -3540,7 +3794,15 @@ export function reconcilePdfPageFamilies(cards: BingoCard[]) {
 
   return cards.map((card) => {
     const family = replacements.get(card.sourcePage);
-    return family ? replaceCardFamily(card, family) : { ...card };
+    if (!family) return { ...card };
+    const repaired = replaceCardFamily(card, family);
+    return repaired.number === card.number
+      ? repaired
+      : addImportReview(
+          repaired,
+          `La familia “${card.number}” perdió un dígito y se propuso “${repaired.number}”. Confírmala.`,
+          card.number,
+        );
   });
 }
 
@@ -4168,14 +4430,11 @@ async function recognizeSpecialPageCards(
     });
     return [];
   }
-  // La palabra Yapa puede no aparecer en el OCR de un escaneo. En una hoja
-  // vertical con cuatro cuadrículas en la mitad inferior se intenta solamente
-  // el recorte 3×3 conocido; este se incorpora si sus nueve números validan,
-  // por lo que no se confunde una zona decorativa con un juego.
-  const mayHaveStandaloneYapa =
-    isPortrait && ordered.length >= 4 && firstTop < 0.32;
   const yapaLayouts = gorditoSpecialCards.filter((layout) => layout.label === "Yapa");
-  const layouts = specialLayout === "gordito" || mayHaveStandaloneYapa
+  // La geometría de una hoja común también puede contener nueve cifras
+  // promocionales en la zona superior. Solo se crea una Yapa cuando el OCR
+  // encontró su etiqueta, evitando fabricar un juego a partir del membrete.
+  const layouts = specialLayout === "gordito"
     ? yapaLayouts
     : [];
   if (!layouts.length && specialLayout !== "number-sheet") {
@@ -4427,6 +4686,54 @@ export async function runOcrCanvas(
   );
 }
 
+function rotatedCanvas(source: HTMLCanvasElement, degrees: number) {
+  const radians = degrees * Math.PI / 180;
+  const cosine = Math.abs(Math.cos(radians));
+  const sine = Math.abs(Math.sin(radians));
+  const width = Math.ceil(source.width * cosine + source.height * sine);
+  const height = Math.ceil(source.width * sine + source.height * cosine);
+  const target = makeCanvas(width, height);
+  if (!target) return null;
+  target.context.fillStyle = "#ffffff";
+  target.context.fillRect(0, 0, width, height);
+  target.context.translate(width / 2, height / 2);
+  target.context.rotate(radians);
+  target.context.drawImage(source, -source.width / 2, -source.height / 2);
+  return target.canvas;
+}
+
+function canvasGridDetectionScore(canvas: HTMLCanvasElement) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return 0;
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  const grids = detectGridRectangles(pixels.data, canvas.width, canvas.height);
+  if (grids.length) {
+    return grids.length * 10_000 + grids.reduce((sum, grid) => sum + grid.score, 0);
+  }
+  const compact = detectCompactRectangles(pixels.data, canvas.width, canvas.height);
+  return compact.length * 2_000 + compact.reduce((sum, card) => sum + card.score, 0);
+}
+
+function deskewCanvasForImport(source: HTMLCanvasElement) {
+  const initialScore = canvasGridDetectionScore(source);
+  if (initialScore > 0) return source;
+  let best = source;
+  let bestScore = initialScore;
+  // Esta ruta solo se ejecuta cuando la imagen original no contiene ninguna
+  // cuadrícula detectable. Corrige fotografías ligeramente inclinadas sin
+  // multiplicar el tiempo normal de importación.
+  for (const degrees of [-4, -2, 2, 4]) {
+    const candidate = rotatedCanvas(source, degrees);
+    if (!candidate) continue;
+    const score = canvasGridDetectionScore(candidate);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export async function runOcr(
   pageProxy: import("pdfjs-dist").PDFPageProxy,
   worker: OcrWorker,
@@ -4442,7 +4749,12 @@ export async function runOcr(
   const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
   if (!target) return [];
   await pageProxy.render({ canvas: target.canvas, canvasContext: target.context, viewport }).promise;
-  return runOcrCanvas(target.canvas, worker, fileName, pageNumber);
+  return runOcrCanvas(
+    deskewCanvasForImport(target.canvas),
+    worker,
+    fileName,
+    pageNumber,
+  );
 }
 
 export function recommendedOcrConcurrency(
@@ -4488,7 +4800,7 @@ export async function validateBingoImportFileContent(file: File) {
   const heifBrand = String.fromCharCode(...header.slice(8, 12)).toLowerCase();
   const heif =
     String.fromCharCode(...header.slice(4, 8)) === "ftyp" &&
-    ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(heifBrand);
+    ["heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis"].includes(heifBrand);
   if (!(png || jpeg || gif || bmp || webp || heif)) {
     throw new Error("El archivo no contiene una imagen compatible válida.");
   }
@@ -4550,7 +4862,7 @@ async function canvasFromImageFile(file: File) {
   }
   target.context.drawImage(source, 0, 0, target.canvas.width, target.canvas.height);
   release();
-  return target.canvas;
+  return deskewCanvasForImport(target.canvas);
 }
 
 function sequentialNumberParts(number: string) {
@@ -4639,7 +4951,11 @@ export function assignSequentialCardNumbers(cards: BingoCard[]) {
         candidate = `${baseCandidate}-${collision}`;
         collision += 1;
       }
-      resolved[start + offset].number = candidate;
+      const cardIndex = start + offset;
+      resolved[cardIndex] = addImportReview(
+        { ...resolved[cardIndex], number: candidate },
+        "La numeración no fue legible y se completó con la secuencia vecina. Confírmala.",
+      );
       used.add(candidate.toLowerCase());
     }
   }
@@ -4708,7 +5024,11 @@ export function ensureUniqueImportIdentifiers(
     }
     occupied.add(candidate.toLowerCase());
     adjustedNumbers += 1;
-    return { ...card, id, number: candidate };
+    return addImportReview(
+      { ...card, id, number: candidate },
+      `El identificador detectado “${original || "sin número"}” estaba repetido y se propuso “${candidate}”. Confírmalo.`,
+      original || undefined,
+    );
   });
 
   return { cards: resolved, adjustedNumbers, adjustedIds };
@@ -4757,10 +5077,16 @@ export function reconcileTwoCardPageNumbers(cards: BingoCard[]) {
     `${String(winner.base + BigInt(index)).padStart(winner.width, "0")}-1`,
   );
   const replacements = new Map(ordered.map((card, index) => [card, numbers[index]]));
-  return cards.map((card) => ({
-    ...card,
-    number: replacements.get(card) ?? card.number,
-  }));
+  return cards.map((card) => {
+    const number = replacements.get(card) ?? card.number;
+    return number === card.number
+      ? { ...card }
+      : addImportReview(
+          { ...card, number },
+          `La lectura “${card.number}” se ajustó a la secuencia de hojas dobles como “${number}”. Confírmala.`,
+          card.number,
+        );
+  });
 }
 
 export function reconcilePlainSequentialCardNumbers(cards: BingoCard[]) {
@@ -4786,26 +5112,11 @@ export function reconcilePlainSequentialCardNumbers(cards: BingoCard[]) {
     const current = votes.get(key);
     votes.set(key, { ...item, count: (current?.count ?? 0) + 1 });
   }
-  let winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
+  const winner = [...votes.values()].sort((a, b) => b.count - a.count)[0];
   if (!winner || winner.count < Math.max(3, Math.ceil(detected.length * 0.5))) {
-    const widths = detected.map((item) => item.width);
-    const modalWidth = [...new Set(widths)].sort(
-      (a, b) => widths.filter((width) => width === b).length - widths.filter((width) => width === a).length,
-    )[0];
-    const comparable = detected
-      .filter((item) => item.width === modalWidth)
-      .map((item) => item.base)
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    const spread = comparable.length
-      ? comparable[comparable.length - 1] - comparable[0]
-      : 999n;
-    if (comparable.length < 3 || spread > 4n) {
-      return cards.map((card) => ({ ...card }));
-    }
-    // La mediana resiste uno o dos dígitos OCR defectuosos y mantiene la
-    // secuencia que se ve en los cartones vecinos de la misma hoja.
-    const middle = Math.floor((comparable.length - 1) / 2);
-    winner = { base: comparable[middle], width: modalWidth, count: comparable.length };
+    // Sin una mayoría clara se conserva exactamente lo impreso. La antigua
+    // estimación por mediana podía convertir una lectura válida en otra.
+    return cards.map((card) => ({ ...card }));
   }
 
   const replacements = new Map(
@@ -4814,10 +5125,16 @@ export function reconcilePlainSequentialCardNumbers(cards: BingoCard[]) {
       String(winner.base + BigInt(index)).padStart(winner.width, "0"),
     ]),
   );
-  return cards.map((card, index) => ({
-    ...card,
-    number: replacements.get(index) ?? card.number,
-  }));
+  return cards.map((card, index) => {
+    const number = replacements.get(index) ?? card.number;
+    return number === card.number
+      ? { ...card }
+      : addImportReview(
+          { ...card, number },
+          `La lectura “${card.number}” rompía una secuencia confirmada y se propuso “${number}”. Confírmala.`,
+          card.number,
+        );
+  });
 }
 
 export async function parseBingoPdf(

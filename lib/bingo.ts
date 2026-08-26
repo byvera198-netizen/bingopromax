@@ -6,6 +6,9 @@ export interface BingoCard {
   gameId?: string;
   number: string;
   serial?: string;
+  /** Datos transitorios usados únicamente durante la revisión de una importación. */
+  importReview?: string[];
+  printedNumber?: string;
   grid: number[];
   sourceFile: string;
   sourcePage: number;
@@ -364,7 +367,27 @@ export function specialCardPatternForGrid(grid: number[], serial = "") {
     } satisfies BingoPattern;
   }
   const form = numberSheetFormForGrid(grid);
-  return form ? NUMBER_SHEET_PATTERNS[form] : null;
+  if (form) return NUMBER_SHEET_PATTERNS[form];
+  const occupiedCells = grid.length === 25
+    ? grid.flatMap((value, index) => value > 0 ? [index] : [])
+    : [];
+  const hasPrintedBlanks =
+    occupiedCells.length >= 5 && occupiedCells.length < 24;
+  if (!hasPrintedBlanks) return null;
+  const normalizedSerial = normalizeGameName(serial);
+  const mask = occupiedCells.join("-");
+  return {
+    id: `forma-detectada-${mask}`,
+    name: normalizedSerial && !normalizedSerial.includes("pendiente")
+      ? serial
+      : "Forma detectada completa",
+    description: "Todos los números impresos de esta forma de juego.",
+    color: "#d7ff3f",
+    category: "Forma detectada",
+    difficulty: "Especial",
+    cells: occupiedCells,
+    variants: [occupiedCells],
+  } satisfies BingoPattern;
 }
 
 export function patternForCard(card: BingoCard, activePattern: BingoPattern) {

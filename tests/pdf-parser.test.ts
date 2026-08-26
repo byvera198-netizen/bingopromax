@@ -91,13 +91,16 @@ test("repara una secuencia numÃ©rica simple cuando el OCR repite un cartÃ³n"
     sourcePage: 1,
     status: "active" as const,
   }));
+  const reconciled = reconcilePlainSequentialCardNumbers(cards);
   assert.deepEqual(
-    reconcilePlainSequentialCardNumbers(cards).map((card) => card.number),
+    reconciled.map((card) => card.number),
     ["0311297", "0311298", "0311299", "0311300"],
   );
+  assert.equal(needsImportReview(reconciled[2]), true);
+  assert.equal(reconciled[2].printedNumber, "0311298");
 });
 
-test("repara una secuencia simple cuando varias cifras OCR son inexactas", () => {
+test("conserva las lecturas cuando no hay una mayoría clara para reconstruir la secuencia", () => {
   const cards = ["0311295", "0311299", "0311300", "0311300"].map((number, index) => ({
     id: String(index),
     number,
@@ -109,7 +112,7 @@ test("repara una secuencia simple cuando varias cifras OCR son inexactas", () =>
   }));
   assert.deepEqual(
     reconcilePlainSequentialCardNumbers(cards).map((card) => card.number),
-    ["0311297", "0311298", "0311299", "0311300"],
+    ["0311295", "0311299", "0311300", "0311300"],
   );
 });
 
@@ -141,6 +144,8 @@ test("conserva todos los cartones y completa identificadores repetidos antes de 
   assert.equal(new Set(prepared.cards.map((card) => card.id)).size, cards.length);
   assert.equal(prepared.adjustedNumbers, 2);
   assert.equal(prepared.adjustedIds, 1);
+  assert.equal(needsImportReview(prepared.cards[1]), true);
+  assert.equal(prepared.cards[1].printedNumber, "069138-3");
 });
 
 test("acepta PDF e imágenes compatibles para importación y cámara", () => {
@@ -157,6 +162,11 @@ test("valida el contenido real y no solo la extensión del archivo", async () =>
   await assert.rejects(() => validateBingoImportFileContent(fakePdf), /PDF válido/);
   const image = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], "carton.png", { type: "image/png" });
   assert.equal(await validateBingoImportFileContent(image), "image");
+  const avifHeader = new Uint8Array(32);
+  avifHeader.set([0x66, 0x74, 0x79, 0x70], 4);
+  avifHeader.set([0x61, 0x76, 0x69, 0x66], 8);
+  const avif = new File([avifHeader], "carton.avif", { type: "image/avif" });
+  assert.equal(await validateBingoImportFileContent(avif), "image");
 });
 
 test("no confunde una hoja clásica de cuatro cartones con juegos especiales", () => {
@@ -1156,6 +1166,20 @@ test("marca un cartón sin identificador o con lectura incompleta para revisión
     id: "complete", number: "71248-1", serial: "", grid: baseGrid,
     sourceFile: "lote.pdf", sourcePage: 1, status: "active",
   }), false);
+  assert.equal(needsImportReview({
+    id: "suggested", number: "71248-2", serial: "", grid: baseGrid,
+    importReview: ["Confirma la numeración sugerida."],
+    sourceFile: "lote.pdf", sourcePage: 1, status: "active",
+  }), true);
+});
+
+test("evalúa una forma 5x5 desconocida usando únicamente sus casillas impresas", () => {
+  const grid = [...baseGrid];
+  [0, 4, 6, 8, 16, 18, 20, 24].forEach((index) => { grid[index] = 0; });
+  const pattern = specialCardPatternForGrid(grid, "Forma proveedor nuevo");
+  assert.ok(pattern);
+  assert.equal(pattern.name, "Forma proveedor nuevo");
+  assert.deepEqual(pattern.cells, grid.flatMap((value, index) => value > 0 ? [index] : []));
 });
 
 test("detecta los ocho cartones compactos de una hoja escaneada", () => {
