@@ -254,7 +254,7 @@ function BingoGrid({
         const target = Boolean(pattern?.cells.includes(index) || selected.includes(index));
         return (
           <button
-            className={`bingo-cell ${marked ? "marked" : ""} ${target ? "target" : ""} ${isFormLabel ? "sheet-form-label" : ""}`}
+            className={`bingo-cell ${marked ? "marked" : ""} ${target ? "target" : ""} ${isFree ? "free-cell" : ""} ${isFormLabel ? "sheet-form-label" : ""}`}
             disabled={!editable}
             key={index}
             onClick={() => onCellClick?.(index)}
@@ -833,7 +833,7 @@ export default function GameConsole() {
       oscillator.type = winner ? "triangle" : "sine";
       oscillator.frequency.setValueAtTime(winner ? 660 : 440, context.currentTime);
       if (winner) oscillator.frequency.exponentialRampToValueAtTime(990, context.currentTime + 0.35);
-      gain.gain.setValueAtTime(0.12, context.currentTime);
+      gain.gain.setValueAtTime(winner ? 0.28 : 0.2, context.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + (winner ? 0.7 : 0.18));
       oscillator.connect(gain);
       gain.connect(context.destination);
