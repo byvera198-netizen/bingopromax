@@ -1872,9 +1872,14 @@ export default function GameConsole() {
   return (
     <main className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-        <div className="brand">
+        <div className="brand sidebar-brand">
           <div className="brand-mark"><span>B</span><i /></div>
-          <div><strong>BINGO</strong><small>CONTROL PRO</small></div>
+          <div className="brand-copy">
+            <strong>BINGO</strong>
+            <small>CONTROL PRO</small>
+            <span className="brand-byline">PROFE BYRON</span>
+          </div>
+          <img className="brand-mascot" src="/profe-byron-mascot.png" alt="Mascota de Profe Byron" />
           <button className="sidebar-close" onClick={() => setSidebarOpen(false)} type="button"><X size={20} /></button>
         </div>
         <div className="operator">

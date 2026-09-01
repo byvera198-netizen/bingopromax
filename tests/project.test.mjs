@@ -77,6 +77,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /NEON_ACCENTS/);
   assert.match(page, /localStorage\.setItem\("bingo-accent", accent\)/);
   assert.match(page, /className="dashboard-right-rail"/);
+  assert.match(page, /PROFE BYRON/);
+  assert.match(page, /\/profe-byron-mascot\.png/);
   assert.match(page, /className="live-pattern-actions"/);
   assert.match(page, /togglePattern\(pattern, false\)/);
   assert.match(styles, /\.dashboard-workspace > \.dashboard-right-rail/);
