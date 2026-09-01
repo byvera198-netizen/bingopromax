@@ -2733,11 +2733,18 @@ async function recognizeDetectedGrids(
   let numberSheetFamily = numberSheetMetadataCache
     ? dominantNumberSheetFamily(numberSheetMetadataCache)
     : null;
-  const explicitNumberSheetForms =
-    numberSheetMetadataCache?.filter((metadata) => metadata?.form).length ?? 0;
+  const explicitNumberSheetAgreements =
+    numberSheetMetadataCache?.filter((metadata) => {
+      const suffix = Number(metadata?.identifier?.match(/-(\d+)$/)?.[1]);
+      return Boolean(
+        metadata?.form &&
+        Number.isInteger(suffix) &&
+        numberSheetFormBySuffix[suffix] === metadata.form,
+      );
+    }).length ?? 0;
   const likelyNumberSheetPage =
     numberSheetGeometryCandidate &&
-    (explicitNumberSheetForms >= 2 || numberSheetFormCache !== null);
+    (explicitNumberSheetAgreements >= 2 || numberSheetFormCache !== null);
   const printedPortraitFamily = isFourCardPortraitSheet && !likelyNumberSheetPage
     ? await recognizePortraitPageFamily(source, worker)
     : null;
@@ -2826,7 +2833,12 @@ async function recognizeDetectedGrids(
         }
       }
     }
-    if (gridQuality(grid) < 8) {
+    // No conviertas una cuadrícula clásica incompleta en una forma 1-3-5-9
+    // solo porque el primer OCR dejó varias casillas sin leer. Esa
+    // clasificación requiere evidencia de toda la hoja (rótulos FORMA o la
+    // serie impresa 3-4-5-6); de lo contrario se debe terminar primero la
+    // recuperación normal del cartón 5x5.
+    if (likelyNumberSheetPage && gridQuality(grid) < 8) {
       const inferredForm = inferNumberSheetForm(grid);
       if (
         inferredForm &&
@@ -2992,7 +3004,7 @@ async function recognizeDetectedGrids(
         }
       }
     }
-    if (gridQuality(grid) < 8) {
+    if (likelyNumberSheetPage && gridQuality(grid) < 8) {
       const inferredForm = inferNumberSheetForm(grid);
       if (
         inferredForm &&
@@ -3315,6 +3327,17 @@ async function recognizeCompactIdentifiers(
     const suffix = (index % 8) + 1;
     const variants = [
       {
+        // Algunos Sabrositos imprimen el identificador con trazo muy fino.
+        // Conservar el color/gris original evita que el umbral lo borre.
+        x: 0.3,
+        y: 0.4,
+        width: 0.4,
+        height: 0.12,
+        threshold: 175,
+        targetHeight: 320,
+        binarize: false,
+      },
+      {
         x: 0.36,
         y: 0.43,
         width: 0.28,
@@ -3362,7 +3385,9 @@ async function recognizeCompactIdentifiers(
         target.canvas.width,
         target.canvas.height,
       );
-      binarizeNumbers(target.canvas, target.context, variant.threshold, 90);
+      if (variant.binarize !== false) {
+        binarizeNumbers(target.canvas, target.context, variant.threshold, 90);
+      }
       const result = await worker.recognize(target.canvas, {}, { text: true });
       const text = result.data.text ?? "";
       attempts.push(text);

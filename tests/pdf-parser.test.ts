@@ -267,6 +267,19 @@ test("acepta cartones especiales y hojas de números sin tratarlos como 5×5 nor
 
 test("reconstruye la serie compacta aunque el OCR confunda ceros y cincos", () => {
   assert.equal(
+    compactIdentifierFamily([
+      "846733-1",
+      "",
+      "046733-3",
+      "",
+      "046733-5",
+      "046733-6",
+      "046733-7",
+      "846733-8",
+    ]),
+    "046733",
+  );
+  assert.equal(
     compactIdentifierFamily(
       [
         "090310-1\n090310-1\n3013013041",
