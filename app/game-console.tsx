@@ -99,11 +99,21 @@ const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
 ];
 const NEON_ACCENTS = [
   { id: "lime", label: "Lima", color: "#d7ff3f" },
-  { id: "cyan", label: "Cian", color: "#24f5ff" },
+  { id: "yellow", label: "Amarillo", color: "#fff53d" },
+  { id: "amber", label: "Ámbar", color: "#ffc247" },
+  { id: "orange", label: "Naranja", color: "#ff9f43" },
+  { id: "coral", label: "Coral", color: "#ff6b6b" },
+  { id: "red", label: "Rojo", color: "#ff3b5c" },
+  { id: "rose", label: "Rosa", color: "#ff5fa2" },
   { id: "magenta", label: "Magenta", color: "#ff4fd8" },
   { id: "violet", label: "Violeta", color: "#a879ff" },
-  { id: "orange", label: "Naranja", color: "#ff9f43" },
+  { id: "indigo", label: "Índigo", color: "#6c7bff" },
   { id: "blue", label: "Azul", color: "#4d9cff" },
+  { id: "sky", label: "Celeste", color: "#45d4ff" },
+  { id: "cyan", label: "Cian", color: "#24f5ff" },
+  { id: "teal", label: "Turquesa", color: "#16ffd0" },
+  { id: "emerald", label: "Esmeralda", color: "#36ff7d" },
+  { id: "mint", label: "Menta", color: "#7dffc3" },
 ] as const;
 type NeonAccent = (typeof NEON_ACCENTS)[number]["id"];
 
@@ -665,11 +675,11 @@ export default function GameConsole() {
       const result = await api<{ email?: string; expiresAt?: string; accessCode?: string; months?: number }>({ action, membershipId: membership.id, months });
       await refresh(true);
       if (action === "approveMembership" && result.email) {
-        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Membresía aprobada - Bingo Control Pro")}&body=${encodeURIComponent(`Tu membresía fue aprobada por ${result.months} mes(es).\nCódigo de acceso: ${result.accessCode}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\n\nIngresa el código en Bingo Control Pro. El primer dispositivo quedará vinculado a tu cuenta.`)}`, "_self");
+        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Membresía aprobada - Bingo Control ProMax")}&body=${encodeURIComponent(`Tu membresía fue aprobada por ${result.months} mes(es).\nCódigo de acceso: ${result.accessCode}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\n\nIngresa el código en Bingo Control ProMax. El primer dispositivo quedará vinculado a tu cuenta.`)}`, "_self");
       }
       if (action === "resendMembershipCode" && result.email && result.accessCode) {
         await navigator.clipboard?.writeText(result.accessCode).catch(() => undefined);
-        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Código de acceso - Bingo Control Pro")}&body=${encodeURIComponent(`Hola ${membership.name || ""},\n\nTu código permanente de acceso es: ${result.accessCode}\nMembresía: ${result.months || membership.months || 1} mes(es)\nVigencia hasta: ${new Date(result.expiresAt || membership.expiresAt || "").toLocaleDateString("es-EC")}\n\nConserva este código para futuras consultas.`)}`, "_self");
+        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Código de acceso - Bingo Control ProMax")}&body=${encodeURIComponent(`Hola ${membership.name || ""},\n\nTu código permanente de acceso es: ${result.accessCode}\nMembresía: ${result.months || membership.months || 1} mes(es)\nVigencia hasta: ${new Date(result.expiresAt || membership.expiresAt || "").toLocaleDateString("es-EC")}\n\nConserva este código para futuras consultas.`)}`, "_self");
       }
       notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "resendMembershipCode" ? "Código permanente copiado y correo preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
     } catch (caught) {
@@ -1761,13 +1771,13 @@ export default function GameConsole() {
           ? "Te enviaremos un enlace seguro para cambiar tu contraseña."
           : authMode === "update"
             ? "Escribe una contraseña nueva para completar la activación."
-            : "Inicia sesión para entrar a Bingo Control Pro.";
+            : "Inicia sesión para entrar a Bingo Control ProMax.";
     return (
       <main className="auth-screen">
         <section className="auth-card">
           <div className="brand auth-brand">
             <div className="brand-mark"><span>B</span><i /></div>
-            <div><strong>BINGO</strong><small>CONTROL PRO</small></div>
+            <div><strong>BINGO</strong><small>CONTROL PROMAX</small></div>
           </div>
           <span className="eyebrow"><ShieldCheck size={14} /> ACCESO SEGURO</span>
           <h1>{title}</h1>
@@ -1823,7 +1833,7 @@ export default function GameConsole() {
         <section className="membership-card">
           <div className="brand membership-brand">
             <div className="brand-mark"><span>B</span><i /></div>
-            <div><strong>BINGO</strong><small>CONTROL PRO</small></div>
+            <div><strong>BINGO</strong><small>CONTROL PROMAX</small></div>
           </div>
           <span className="eyebrow"><ShieldCheck size={14} /> ACCESO POR MEMBRESÍA</span>
           <h1>{awaitingCode ? "Ingresa tu código de acceso" : pending ? "Tu acceso está en revisión" : "Solicita tu acceso"}</h1>
@@ -1876,7 +1886,7 @@ export default function GameConsole() {
           <div className="brand-mark"><span>B</span><i /></div>
           <div className="brand-copy">
             <strong>BINGO</strong>
-            <small>CONTROL PRO</small>
+            <small>CONTROL PROMAX</small>
             <span className="brand-byline">PROFE BYRON</span>
           </div>
           <img className="brand-mascot" src="/profe-byron-mascot.png" alt="Mascota de Profe Byron" />

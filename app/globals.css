@@ -42,18 +42,38 @@
 }
 
 :root[data-accent="lime"] { --lime: #d7ff3f; --lime-strong: #c7f127; --lime-soft: rgba(215, 255, 63, .1); --accent-rgb: 215, 255, 63; }
-:root[data-accent="cyan"] { --lime: #24f5ff; --lime-strong: #00dce8; --lime-soft: rgba(36, 245, 255, .1); --accent-rgb: 36, 245, 255; }
+:root[data-accent="yellow"] { --lime: #fff53d; --lime-strong: #f1e528; --lime-soft: rgba(255, 245, 61, .1); --accent-rgb: 255, 245, 61; }
+:root[data-accent="amber"] { --lime: #ffc247; --lime-strong: #f0aa28; --lime-soft: rgba(255, 194, 71, .1); --accent-rgb: 255, 194, 71; }
+:root[data-accent="orange"] { --lime: #ff9f43; --lime-strong: #ff8830; --lime-soft: rgba(255, 159, 67, .1); --accent-rgb: 255, 159, 67; }
+:root[data-accent="coral"] { --lime: #ff6b6b; --lime-strong: #f05252; --lime-soft: rgba(255, 107, 107, .1); --accent-rgb: 255, 107, 107; }
+:root[data-accent="red"] { --lime: #ff3b5c; --lime-strong: #ef2347; --lime-soft: rgba(255, 59, 92, .1); --accent-rgb: 255, 59, 92; }
+:root[data-accent="rose"] { --lime: #ff5fa2; --lime-strong: #ef438d; --lime-soft: rgba(255, 95, 162, .1); --accent-rgb: 255, 95, 162; }
 :root[data-accent="magenta"] { --lime: #ff4fd8; --lime-strong: #f42fc8; --lime-soft: rgba(255, 79, 216, .1); --accent-rgb: 255, 79, 216; }
 :root[data-accent="violet"] { --lime: #a879ff; --lime-strong: #9360f5; --lime-soft: rgba(168, 121, 255, .1); --accent-rgb: 168, 121, 255; }
-:root[data-accent="orange"] { --lime: #ff9f43; --lime-strong: #ff8830; --lime-soft: rgba(255, 159, 67, .1); --accent-rgb: 255, 159, 67; }
+:root[data-accent="indigo"] { --lime: #6c7bff; --lime-strong: #5364f2; --lime-soft: rgba(108, 123, 255, .1); --accent-rgb: 108, 123, 255; }
 :root[data-accent="blue"] { --lime: #4d9cff; --lime-strong: #2f82f7; --lime-soft: rgba(77, 156, 255, .1); --accent-rgb: 77, 156, 255; }
+:root[data-accent="sky"] { --lime: #45d4ff; --lime-strong: #28c0ef; --lime-soft: rgba(69, 212, 255, .1); --accent-rgb: 69, 212, 255; }
+:root[data-accent="cyan"] { --lime: #24f5ff; --lime-strong: #00dce8; --lime-soft: rgba(36, 245, 255, .1); --accent-rgb: 36, 245, 255; }
+:root[data-accent="teal"] { --lime: #16ffd0; --lime-strong: #00e6b8; --lime-soft: rgba(22, 255, 208, .1); --accent-rgb: 22, 255, 208; }
+:root[data-accent="emerald"] { --lime: #36ff7d; --lime-strong: #1ce967; --lime-soft: rgba(54, 255, 125, .1); --accent-rgb: 54, 255, 125; }
+:root[data-accent="mint"] { --lime: #7dffc3; --lime-strong: #5debaa; --lime-soft: rgba(125, 255, 195, .1); --accent-rgb: 125, 255, 195; }
 
 :root[data-theme="light"][data-accent="lime"] { --lime: #8caf00; --lime-strong: #789900; --lime-soft: rgba(140, 175, 0, .12); --accent-rgb: 140, 175, 0; }
-:root[data-theme="light"][data-accent="cyan"] { --lime: #008c99; --lime-strong: #007681; --lime-soft: rgba(0, 140, 153, .12); --accent-rgb: 0, 140, 153; }
+:root[data-theme="light"][data-accent="yellow"] { --lime: #8d7b00; --lime-strong: #756600; --lime-soft: rgba(141, 123, 0, .12); --accent-rgb: 141, 123, 0; }
+:root[data-theme="light"][data-accent="amber"] { --lime: #a76600; --lime-strong: #8d5600; --lime-soft: rgba(167, 102, 0, .12); --accent-rgb: 167, 102, 0; }
+:root[data-theme="light"][data-accent="orange"] { --lime: #c56600; --lime-strong: #ad5800; --lime-soft: rgba(197, 102, 0, .12); --accent-rgb: 197, 102, 0; }
+:root[data-theme="light"][data-accent="coral"] { --lime: #bf3d3d; --lime-strong: #a83232; --lime-soft: rgba(191, 61, 61, .12); --accent-rgb: 191, 61, 61; }
+:root[data-theme="light"][data-accent="red"] { --lime: #b91f39; --lime-strong: #9f1830; --lime-soft: rgba(185, 31, 57, .12); --accent-rgb: 185, 31, 57; }
+:root[data-theme="light"][data-accent="rose"] { --lime: #bb1f68; --lime-strong: #a01758; --lime-soft: rgba(187, 31, 104, .12); --accent-rgb: 187, 31, 104; }
 :root[data-theme="light"][data-accent="magenta"] { --lime: #c21889; --lime-strong: #a81276; --lime-soft: rgba(194, 24, 137, .12); --accent-rgb: 194, 24, 137; }
 :root[data-theme="light"][data-accent="violet"] { --lime: #6d3cd1; --lime-strong: #5a2eb8; --lime-soft: rgba(109, 60, 209, .12); --accent-rgb: 109, 60, 209; }
-:root[data-theme="light"][data-accent="orange"] { --lime: #c56600; --lime-strong: #ad5800; --lime-soft: rgba(197, 102, 0, .12); --accent-rgb: 197, 102, 0; }
+:root[data-theme="light"][data-accent="indigo"] { --lime: #3d4ec2; --lime-strong: #303fa9; --lime-soft: rgba(61, 78, 194, .12); --accent-rgb: 61, 78, 194; }
 :root[data-theme="light"][data-accent="blue"] { --lime: #1264c7; --lime-strong: #0c55ae; --lime-soft: rgba(18, 100, 199, .12); --accent-rgb: 18, 100, 199; }
+:root[data-theme="light"][data-accent="sky"] { --lime: #007eaa; --lime-strong: #006b91; --lime-soft: rgba(0, 126, 170, .12); --accent-rgb: 0, 126, 170; }
+:root[data-theme="light"][data-accent="cyan"] { --lime: #008c99; --lime-strong: #007681; --lime-soft: rgba(0, 140, 153, .12); --accent-rgb: 0, 140, 153; }
+:root[data-theme="light"][data-accent="teal"] { --lime: #007f6c; --lime-strong: #006b5b; --lime-soft: rgba(0, 127, 108, .12); --accent-rgb: 0, 127, 108; }
+:root[data-theme="light"][data-accent="emerald"] { --lime: #008a49; --lime-strong: #00743d; --lime-soft: rgba(0, 138, 73, .12); --accent-rgb: 0, 138, 73; }
+:root[data-theme="light"][data-accent="mint"] { --lime: #0b7d53; --lime-strong: #096943; --lime-soft: rgba(11, 125, 83, .12); --accent-rgb: 11, 125, 83; }
 
 * { box-sizing: border-box; }
 html { background: var(--bg); }
@@ -77,7 +97,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .sidebar-brand .brand-copy { grid-column: 2; grid-row: 1; }
 .sidebar-brand strong { font-size: 18px; }
 .brand-byline { margin-top: 4px; color: var(--lime); font-size: 7px; font-weight: 850; letter-spacing: .13em; line-height: 1; }
-.brand-mascot { grid-column: 1 / -1; grid-row: 2; width: 129px; height: 129px; margin: 4px auto 0; object-fit: contain; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--lime), transparent 78%)); }
+.brand-mascot { grid-column: 1 / -1; grid-row: 2; width: 176px; height: 176px; margin: 4px auto 0; object-fit: contain; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--lime), transparent 78%)); }
 .sidebar-brand .sidebar-close { grid-column: 3; grid-row: 1; margin-left: 0; }
 .sidebar-close { display: none; margin-left: auto; border: 0; background: transparent; }
 .operator { display: flex; align-items: center; gap: 9px; margin-bottom: 24px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }

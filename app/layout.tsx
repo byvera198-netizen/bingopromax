@@ -23,7 +23,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ||
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "Bingo Control Pro — Verificación automática";
+  const title = "Bingo Control ProMax — Verificación automática";
   const description =
     "Control profesional de partidas, importación de cartones PDF, bolillero y detección automática de ganadores.";
   const image = `${origin}/og.png`;
@@ -37,7 +37,7 @@ export async function generateMetadata(): Promise<Metadata> {
       description,
       type: "website",
       locale: "es_EC",
-      images: [{ url: image, width: 1728, height: 911, alt: "Bingo Control Pro" }],
+      images: [{ url: image, width: 1728, height: 911, alt: "Bingo Control ProMax" }],
     },
     twitter: {
       card: "summary_large_image",

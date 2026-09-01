@@ -75,6 +75,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /patternStatuses/);
   assert.match(page, /className="dashboard-workspace"/);
   assert.match(page, /NEON_ACCENTS/);
+  assert.match(page, /id: "emerald"/);
+  assert.match(page, /id: "mint"/);
   assert.match(page, /localStorage\.setItem\("bingo-accent", accent\)/);
   assert.match(page, /className="dashboard-right-rail"/);
   assert.match(page, /PROFE BYRON/);
@@ -143,5 +145,5 @@ test("no conserva la interfaz temporal del starter", async () => {
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
   assert.doesNotMatch(layout, /Starter Project/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  assert.match(layout, /Bingo Control Pro/);
+  assert.match(layout, /Bingo Control ProMax/);
 });
