@@ -2037,6 +2037,7 @@ export default function GameConsole() {
                 </section>
               </div>
 
+              <aside className="dashboard-right-rail">
               <section className="panel live-patterns-panel">
                 <div className="panel-heading">
                   <div><span className="eyebrow"><Sparkles size={13} /> PATRONES EN JUEGO</span><h3>Todos se verifican con cada bolilla</h3></div>
@@ -2053,6 +2054,11 @@ export default function GameConsole() {
                         <span><i style={{ width: `${Math.round(nearest * 100)}%` }} /></span>
                         <b>{Math.round(nearest * 100)}%</b>
                       </div>
+                      <div className="live-pattern-actions">
+                        <button onClick={() => void togglePattern(pattern, false)} title={`Inhabilitar ${pattern.name}`} type="button"><Pause size={13} /> Inhabilitar</button>
+                        {!specialGamePatternIds.has(pattern.id) && <button aria-label={`Editar ${pattern.name}`} onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><PencilLine size={13} /></button>}
+                        {!specialGamePatternIds.has(pattern.id) && <button aria-label={`Eliminar ${pattern.name}`} className="danger" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={13} /></button>}
+                      </div>
                       <footer>
                         <span>{cards} cartones compatibles</span>
                         <strong>{winners ? `${winners} ganador${winners === 1 ? "" : "es"}` : "En juego"}</strong>
@@ -2061,6 +2067,27 @@ export default function GameConsole() {
                   ))}
                 </div>
               </section>
+
+              <section className="panel winners-panel">
+                <div className="panel-heading">
+                  <div><span className="eyebrow"><Award size={13} /> VALIDACIONES</span><h3>Ganadores recientes</h3></div>
+                  {state.winners.length > 0 && <span className="winner-count">{state.winners.length}</span>}
+                </div>
+                {state.winners.length ? (
+                  <div className="winner-list">
+                    {state.winners.slice(0, 4).map((winner) => (
+                      <button key={winner.id} onClick={() => setWinnerModal([winner])} type="button">
+                        <span><Trophy size={17} /></span>
+                        <div><strong>Cartón #{winner.cardNumber}</strong><small>{winner.patternName}</small></div>
+                        <time>{new Date(winner.validatedAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</time>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState icon={Trophy} text="El motor verificará automáticamente todos los cartones." title="Esperando un bingo" />
+                )}
+              </section>
+              </aside>
 
               <div className="lower-grid">
                 <section className="panel">
@@ -2110,25 +2137,6 @@ export default function GameConsole() {
                       text="Importa un PDF o crea el primer cartón manualmente."
                       title="Sin cartones en juego"
                     />
-                  )}
-                </section>
-                <section className="panel winners-panel">
-                  <div className="panel-heading">
-                    <div><span className="eyebrow"><Award size={13} /> VALIDACIONES</span><h3>Ganadores recientes</h3></div>
-                    {state.winners.length > 0 && <span className="winner-count">{state.winners.length}</span>}
-                  </div>
-                  {state.winners.length ? (
-                    <div className="winner-list">
-                      {state.winners.slice(0, 4).map((winner) => (
-                        <button key={winner.id} onClick={() => setWinnerModal([winner])} type="button">
-                          <span><Trophy size={17} /></span>
-                          <div><strong>Cartón #{winner.cardNumber}</strong><small>{winner.patternName}</small></div>
-                          <time>{new Date(winner.validatedAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</time>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState icon={Trophy} text="El motor verificará automáticamente todos los cartones." title="Esperando un bingo" />
                   )}
                 </section>
               </div>

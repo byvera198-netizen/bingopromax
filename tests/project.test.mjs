@@ -76,7 +76,10 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /className="dashboard-workspace"/);
   assert.match(page, /NEON_ACCENTS/);
   assert.match(page, /localStorage\.setItem\("bingo-accent", accent\)/);
-  assert.match(styles, /\.dashboard-workspace > \.live-patterns-panel/);
+  assert.match(page, /className="dashboard-right-rail"/);
+  assert.match(page, /className="live-pattern-actions"/);
+  assert.match(page, /togglePattern\(pattern, false\)/);
+  assert.match(styles, /\.dashboard-workspace > \.dashboard-right-rail/);
   assert.match(styles, /:root\[data-accent="magenta"\]/);
   assert.match(styles, /\.neon-palette/);
   assert.match(page, /togglePattern/);
