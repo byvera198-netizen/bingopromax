@@ -73,6 +73,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .brand strong { font-size: 16px; letter-spacing: .16em; }
 .brand small { margin-top: 2px; color: var(--muted); font-size: 8px; font-weight: 750; letter-spacing: .22em; }
 .sidebar-brand { gap: 8px; padding-right: 4px; padding-left: 4px; }
+.sidebar-brand strong { font-size: 18px; }
 .brand-byline { margin-top: 4px; color: var(--lime); font-size: 7px; font-weight: 850; letter-spacing: .13em; line-height: 1; }
 .brand-mascot { width: 43px; height: 43px; margin-left: auto; object-fit: contain; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--lime), transparent 78%)); }
 .sidebar-close { display: none; margin-left: auto; border: 0; background: transparent; }
