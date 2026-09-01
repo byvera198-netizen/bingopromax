@@ -97,6 +97,15 @@ const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
   { id: "yapa", label: "Yapa" },
   { id: "number-sheet", label: "Números 1 · 3 · 5 · 9" },
 ];
+const NEON_ACCENTS = [
+  { id: "lime", label: "Lima", color: "#d7ff3f" },
+  { id: "cyan", label: "Cian", color: "#24f5ff" },
+  { id: "magenta", label: "Magenta", color: "#ff4fd8" },
+  { id: "violet", label: "Violeta", color: "#a879ff" },
+  { id: "orange", label: "Naranja", color: "#ff9f43" },
+  { id: "blue", label: "Azul", color: "#4d9cff" },
+] as const;
+type NeonAccent = (typeof NEON_ACCENTS)[number]["id"];
 
 function cardType(card: BingoCard): CardTypeFilter | "other" {
   if (card.grid.length === 5) return "sabrositos";
@@ -480,6 +489,11 @@ export default function GameConsole() {
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
   );
+  const [accent, setAccent] = useState<NeonAccent>(() => {
+    if (typeof window === "undefined") return "lime";
+    const saved = localStorage.getItem("bingo-accent");
+    return NEON_ACCENTS.some((option) => option.id === saved) ? saved as NeonAccent : "lime";
+  });
   const [sound, setSound] = useState(() =>
     typeof window === "undefined" || localStorage.getItem("bingo-sound") !== "off",
   );
@@ -717,6 +731,11 @@ export default function GameConsole() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("bingo-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.accent = accent;
+    localStorage.setItem("bingo-accent", accent);
+  }, [accent]);
 
   useEffect(() => {
     localStorage.setItem("bingo-sound", sound ? "on" : "off");
@@ -1941,6 +1960,7 @@ export default function GameConsole() {
                 <StatCard accent="blue" detail="Evaluación simultánea" icon={Sparkles} label="Patrones activos" value={gamePatterns.length} />
               </div>
 
+              <div className="dashboard-workspace">
               <div className="game-grid">
                 <section className="panel caller-panel">
                   <div className="panel-heading">
@@ -2111,6 +2131,7 @@ export default function GameConsole() {
                     <EmptyState icon={Trophy} text="El motor verificará automáticamente todos los cartones." title="Esperando un bingo" />
                   )}
                 </section>
+              </div>
               </div>
             </motion.div>
           )}
@@ -2552,7 +2573,31 @@ export default function GameConsole() {
             <motion.button animate={{ opacity: 1 }} aria-label="Cerrar configuración" className="drawer-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }} onClick={() => setSettingsOpen(false)} type="button" />
             <motion.aside animate={{ x: 0 }} className="settings-drawer" exit={{ x: "100%" }} initial={{ x: "100%" }}>
               <header><div><span className="eyebrow">PREFERENCIAS</span><h2>Configuración</h2></div><button className="icon-button" onClick={() => setSettingsOpen(false)} type="button"><X size={19} /></button></header>
-              <section><span className="settings-label">APARIENCIA</span><div className="theme-picker"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button></div></section>
+              <section>
+                <span className="settings-label">APARIENCIA</span>
+                <div className="theme-picker">
+                  <button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button>
+                  <button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button>
+                </div>
+                <span className="settings-label accent-label">COLOR NEÓN</span>
+                <div aria-label="Paleta de colores neón" className="neon-palette" role="group">
+                  {NEON_ACCENTS.map((option) => (
+                    <button
+                      aria-pressed={accent === option.id}
+                      className={accent === option.id ? "active" : ""}
+                      key={option.id}
+                      onClick={() => setAccent(option.id)}
+                      style={{ "--swatch": option.color } as React.CSSProperties}
+                      title={`Usar color ${option.label}`}
+                      type="button"
+                    >
+                      <i />
+                      <span>{option.label}</span>
+                      {accent === option.id && <Check size={13} />}
+                    </button>
+                  ))}
+                </div>
+              </section>
               <section><span className="settings-label">COMPORTAMIENTO</span><label className="setting-row"><span><Volume2 size={18} /></span><div><strong>Sonidos</strong><small>Bolillas y anuncio de ganador</small></div><input checked={sound} onChange={(event) => setSound(event.target.checked)} type="checkbox" /></label><label className="setting-row"><span><Pause size={18} /></span><div><strong>Pausa automática</strong><small>Detener al detectar un bingo</small></div><input checked={game.autoPause} onChange={(event) => void updateAutoPause(event.target.checked)} type="checkbox" /></label></section>
               <section className="system-status"><span className="settings-label">ESTADO DEL SISTEMA</span><div><ShieldCheck size={20} /><p><strong>Todo operativo</strong><small>Datos persistentes y validación en tiempo real.</small></p></div></section>
               <section><span className="settings-label">CUENTA</span><div className="account-summary"><UserRound size={18} /><div><strong>{authUser.email}</strong><small>{state.access.role === "admin" ? "Administrador" : "Usuario aprobado"}</small></div></div><button className="secondary-button account-signout" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión</button></section>

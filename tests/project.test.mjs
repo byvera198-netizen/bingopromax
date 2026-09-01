@@ -65,6 +65,7 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   const route = await read("app/api/state/route.ts");
   const bingo = await read("lib/bingo.ts");
   const parser = await read("lib/pdf-parser.ts");
+  const styles = await read("app/globals.css");
 
   assert.match(page, /parseBingoImportFile/);
   assert.match(page, /saveManualCard/);
@@ -72,6 +73,12 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /recordWinners/);
   assert.match(page, /Administra los patrones del juego/);
   assert.match(page, /patternStatuses/);
+  assert.match(page, /className="dashboard-workspace"/);
+  assert.match(page, /NEON_ACCENTS/);
+  assert.match(page, /localStorage\.setItem\("bingo-accent", accent\)/);
+  assert.match(styles, /\.dashboard-workspace > \.live-patterns-panel/);
+  assert.match(styles, /:root\[data-accent="magenta"\]/);
+  assert.match(styles, /\.neon-palette/);
   assert.match(page, /togglePattern/);
   assert.match(page, /deleteCard/);
   assert.match(page, /action: "updateCard"/);
