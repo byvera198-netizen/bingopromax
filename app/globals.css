@@ -97,7 +97,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .sidebar-brand .brand-copy { grid-column: 2; grid-row: 1; }
 .sidebar-brand strong { font-size: 18px; }
 .brand-byline { margin-top: 4px; color: var(--lime); font-size: 7px; font-weight: 850; letter-spacing: .13em; line-height: 1; }
-.brand-mascot { grid-column: 1 / -1; grid-row: 2; width: 176px; height: 176px; margin: 4px auto 0; object-fit: contain; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--lime), transparent 78%)); }
+.brand-mascot { grid-column: 1 / -1; grid-row: 2; width: 176px; height: 176px; margin: 4px auto 0; object-fit: contain; transform-origin: 50% 88%; animation: mascot-idle 4.8s ease-in-out infinite; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--lime), transparent 78%)); will-change: transform, filter; }
 .sidebar-brand .sidebar-close { grid-column: 3; grid-row: 1; margin-left: 0; }
 .sidebar-close { display: none; margin-left: auto; border: 0; background: transparent; }
 .operator { display: flex; align-items: center; gap: 9px; margin-bottom: 24px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
@@ -480,6 +480,21 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes rotate { to { transform: rotate(360deg); } }
 @keyframes breathe { 50% { transform: translateY(-4px); box-shadow: 0 0 40px color-mix(in srgb, var(--lime), transparent 75%); } }
+@keyframes mascot-idle {
+  0%, 100% { transform: translateY(0) rotate(-.5deg); filter: drop-shadow(0 0 7px color-mix(in srgb, var(--lime), transparent 80%)); }
+  48% { transform: translateY(-7px) rotate(.7deg) scale(1.015); filter: drop-shadow(0 7px 15px color-mix(in srgb, var(--lime), transparent 60%)); }
+  54% { transform: translateY(-6px) rotate(.4deg) scale(1.012); }
+}
+@keyframes mascot-greeting {
+  0%, 100% { transform: translateY(0) rotate(0) scale(1); }
+  28% { transform: translateY(-9px) rotate(-2.5deg) scale(1.035); }
+  58% { transform: translateY(-4px) rotate(2deg) scale(1.025); }
+  80% { transform: translateY(-7px) rotate(-1deg) scale(1.03); }
+}
+
+@media (hover: hover) {
+  .sidebar-brand:hover .brand-mascot { animation: mascot-greeting 1.05s cubic-bezier(.22, .8, .25, 1); }
+}
 
 @media (max-width: 1320px) {
   .dashboard-workspace { grid-template-columns: 1fr; }

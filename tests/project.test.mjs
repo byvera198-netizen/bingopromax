@@ -86,6 +86,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(styles, /\.dashboard-workspace > \.dashboard-right-rail/);
   assert.match(styles, /:root\[data-accent="magenta"\]/);
   assert.match(styles, /\.neon-palette/);
+  assert.match(styles, /@keyframes mascot-idle/);
+  assert.match(styles, /@keyframes mascot-greeting/);
   assert.match(page, /togglePattern/);
   assert.match(page, /deleteCard/);
   assert.match(page, /action: "updateCard"/);
