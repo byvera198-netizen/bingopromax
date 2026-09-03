@@ -68,6 +68,11 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   const styles = await read("app/globals.css");
 
   assert.match(page, /parseBingoImportFile/);
+  assert.match(page, /Proveedor del archivo/);
+  assert.match(page, /IMPORT_PROVIDER_PROFILES/);
+  assert.match(page, /provider: importProvider/);
+  assert.match(parser, /selectProviderPageCards/);
+  assert.match(parser, /shouldRunProviderOcr/);
   assert.match(page, /saveManualCard/);
   assert.match(page, /registerBall/);
   assert.match(page, /recordWinners/);

@@ -30,6 +30,7 @@ import {
   filterEnabledImportGames,
   identifierFamilyConsensus,
   identifierFamilyFromOcrText,
+  importProviderStrategy,
   identifiersForDetectedGrids,
   isSupportedBingoImportFile,
   needsImportReview,
@@ -40,6 +41,8 @@ import {
   reconcilePdfPageFamilies,
   reconcileTwoCardPageNumbers,
   selectGridRectangles,
+  selectProviderPageCards,
+  shouldRunProviderOcr,
   sortCardsByPdfOrder,
   specialPageLayoutFromOcrText,
   shouldRereadBingoCell,
@@ -47,6 +50,34 @@ import {
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
+
+test("cada perfil de proveedor activa una lectura acorde a su distribución", () => {
+  assert.equal(shouldRunProviderOcr("auto", 1), false);
+  assert.equal(shouldRunProviderOcr("provider-1", 1), true);
+  assert.equal(shouldRunProviderOcr("provider-2", 3), true);
+  assert.equal(shouldRunProviderOcr("provider-2", 4), false);
+  assert.equal(shouldRunProviderOcr("provider-3", 5), true);
+  assert.equal(shouldRunProviderOcr("provider-4", 4), true);
+  assert.equal(importProviderStrategy("provider-4").renderLongEdge, 2600);
+});
+
+test("la segunda lectura conserva el conjunto que recupera más cartones", () => {
+  const card = (number: string): BingoCard => ({
+    id: number,
+    number,
+    serial: "",
+    grid: Array.from({ length: 25 }, (_, index) => index === 12 ? 0 : index + 1),
+    sourceFile: "proveedor.pdf",
+    sourcePage: 1,
+    status: "active",
+  });
+  const textCards = [card("1001"), card("1002")];
+  const ocrCards = [card("1001"), card("1002"), card("1003"), card("1004")];
+  assert.deepEqual(
+    selectProviderPageCards(textCards, ocrCards).map((item) => item.number),
+    ["1001", "1002", "1003", "1004"],
+  );
+});
 
 test("limita el OCR paralelo segun el dispositivo y la cantidad de paginas", () => {
   assert.equal(recommendedOcrConcurrency(3, 16, 8, false), 1);

@@ -107,6 +107,115 @@ export interface PdfParseResult {
   warnings: string[];
 }
 
+export type ImportProviderProfile =
+  | "auto"
+  | "provider-1"
+  | "provider-2"
+  | "provider-3"
+  | "provider-4";
+
+export interface BingoImportOptions {
+  provider?: ImportProviderProfile;
+}
+
+export const IMPORT_PROVIDER_PROFILES: ReadonlyArray<{
+  id: ImportProviderProfile;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "auto",
+    label: "Automático",
+    description: "Detecta la distribución sin indicar un proveedor.",
+  },
+  {
+    id: "provider-1",
+    label: "Proveedor 1",
+    description: "Hojas de 1 o 2 cartones grandes.",
+  },
+  {
+    id: "provider-2",
+    label: "Proveedor 2",
+    description: "Hojas de 4 cartones en cuadrícula 2×2.",
+  },
+  {
+    id: "provider-3",
+    label: "Proveedor 3",
+    description: "Hojas con 6 u 8 cartones compactos.",
+  },
+  {
+    id: "provider-4",
+    label: "Proveedor 4",
+    description: "Cartones escaneados, mixtos o con casillas vacías.",
+  },
+];
+
+interface ImportProviderStrategy {
+  minimumCardsPerPage: number;
+  alwaysRunOcr: boolean;
+  renderLongEdge: number;
+}
+
+const IMPORT_PROVIDER_STRATEGIES: Record<
+  ImportProviderProfile,
+  ImportProviderStrategy
+> = {
+  auto: { minimumCardsPerPage: 1, alwaysRunOcr: false, renderLongEdge: 2300 },
+  "provider-1": { minimumCardsPerPage: 2, alwaysRunOcr: false, renderLongEdge: 2350 },
+  "provider-2": { minimumCardsPerPage: 4, alwaysRunOcr: false, renderLongEdge: 2450 },
+  "provider-3": { minimumCardsPerPage: 6, alwaysRunOcr: false, renderLongEdge: 2600 },
+  "provider-4": { minimumCardsPerPage: 1, alwaysRunOcr: true, renderLongEdge: 2600 },
+};
+
+export function importProviderStrategy(
+  provider: ImportProviderProfile = "auto",
+) {
+  return IMPORT_PROVIDER_STRATEGIES[provider] ?? IMPORT_PROVIDER_STRATEGIES.auto;
+}
+
+export function shouldRunProviderOcr(
+  provider: ImportProviderProfile,
+  detectedCards: number,
+) {
+  const strategy = importProviderStrategy(provider);
+  return (
+    strategy.alwaysRunOcr ||
+    detectedCards < strategy.minimumCardsPerPage
+  );
+}
+
+function importCardSetScore(cards: BingoCard[]) {
+  return cards.reduce((score, card) => {
+    const readableIdentifier = card.number && !card.number.startsWith("SIN-ID-");
+    const validValues = card.grid.filter(
+      (value) => Number.isInteger(value) && value >= 0 && value <= 75,
+    ).length;
+    return (
+      score +
+      100 +
+      (readableIdentifier ? 18 : 0) +
+      (needsImportReview(card) ? 0 : 12) +
+      Math.min(25, validValues)
+    );
+  }, 0);
+}
+
+/**
+ * Conserva la lectura por texto cuando es completa y prefiere el OCR cuando
+ * este recupera cartones que una capa de texto parcial dejó fuera.
+ */
+export function selectProviderPageCards(
+  textCards: BingoCard[],
+  ocrCards: BingoCard[],
+) {
+  if (ocrCards.length !== textCards.length) {
+    return ocrCards.length > textCards.length ? ocrCards : textCards;
+  }
+  return importCardSetScore(ocrCards) > importCardSetScore(textCards)
+    ? ocrCards
+    : textCards;
+}
+
 export function needsImportReview(card: BingoCard) {
   return (
     card.number.startsWith("SIN-ID-") ||
@@ -4764,11 +4873,12 @@ export async function runOcr(
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
+  renderLongEdge = 2300,
 ): Promise<BingoCard[]> {
   const baseViewport = pageProxy.getViewport({ scale: 1 });
   const scale = Math.max(
     1.6,
-    Math.min(2.5, 2300 / Math.max(baseViewport.width, baseViewport.height)),
+    Math.min(2.8, renderLongEdge / Math.max(baseViewport.width, baseViewport.height)),
   );
   const viewport = pageProxy.getViewport({ scale });
   const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
@@ -5165,7 +5275,10 @@ export function reconcilePlainSequentialCardNumbers(cards: BingoCard[]) {
 export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
+  options: BingoImportOptions = {},
 ): Promise<PdfParseResult> {
+  const provider = options.provider ?? "auto";
+  const providerStrategy = importProviderStrategy(provider);
   const pdfModuleUrl = String.fromCharCode(
     47, 112, 100, 102, 106, 115, 47, 112, 100, 102, 46, 109, 106, 115,
   );
@@ -5226,9 +5339,10 @@ export async function parseBingoPdf(
                   ]
                 : [],
             );
-            pageCards = extractCardsFromTextItems(items, file.name, pageNumber);
+            const textCards = extractCardsFromTextItems(items, file.name, pageNumber);
+            pageCards = textCards;
 
-            if (!pageCards.length) {
+            if (shouldRunProviderOcr(provider, textCards.length)) {
               onProgress({
                 page: pageNumber,
                 pages: pageCount,
@@ -5237,7 +5351,14 @@ export async function parseBingoPdf(
               });
               try {
                 ocrWorker ??= await createOcrWorker();
-                pageCards = await runOcr(page, ocrWorker, file.name, pageNumber);
+                const ocrCards = await runOcr(
+                  page,
+                  ocrWorker,
+                  file.name,
+                  pageNumber,
+                  providerStrategy.renderLongEdge,
+                );
+                pageCards = selectProviderPageCards(textCards, ocrCards);
               } catch (error) {
                 pageWarnings.push(
                   `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
@@ -5339,13 +5460,14 @@ export async function parseBingoImage(
 export async function parseBingoImportFile(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
+  options: BingoImportOptions = {},
 ) {
   if (!isSupportedBingoImportFile(file)) {
     throw new Error(`${file.name} no es un PDF ni una imagen compatible.`);
   }
   const kind = await validateBingoImportFileContent(file);
   return kind === "pdf"
-    ? parseBingoPdf(file, onProgress)
+    ? parseBingoPdf(file, onProgress, options)
     : parseBingoImage(file, onProgress);
 }
 

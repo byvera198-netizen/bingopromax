@@ -68,11 +68,13 @@ import {
   type Winner,
 } from "@/lib/bingo";
 import {
+  IMPORT_PROVIDER_PROFILES,
   ensureUniqueImportIdentifiers,
   isSupportedBingoImportFile,
   needsImportReview,
   parseBingoImportFile,
   sortCardsByPdfOrder,
+  type ImportProviderProfile,
   type PdfParseProgress,
 } from "@/lib/pdf-parser";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
@@ -508,6 +510,13 @@ export default function GameConsole() {
     typeof window === "undefined" || localStorage.getItem("bingo-sound") !== "off",
   );
   const [processingFiles, setProcessingFiles] = useState(false);
+  const [importProvider, setImportProvider] = useState<ImportProviderProfile>(() => {
+    if (typeof window === "undefined") return "auto";
+    const saved = localStorage.getItem("bingo-import-provider");
+    return IMPORT_PROVIDER_PROFILES.some((profile) => profile.id === saved)
+      ? saved as ImportProviderProfile
+      : "auto";
+  });
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -750,6 +759,10 @@ export default function GameConsole() {
   useEffect(() => {
     localStorage.setItem("bingo-sound", sound ? "on" : "off");
   }, [sound]);
+
+  useEffect(() => {
+    localStorage.setItem("bingo-import-provider", importProvider);
+  }, [importProvider]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -1394,8 +1407,10 @@ export default function GameConsole() {
     try {
       for (const file of files) {
         try {
-          const parsed = await parseBingoImportFile(file, (progress) =>
-            setPdfProgress({ ...progress, file: file.name }),
+          const parsed = await parseBingoImportFile(
+            file,
+            (progress) => setPdfProgress({ ...progress, file: file.name }),
+            { provider: importProvider },
           );
           pages += parsed.pages;
           warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
@@ -2191,6 +2206,25 @@ export default function GameConsole() {
                 ref={cameraInputRef}
                 type="file"
               />
+              <section className="import-provider-selector" aria-label="Perfil del proveedor para la importación">
+                <div>
+                  <span className="eyebrow">PERFIL DE LECTURA</span>
+                  <strong>Proveedor del archivo</strong>
+                  <p>Elige la distribución que más se parece al PDF. “Automático” conserva el reconocimiento habitual.</p>
+                </div>
+                <label>
+                  <span>Formato</span>
+                  <select
+                    disabled={processingFiles}
+                    onChange={(event) => setImportProvider(event.target.value as ImportProviderProfile)}
+                    value={importProvider}
+                  >
+                    {IMPORT_PROVIDER_PROFILES.map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.label} — {profile.description}</option>
+                    ))}
+                  </select>
+                </label>
+              </section>
               <section
                 className={`upload-zone ${processingFiles ? "processing" : ""}`}
                 onDragOver={(event) => event.preventDefault()}
@@ -2212,7 +2246,7 @@ export default function GameConsole() {
                 ) : (
                   <>
                     <span className="upload-icon"><UploadCloud size={29} /></span>
-                    <div><strong>Suelta aquí PDFs o imágenes de bingo</strong><p>Reconocemos tablas 5×5, Sabrosito y hojas de números; revisa cada cartón antes de guardarlo.</p></div>
+                    <div><strong>Suelta aquí PDFs o imágenes de bingo</strong><p>Reconocemos tablas 5×5, Sabrosito y hojas de números con el perfil {IMPORT_PROVIDER_PROFILES.find((profile) => profile.id === importProvider)?.label ?? "Automático"}; revisa cada cartón antes de guardarlo.</p></div>
                     <div className="upload-actions">
                       <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar archivos</button>
                       <button className="secondary-button" onClick={() => cameraInputRef.current?.click()} type="button"><Camera size={15} /> Usar cámara</button>
