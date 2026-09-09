@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { communityAction, readCommunity } from "@/lib/member-services";
 import { validateCardGrid, type BingoCard, type BingoPattern, type Game, type Membership, type Winner } from "@/lib/bingo";
 
 export const dynamic = "force-dynamic";
@@ -204,11 +205,26 @@ const schemaStatements = [
     actor TEXT NOT NULL DEFAULT 'Operador local',
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS user_presence (
+    email TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, game_id TEXT,
+    last_seen TEXT NOT NULL, PRIMARY KEY (email, session_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS member_messages (
+    id TEXT PRIMARY KEY, sender_email TEXT NOT NULL, recipient_email TEXT,
+    body TEXT NOT NULL, created_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS member_message_reads (
+    message_id TEXT NOT NULL, email TEXT NOT NULL, read_at TEXT NOT NULL,
+    PRIMARY KEY (message_id, email)
+  )`,
   "CREATE INDEX IF NOT EXISTS cards_game_status_idx ON cards(game_id, status)",
   "CREATE INDEX IF NOT EXISTS draws_game_idx ON draws(game_id, drawn_at)",
   "CREATE INDEX IF NOT EXISTS winners_game_idx ON winners(game_id, validated_at)",
   "CREATE INDEX IF NOT EXISTS game_patterns_game_idx ON game_patterns(game_id, enabled)",
   "CREATE INDEX IF NOT EXISTS memberships_status_idx ON memberships(status)",
+  "CREATE INDEX IF NOT EXISTS user_presence_seen_idx ON user_presence(last_seen)",
+  "CREATE INDEX IF NOT EXISTS member_messages_recipient_idx ON member_messages(recipient_email, created_at)",
+  "CREATE INDEX IF NOT EXISTS member_messages_sender_idx ON member_messages(sender_email, created_at)",
 ];
 
 let schemaInitialization: Promise<void> | null = null;
@@ -219,7 +235,17 @@ async function ensureSchema(db: D1) {
       const existing = await db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'games'")
         .first<{ name: string }>();
-      if (existing) return;
+      if (existing) {
+        await db.batch([
+          db.prepare(`CREATE TABLE IF NOT EXISTS user_presence (email TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, game_id TEXT, last_seen TEXT NOT NULL, PRIMARY KEY (email, session_id))`),
+          db.prepare(`CREATE TABLE IF NOT EXISTS member_messages (id TEXT PRIMARY KEY, sender_email TEXT NOT NULL, recipient_email TEXT, body TEXT NOT NULL, created_at TEXT NOT NULL)`),
+          db.prepare(`CREATE TABLE IF NOT EXISTS member_message_reads (message_id TEXT NOT NULL, email TEXT NOT NULL, read_at TEXT NOT NULL, PRIMARY KEY (message_id, email))`),
+          db.prepare("CREATE INDEX IF NOT EXISTS user_presence_seen_idx ON user_presence(last_seen)"),
+          db.prepare("CREATE INDEX IF NOT EXISTS member_messages_recipient_idx ON member_messages(recipient_email, created_at)"),
+          db.prepare("CREATE INDEX IF NOT EXISTS member_messages_sender_idx ON member_messages(sender_email, created_at)"),
+        ]);
+        return;
+      }
       await db.batch(schemaStatements.map((statement) => db.prepare(statement)));
       await db
         .prepare("CREATE INDEX IF NOT EXISTS games_owner_created_idx ON games(owner_email, created_at)")
@@ -288,6 +314,9 @@ export async function GET(request: Request) {
     await ensureSchema(db);
     const access = await authorize(db, request);
     if (!access.allowed) return Response.json({ access }, { status: 403 });
+    if (new URL(request.url).searchParams.get("scope") === "community") {
+      return Response.json(await readCommunity(db, access), { headers: { "Cache-Control": "no-store" } });
+    }
     const gameRow = await getOrCreateGame(db, access.email);
     const game = mapGame(gameRow);
     const gameCount = await db.prepare("SELECT COUNT(*) AS total FROM games WHERE owner_email = ?").bind(access.email).first<{ total: number }>();
@@ -471,6 +500,9 @@ export async function POST(request: Request) {
         return Response.json({ error: "Esta partida pertenece a otro usuario." }, { status: 403 });
       }
     }
+
+    const communityResponse = await communityAction(db, access, body);
+    if (communityResponse) return communityResponse;
 
     if (action === "addAdmin" || action === "removeAdmin") {
       if (access.role !== "admin" || !access.isPrimaryAdmin) {

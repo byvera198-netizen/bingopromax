@@ -23,6 +23,22 @@ test("declara persistencia para partidas, membresías y archivos PDF", async () 
   }
 });
 
+test("persiste presencia y mensajes sin mezclar partidas de usuarios", async () => {
+  const schema = await read("db/schema.ts");
+  const route = await read("app/api/state/route.ts");
+  const service = await read("lib/member-services.ts");
+  const migration = await read("drizzle/0006_member_communications.sql");
+  for (const table of ["user_presence", "member_messages", "member_message_reads"]) {
+    assert.match(schema, new RegExp(`"${table}"`));
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(route, /scope"\) === "community"/);
+  assert.match(service, /g\.owner_email = p\.email/);
+  assert.match(service, /p\.role = 'member'/);
+  assert.match(service, /Solo un administrador puede enviar mensajes/);
+  assert.match(service, /m\.recipient_email = \?/);
+});
+
 test("aísla cada selección de archivos durante la importación", async () => {
   const page = await read("app/game-console.tsx");
   const stateRoute = await read("app/api/state/route.ts");
@@ -68,9 +84,9 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   const styles = await read("app/globals.css");
 
   assert.match(page, /parseBingoImportFile/);
-  assert.match(page, /Proveedor del archivo/);
-  assert.match(page, /IMPORT_PROVIDER_PROFILES/);
-  assert.match(page, /provider: importProvider/);
+  assert.match(page, /No necesitas elegir un proveedor/);
+  assert.doesNotMatch(page, /IMPORT_PROVIDER_PROFILES/);
+  assert.match(page, /provider: "auto"/);
   assert.match(parser, /selectProviderPageCards/);
   assert.match(parser, /shouldRunProviderOcr/);
   assert.match(page, /saveManualCard/);
@@ -122,6 +138,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
   assert.match(page, /membershipEmail = access\.email \|\| authUser\?\.email/);
   assert.match(page, /Cerrar sesión y volver al inicio/);
   assert.match(page, /capture="environment"/);
+  assert.match(page, /MemberCommunity/);
+  assert.match(route, /communityAction/);
   assert.match(page, /Solicitar código al administrador por WhatsApp/);
   assert.match(page, /https:\/\/wa\.me\/\$\{WHATSAPP_NUMBER\}\?text=/);
   assert.doesNotMatch(page, /assignApplicationCardNumbers/);

@@ -50,6 +50,43 @@ interface Identifier {
   y: number;
 }
 
+function editDistance(left: string, right: string) {
+  const row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const previous = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + Number(left[i - 1] !== right[j - 1]));
+      diagonal = previous;
+    }
+  }
+  return row[right.length];
+}
+
+/** Repairs only a consecutive sequence supported by at least 75% of its labels. */
+export function reconcileSequentialGridIdentifiers(values: string[]) {
+  if (values.length < 3 || values.some((value) => !/^\d{5,12}$/.test(value))) return values;
+  const candidates = new Map<string, { start: number; width: number }>();
+  values.forEach((value, index) => {
+    const alternatives = [value, ...Array.from({ length: value.length }, (_, at) => value.slice(0, at) + value.slice(at + 1))];
+    alternatives.forEach((item) => {
+      if (item.length < 5) return;
+      const start = Number(item) - index;
+      if (Number.isSafeInteger(start) && start >= 0) candidates.set(`${item.length}:${start}`, { start, width: item.length });
+    });
+  });
+  const ranked = [...candidates.values()].map((candidate) => {
+    const expected = values.map((_, index) => String(candidate.start + index).padStart(candidate.width, "0"));
+    const distances = expected.map((item, index) => editDistance(item, values[index]));
+    return { expected, exact: distances.filter((distance) => distance === 0).length, close: distances.filter((distance) => distance <= 1).length, support: distances.filter((distance) => distance <= 2).length, cost: distances.reduce((sum, distance) => sum + Math.min(distance, 4), 0) };
+  }).sort((a, b) => b.exact - a.exact || b.close - a.close || b.support - a.support || a.cost - b.cost);
+  const [winner, runnerUp] = ranked;
+  const strong = winner && (winner.close >= Math.ceil(values.length * 0.75) || (winner.exact >= 2 && winner.support >= Math.ceil(values.length * 0.75)));
+  if (!strong || (runnerUp && runnerUp.close === winner.close && runnerUp.support === winner.support && runnerUp.exact === winner.exact && runnerUp.cost === winner.cost && runnerUp.expected[0] !== winner.expected[0])) return values;
+  return winner.expected;
+}
+
 interface OcrBox {
   x0: number;
   y0: number;
@@ -116,6 +153,7 @@ export type ImportProviderProfile =
 
 export interface BingoImportOptions {
   provider?: ImportProviderProfile;
+  signal?: AbortSignal;
 }
 
 export const IMPORT_PROVIDER_PROFILES: ReadonlyArray<{
@@ -160,7 +198,7 @@ const IMPORT_PROVIDER_STRATEGIES: Record<
   ImportProviderProfile,
   ImportProviderStrategy
 > = {
-  auto: { minimumCardsPerPage: 1, alwaysRunOcr: false, renderLongEdge: 2300 },
+  auto: { minimumCardsPerPage: 1, alwaysRunOcr: true, renderLongEdge: 2450 },
   "provider-1": { minimumCardsPerPage: 2, alwaysRunOcr: false, renderLongEdge: 2350 },
   "provider-2": { minimumCardsPerPage: 4, alwaysRunOcr: false, renderLongEdge: 2450 },
   "provider-3": { minimumCardsPerPage: 6, alwaysRunOcr: false, renderLongEdge: 2600 },
@@ -2223,12 +2261,15 @@ async function recognizePortraitPageFamily(
   return identifierFamilyConsensus(readings);
 }
 
-async function recognizeGridIdentifiers(
+export async function recognizeGridIdentifiers(
   source: HTMLCanvasElement,
   rectangles: GridRectangle[],
   worker: OcrWorker,
 ) {
-  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rowTolerance = median(rectangles.map((rectangle) => rectangle.height)) * 0.35;
+  const ordered = [...rectangles].sort((a, b) =>
+    Math.abs(a.y - b.y) <= rowTolerance ? a.x - b.x : a.y - b.y,
+  );
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789-_#TabJUEGOjuegoOoIl",
     tessedit_pageseg_mode: "11",
@@ -2300,6 +2341,9 @@ async function recognizeGridIdentifiers(
       { x: rectangle.x, y: top, width: rectangle.width, height: height * 0.64 },
       { x: rectangle.x, y: top, width: rectangle.width * 0.76, height: height * 0.72 },
       { x: rectangle.x, y: top, width: rectangle.width, height },
+      // Some scanners report the first numeric line as the grid top. Include
+      // the preceding BINGO row and its printed label in one contextual crop.
+      { x: rectangle.x, y: Math.max(0, rectangle.y - rectangle.height * 0.38), width: rectangle.width, height: rectangle.height * 0.45 },
     ];
     let value = "";
     let lastText = "";
@@ -2309,8 +2353,16 @@ async function recognizeGridIdentifiers(
       preserve_interword_spaces: "1",
     });
     for (const [cropIndex, crop] of crops.entries()) {
-      const target = makeCanvas(1440, cropIndex === crops.length - 1 ? 360 : 240);
+      const contextualCrop = cropIndex === crops.length - 1;
+      const target = makeCanvas(1440, contextualCrop ? 440 : 240);
       if (!target) continue;
+      await worker.setParameters({
+        tessedit_char_whitelist: contextualCrop
+          ? "0123456789-_#ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚáéíóú"
+          : "0123456789-_#",
+        tessedit_pageseg_mode: contextualCrop ? "6" : "7",
+        preserve_interword_spaces: "1",
+      });
       target.context.drawImage(
         source,
         crop.x,
@@ -2322,7 +2374,7 @@ async function recognizeGridIdentifiers(
         target.canvas.width - 40,
         target.canvas.height - 40,
       );
-      binarizeNumbers(target.canvas, target.context, cropIndex <= 1 ? 205 : 175, 90);
+      binarizeNumbers(target.canvas, target.context, cropIndex <= 1 ? 205 : 175, contextualCrop ? 130 : 90);
       const result = await worker.recognize(target.canvas, {}, { text: true });
       lastText = result.data.text ?? "";
       value = cardIdentifierFromOcrText(lastText) ?? "";
@@ -2335,6 +2387,10 @@ async function recognizeGridIdentifiers(
       }
     }
     if (value) identifiers.push({ value, x: rectangle.x + rectangle.width / 2, y: source.height - rectangle.y });
+  }
+  if (identifiers.length === ordered.length) {
+    const repaired = reconcileSequentialGridIdentifiers(identifiers.map((item) => item.value));
+    identifiers.forEach((item, index) => { item.value = repaired[index]; });
   }
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -2382,7 +2438,7 @@ async function recognizeNumberSheetMetadata(
   return metadata;
 }
 
-function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
+function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle, threshold = 175) {
   const cellWidth = 150;
   const cellHeight = 120;
   const target = makeCanvas(cellWidth * 5, cellHeight * 5);
@@ -2413,8 +2469,48 @@ function cleanGridCanvas(source: HTMLCanvasElement, rectangle: GridRectangle) {
       );
     }
   }
-  binarizeNumbers(target.canvas, target.context);
+  binarizeNumbers(target.canvas, target.context, threshold, 75);
   return target.canvas;
+}
+
+async function recognizeSparseGrid(
+  source: HTMLCanvasElement,
+  rectangle: GridRectangle,
+  worker: OcrWorker,
+) {
+  const readings: number[][] = [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  for (const threshold of [55, 75, 95, 115]) {
+    const montage = cleanGridCanvas(source, rectangle, threshold);
+    if (!montage) continue;
+    try {
+      const result = await worker.recognize(montage, {}, { blocks: true, text: true });
+      readings.push(extractPartialGridFromKnownOcrBlocks(
+        result.data.blocks ?? [],
+        montage.width,
+        montage.height,
+      ));
+    } finally {
+      montage.width = montage.height = 0;
+    }
+  }
+  const grid = Array.from({ length: 25 }, (_, index) => {
+    if (index === 12) return 0;
+    const votes = new Map<number, number>();
+    readings
+      .map((reading) => reading[index])
+      .filter((value) => validNumberForCell(value, index))
+      .forEach((value) => votes.set(value, (votes.get(value) ?? 0) + 1));
+    const winner = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
+    return winner && winner[1] >= 2 ? winner[0] : 0;
+  });
+  const values = grid.filter((value) => value > 0);
+  if (values.length < 5 || values.length > 15 || new Set(values).size !== values.length) return null;
+  return grid;
 }
 
 const numberSheetSignatureCells = [5, 6, 7, 8, 9, 15, 16, 17, 18];
@@ -2859,6 +2955,10 @@ async function recognizeDetectedGrids(
     : null;
   const identifiers = await recognizeGridIdentifiers(source, eligibleRectangles, worker);
   for (const rectangle of eligibleRectangles) {
+    const originalPosition = {
+      x: rectangle.x + rectangle.width / 2,
+      y: source.height - rectangle.y,
+    };
     const original = cropGridCanvas(source, rectangle);
     if (!original) continue;
     const originalResult = await worker.recognize(
@@ -2871,6 +2971,33 @@ async function recognizeDetectedGrids(
       original.width,
       original.height,
     );
+    original.width = original.height = 0;
+    const rowHeight = median(
+      rectangle.horizontalLines.slice(1).map((line, index) => line - rectangle.horizontalLines[index]),
+    );
+    const nextGap = rectangle.nextHorizontalLine
+      ? rectangle.nextHorizontalLine - rectangle.horizontalLines[5]
+      : 0;
+    const firstRowValues = grid.slice(0, 5).filter((value, index) => validNumberForCell(value, index)).length;
+    if (
+      rectangle.nextHorizontalLine &&
+      rowHeight > 0 &&
+      nextGap >= rowHeight * 0.68 &&
+      nextGap <= rowHeight * 1.34 &&
+      firstRowValues <= 2
+    ) {
+      rectangle.y = rectangle.horizontalLines[1];
+      rectangle.height = rectangle.nextHorizontalLine - rectangle.y;
+      rectangle.horizontalLines = [...rectangle.horizontalLines.slice(1), rectangle.nextHorizontalLine];
+      rectangle.nextHorizontalLine = undefined;
+      const shifted = cropGridCanvas(source, rectangle);
+      if (shifted) {
+        try {
+          const shiftedResult = await worker.recognize(shifted, {}, { blocks: true, tsv: true, text: true });
+          grid = extractPartialGridFromKnownOcrBlocks(shiftedResult.data.blocks ?? [], shifted.width, shifted.height);
+        } finally { shifted.width = shifted.height = 0; }
+      }
+    }
     let detectedSerial: string | undefined;
     let detectedImportReview: string[] | undefined;
     if (likelyNumberSheetPage) {
@@ -3138,7 +3265,21 @@ async function recognizeDetectedGrids(
         }
       }
     }
-    if (gridQuality(grid) < 8 && !numberSheetFormForGrid(grid)) {
+    if (
+      gridQuality(grid) < 8 &&
+      isFourCardPortraitSheet &&
+      !numberSheetFormForGrid(grid)
+    ) {
+      const sparseGrid = await recognizeSparseGrid(source, rectangle, worker);
+      if (sparseGrid) {
+        grid = sparseGrid;
+        detectedSerial = "Forma detectada";
+        detectedImportReview = [
+          "Se detectó automáticamente una forma con casillas vacías. Confirma el patrón antes de guardar.",
+        ];
+      }
+    }
+    if (gridQuality(grid) < 8 && !detectedSerial && !numberSheetFormForGrid(grid)) {
       const maskedGrid = recoverMaskedGridForReview(source, rectangle, grid);
       if (maskedGrid) {
         grid = maskedGrid;
@@ -3164,7 +3305,6 @@ async function recognizeDetectedGrids(
           : "El cartón fue localizado, pero sus columnas necesitan confirmación antes de guardar.",
       ];
     }
-    const rectangleIndex = eligibleRectangles.indexOf(rectangle);
     const centerMetadata = await recognizeNumberSheetMetadata(
       source,
       rectangle,
@@ -3173,16 +3313,22 @@ async function recognizeDetectedGrids(
     // La indexación directa solo es segura cuando se leyó un identificador
     // para cada cuadrícula. Con una lectura parcial, cardsFromDetectedGrids
     // conserva la posición real y asocia cada lectura por cercanía.
+    const positionalIdentifier = [...identifiers].sort((left, right) =>
+      Math.abs(left.x - originalPosition.x) + Math.abs(left.y - originalPosition.y) -
+      (Math.abs(right.x - originalPosition.x) + Math.abs(right.y - originalPosition.y)),
+    )[0];
     const headerIdentifier =
       (isFourCardPortraitSheet ||
         (source.width > source.height && eligibleRectangles.length === 2)) &&
       identifiers.length === eligibleRectangles.length
-        ? identifiers[rectangleIndex]?.value
+        ? positionalIdentifier?.value
         : undefined;
     const fallbackIdentifier =
       headerIdentifier ??
       (identifiers.length === 0 ? centerMetadata?.identifier : undefined);
-    const recoveredForm = numberSheetFormForGrid(grid);
+    const recoveredForm = detectedSerial?.startsWith("Forma #")
+      ? numberSheetFormForGrid(grid)
+      : null;
     const recoveredFamily =
       numberSheetFamily ??
       fallbackIdentifier?.match(/^(\d{5,12})(?:-\d{1,3})?$/)?.[1] ??
@@ -3201,7 +3347,7 @@ async function recognizeDetectedGrids(
       // al centro cuando no se pudo leer ningún encabezado de la página.
       identifier: recoveredForm && recoveredFamily
         ? `${recoveredFamily}-${numberSheetSuffixByForm[recoveredForm]}`
-        : fallbackIdentifier,
+        : fallbackIdentifier ?? undefined,
     });
   }
   const identifierParts = detected.flatMap((item) => {
@@ -4761,7 +4907,7 @@ export async function runOcrCanvas(
   );
   if (detectedCards.length || specialCards.length) {
     const hasRecoveredNumberSheet =
-      specialCards.some((card) => card.serial.startsWith("Forma #"));
+      specialCards.some((card) => card.serial?.startsWith("Forma #"));
     // Si las cuatro formas se recuperaron con la geometría impresa, los
     // marcadores "Pendiente" del primer OCR son sustituidos, no duplicados.
     const primaryCards = hasRecoveredNumberSheet
@@ -4861,8 +5007,11 @@ function deskewCanvasForImport(source: HTMLCanvasElement) {
     if (!candidate) continue;
     const score = canvasGridDetectionScore(candidate);
     if (score > bestScore) {
+      if (best !== source) best.width = best.height = 0;
       best = candidate;
       bestScore = score;
+    } else {
+      candidate.width = candidate.height = 0;
     }
   }
   return best;
@@ -4874,22 +5023,35 @@ export async function runOcr(
   fileName: string,
   pageNumber: number,
   renderLongEdge = 2300,
+  textCards: BingoCard[] = [],
 ): Promise<BingoCard[]> {
   const baseViewport = pageProxy.getViewport({ scale: 1 });
-  const scale = Math.max(
-    1.6,
-    Math.min(2.8, renderLongEdge / Math.max(baseViewport.width, baseViewport.height)),
-  );
+  const scale = pdfRenderScale(baseViewport.width, baseViewport.height, renderLongEdge);
   const viewport = pageProxy.getViewport({ scale });
   const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
   if (!target) return [];
-  await pageProxy.render({ canvas: target.canvas, canvasContext: target.context, viewport }).promise;
-  return runOcrCanvas(
-    deskewCanvasForImport(target.canvas),
-    worker,
-    fileName,
-    pageNumber,
-  );
+  let aligned = target.canvas;
+  try {
+    await pageProxy.render({ canvas: target.canvas, canvasContext: target.context, viewport }).promise;
+    aligned = deskewCanvasForImport(target.canvas);
+    const ctx = aligned.getContext("2d", { willReadFrequently: true });
+    if (ctx && textCards.length && textCards.every((card) => !needsImportReview(card))) {
+      const pixels = ctx.getImageData(0, 0, aligned.width, aligned.height);
+      const grids = detectGridRectangles(pixels.data, aligned.width, aligned.height);
+      // Do not stop after just one text card: verify the visible page layout.
+      if (grids.length === textCards.length && grids.length > 0 && textCards.every((card) => card.grid.length === 25)) return textCards;
+    }
+    return await runOcrCanvas(aligned, worker, fileName, pageNumber);
+  } finally {
+    if (aligned !== target.canvas) aligned.width = aligned.height = 0;
+    target.canvas.width = target.canvas.height = 0;
+  }
+}
+
+/** PDF page sizes are points, not pixels. Large scanner MediaBoxes must downscale. */
+export function pdfRenderScale(width: number, height: number, longEdge = 2450) {
+  if (!(width > 0 && height > 0 && Number.isFinite(width) && Number.isFinite(height))) throw new Error("Dimensiones de página inválidas.");
+  return Math.min(4, longEdge / Math.max(width, height));
 }
 
 export function recommendedOcrConcurrency(
@@ -4908,7 +5070,7 @@ function imageExtension(fileName: string) {
   return fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
 }
 
-const MAX_IMPORT_FILE_BYTES = 40 * 1024 * 1024;
+const MAX_IMPORT_FILE_BYTES = 150 * 1024 * 1024;
 
 function startsWithBytes(bytes: Uint8Array, expected: number[]) {
   return expected.every((value, index) => bytes[index] === value);
@@ -4917,7 +5079,7 @@ function startsWithBytes(bytes: Uint8Array, expected: number[]) {
 export async function validateBingoImportFileContent(file: File) {
   if (!file.size) throw new Error("El archivo está vacío.");
   if (file.size > MAX_IMPORT_FILE_BYTES) {
-    throw new Error("El archivo supera el límite de 40 MB para una importación segura.");
+    throw new Error("El archivo supera 150 MB. Divídelo en archivos más pequeños para cuidar la memoria del dispositivo.");
   }
   const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
   const extension = imageExtension(file.name);
@@ -4956,7 +5118,7 @@ async function canvasFromImageFile(file: File) {
   let source: CanvasImageSource;
   let width = 0;
   let height = 0;
-  let release = () => undefined;
+  let release: () => void = () => undefined;
   try {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
     source = bitmap;
@@ -5313,7 +5475,7 @@ export async function parseBingoPdf(
     const processPages = async () => {
       let ocrWorker: OcrWorker | null = null;
       try {
-        while (nextPage <= pageCount) {
+        while (nextPage <= pageCount && !options.signal?.aborted) {
           const pageNumber = nextPage;
           nextPage += 1;
           const pageWarnings: string[] = [];
@@ -5323,10 +5485,11 @@ export async function parseBingoPdf(
             stage: "Leyendo texto",
             percent: Math.round((completedPages / pageCount) * 100),
           });
-          const page = await pdf.getPage(pageNumber);
+          let page: import("pdfjs-dist").PDFPageProxy | null = null;
           let pageCards: BingoCard[] = [];
           try {
-            const text = await page.getTextContent();
+            page = await pdf.getPage(pageNumber);
+            const text = await page.getTextContent().catch(() => ({ items: [] }));
             const items = text.items.flatMap<PdfTextItem>((item) =>
               "str" in item && "transform" in item
                 ? [
@@ -5357,9 +5520,13 @@ export async function parseBingoPdf(
                   file.name,
                   pageNumber,
                   providerStrategy.renderLongEdge,
+                  textCards,
                 );
                 pageCards = selectProviderPageCards(textCards, ocrCards);
               } catch (error) {
+                // A failed worker is not reused for the remaining 99 pages.
+                await ocrWorker?.terminate().catch(() => undefined);
+                ocrWorker = null;
                 pageWarnings.push(
                   `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
                 );
@@ -5385,9 +5552,17 @@ export async function parseBingoPdf(
               pages: 1,
               warnings: pageWarnings,
             };
+          } catch (error) {
+            pageResults[pageNumber - 1] = {
+              cards: pageCards, pages: 1,
+              warnings: [`Página ${pageNumber}: no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}). Las demás páginas se conservan.`],
+            };
           } finally {
-            page.cleanup();
+            page?.cleanup();
             completedPages += 1;
+            onProgress({ page: pageNumber, pages: pageCount, stage: "Validando", percent: Math.round(completedPages / pageCount * 100) });
+            // Yield between pages so controls stay responsive in large files.
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
           }
         }
       } finally {
@@ -5395,7 +5570,7 @@ export async function parseBingoPdf(
       }
     };
 
-    await Promise.all(
+    await Promise.allSettled(
       Array.from({ length: concurrency }, () => processPages()),
     );
   } finally {
@@ -5403,10 +5578,10 @@ export async function parseBingoPdf(
   }
 
   onProgress({
-    page: pageCount,
+    page: completedPages,
     pages: pageCount,
     stage: "Validando",
-    percent: 100,
+    percent: Math.round(completedPages / pageCount * 100),
   });
   // Se conserva la numeración impresa y solo se repara una familia a la que
   // le falta un dígito cuando las hojas vecinas equivalentes la confirman.
@@ -5419,7 +5594,10 @@ export async function parseBingoPdf(
   return {
     cards: sortCardsByPdfOrder(reconciledCards),
     pages: pageCount,
-    warnings: pageResults.flatMap((result) => result?.warnings ?? []),
+    warnings: [
+      ...pageResults.flatMap((result) => result?.warnings ?? []),
+      ...(completedPages < pageCount ? [`Lectura detenida: ${completedPages} de ${pageCount} páginas procesadas. Se conservan los cartones ya detectados; las páginas restantes no se han importado.`] : []),
+    ],
   };
 }
 
@@ -5447,6 +5625,7 @@ export async function parseBingoImage(
     );
   } finally {
     await worker.terminate().catch(() => undefined);
+    canvas.width = canvas.height = 0;
   }
   if (!cards.length) {
     warnings.push(

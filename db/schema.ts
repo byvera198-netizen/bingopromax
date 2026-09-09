@@ -143,3 +143,25 @@ export const auditLogs = sqliteTable("audit_logs", {
   actor: text("actor").notNull().default("Operador local"),
   createdAt: text("created_at").notNull(),
 });
+
+export const userPresence = sqliteTable("user_presence", {
+  email: text("email").notNull(),
+  sessionId: text("session_id").notNull(),
+  role: text("role").notNull(),
+  gameId: text("game_id"),
+  lastSeen: text("last_seen").notNull(),
+}, (table) => [uniqueIndex("user_presence_email_session_unique").on(table.email, table.sessionId)]);
+
+export const memberMessages = sqliteTable("member_messages", {
+  id: text("id").primaryKey(),
+  senderEmail: text("sender_email").notNull(),
+  recipientEmail: text("recipient_email"),
+  body: text("body").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const memberMessageReads = sqliteTable("member_message_reads", {
+  messageId: text("message_id").notNull(),
+  email: text("email").notNull(),
+  readAt: text("read_at").notNull(),
+}, (table) => [uniqueIndex("member_message_reads_unique").on(table.messageId, table.email)]);

@@ -78,7 +78,31 @@
 * { box-sizing: border-box; }
 html { background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-geist-sans), Arial, sans-serif; -webkit-font-smoothing: antialiased; }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
+select, select option, select optgroup { background-color: var(--surface); color: var(--text); }
+.community-panel, .member-inbox, .membership-expiry-notice { margin-bottom: 20px; }
+.community-body { padding: 20px; display: grid; gap: 16px; }
+.community-panel h3 { display: flex; gap: 8px; align-items: center; }
+.community-body label { display: grid; gap: 8px; font-size: 14px; }
+.community-body select, .community-body textarea { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--text); font-size: 15px; }
+.community-body small { color: var(--muted); font-size: 13px; }
+.community-body p, .member-message p { margin: 5px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55; }
+.community-send, .online-members li { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.online-members { list-style: none; padding: 0; max-height: 260px; overflow: auto; }
+.online-members li { border-bottom: 1px solid var(--line); padding: 10px 0; font-size: 14px; }
+.online-members span { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.online-members b { color: var(--lime); }
+.member-message, .membership-expiry-notice { display: flex; align-items: flex-start; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.member-message + .member-message { margin-top: 10px; }
+.member-message > div, .membership-expiry-notice > div { flex: 1; min-width: 0; }
+.member-message > svg, .membership-expiry-notice > svg { flex-shrink: 0; color: var(--lime); }
+.membership-expiry-notice { border-color: var(--amber); }
+.membership-expiry-notice strong { font-size: 16px; }
+.membership-expiry-notice p, .membership-expiry-notice a { font-size: 14px; line-height: 1.6; }
+.membership-expiry-notice a { color: var(--lime); text-decoration: underline; }
+.community-error { color: var(--amber); font-size: 14px; }
+.sent-message { padding: 12px 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 540px) { .member-message { flex-wrap: wrap; } .community-send button { width: 100%; } }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: 0.45; }

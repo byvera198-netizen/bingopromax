@@ -38,7 +38,9 @@ import {
   numberSheetMetadataFromOcrText,
   orderCardsByPdfPosition,
   recommendedOcrConcurrency,
+  pdfRenderScale,
   reconcilePdfPageFamilies,
+  reconcileSequentialGridIdentifiers,
   reconcileTwoCardPageNumbers,
   selectGridRectangles,
   selectProviderPageCards,
@@ -51,14 +53,35 @@ import {
   type PdfTextItem,
 } from "../lib/pdf-parser";
 
-test("cada perfil de proveedor activa una lectura acorde a su distribución", () => {
-  assert.equal(shouldRunProviderOcr("auto", 1), false);
+test("el modo automático siempre verifica la distribución visual de la página", () => {
+  assert.equal(shouldRunProviderOcr("auto", 1), true);
   assert.equal(shouldRunProviderOcr("provider-1", 1), true);
   assert.equal(shouldRunProviderOcr("provider-2", 3), true);
   assert.equal(shouldRunProviderOcr("provider-2", 4), false);
   assert.equal(shouldRunProviderOcr("provider-3", 5), true);
   assert.equal(shouldRunProviderOcr("provider-4", 4), true);
   assert.equal(importProviderStrategy("provider-4").renderLongEdge, 2600);
+});
+
+test("corrige una serie impresa solo cuando tres de cuatro etiquetas la respaldan", () => {
+  assert.deepEqual(
+    reconcileSequentialGridIdentifiers(["0013153", "00131543", "315500", "00131568"]),
+    ["0013153", "0013154", "0013155", "0013156"],
+  );
+  assert.deepEqual(
+    reconcileSequentialGridIdentifiers(["41681", "0241682", "0241683", "126395471"]),
+    ["0241681", "0241682", "0241683", "0241684"],
+  );
+  assert.deepEqual(
+    reconcileSequentialGridIdentifiers(["123456", "998877", "314159", "271828"]),
+    ["123456", "998877", "314159", "271828"],
+  );
+});
+
+test("las páginas gigantes de escáner se reducen y las pequeñas se amplían sin exceder el presupuesto", () => {
+  assert.ok(pdfRenderScale(595, 842, 2450) > 2);
+  assert.ok(pdfRenderScale(2844, 4024, 2450) < 1);
+  assert.equal(Math.round(4024 * pdfRenderScale(2844, 4024, 2450)), 2450);
 });
 
 test("la segunda lectura conserva el conjunto que recupera más cartones", () => {
