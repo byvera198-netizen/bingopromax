@@ -5,7 +5,7 @@ import { basename, resolve } from "node:path";
 import { createCanvas } from "@napi-rs/canvas";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createWorker, OEM, PSM } from "tesseract.js";
-import { detectGridRectangles, extractCardsFromTextItems, needsImportReview, pdfRenderScale, runOcr, filterEnabledImportGames, recognizeGridIdentifiers } from "../lib/pdf-parser";
+import { detectGridRectangles, detectSparseOuterGridRectangles, extractCardsFromTextItems, needsImportReview, pdfRenderScale, runOcr, filterEnabledImportGames, recognizeGridIdentifiers } from "../lib/pdf-parser";
 
 const file = process.argv[2];
 if (!file) throw new Error("Specify a source PDF.");
@@ -35,7 +35,9 @@ try {
     const context = canvas.getContext("2d");
     await page.render({ canvas, canvasContext: context, viewport } as never).promise;
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-    const rects = detectGridRectangles(pixels.data, canvas.width, canvas.height);
+    let rects = detectGridRectangles(pixels.data, canvas.width, canvas.height);
+    const sparseRects = detectSparseOuterGridRectangles(pixels.data, canvas.width, canvas.height);
+    if (sparseRects.length > rects.length) rects = sparseRects;
     const text = await page.getTextContent();
     const textCards = extractCardsFromTextItems(text.items.filter((item) => "str" in item) as never, basename(file), number);
     if (pageOption !== "all") await writeFile(resolve(out, `${basename(file)}.page-${number}.png`), canvas.toBuffer("image/png"));

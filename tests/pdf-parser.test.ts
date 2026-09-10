@@ -21,9 +21,11 @@ import {
   reconcilePlainSequentialCardNumbers,
   detectCompactRectangles,
   detectGridRectangles,
+  detectSparseOuterGridRectangles,
   decodeYapaRowDigits,
   decodeBingoRowDigits,
   compactIdentifierFamily,
+  extractLooseSparseGridFromKnownOcrBlocks,
   extractNumberSheetGridFromKnownOcrBlocks,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
@@ -40,6 +42,8 @@ import {
   recommendedOcrConcurrency,
   pdfRenderScale,
   reconcilePdfPageFamilies,
+  reconcileFourCardPositionIdentifiers,
+  reconcilePositionalIdentifierFamily,
   reconcileSequentialGridIdentifiers,
   reconcileTwoCardPageNumbers,
   selectGridRectangles,
@@ -533,6 +537,72 @@ const baseGrid = [
   5, 20, 35, 50, 65,
 ];
 
+test("normaliza cuatro posiciones por hoja y corrige la secuencia con cartones vecinos", () => {
+  const readings = [
+    "389700-2", "0183898", "50183895", "0153900",
+    "01839019", "0183902", "50183903", "0183904",
+  ];
+  const cards = readings.map((number, index): BingoCard => ({
+    id: `vro-${index}`,
+    number,
+    grid: [...baseGrid],
+    sourceFile: "VRO.pdf",
+    sourcePage: Math.floor(index / 4) + 1,
+    status: "active",
+    importReview: ["La numeración no fue legible y se completó con la secuencia vecina. Confírmala."],
+  }));
+  const fixed = reconcileFourCardPositionIdentifiers(cards);
+  assert.deepEqual(
+    fixed.map((card) => card.number),
+    [
+      "0183897-1", "0183898-2", "0183899-3", "0183900-4",
+      "0183901-1", "0183902-2", "0183903-3", "0183904-4",
+    ],
+  );
+  assert.ok(fixed.every((card) => !card.importReview?.length));
+});
+
+test("conserva una familia compartida y fuerza sufijos posicionales 1 a 4", () => {
+  const cards = ["71248-1", "71248-2", "99999-3", "71248-4"].map((number, index): BingoCard => ({
+    id: `family-${index}`,
+    number,
+    grid: [...baseGrid],
+    sourceFile: "familia.pdf",
+    sourcePage: 1,
+    status: "active",
+  }));
+  assert.deepEqual(
+    reconcileFourCardPositionIdentifiers(cards).map((card) => card.number),
+    ["71248-1", "71248-2", "71248-3", "71248-4"],
+  );
+});
+
+test("reconstruye una página de cuatro consecutivos aunque una etiqueta pierda o gane un dígito", () => {
+  const cards = ["0111625", "00111626", "01243486163", "SIN-ID-015-4"].map((number, index): BingoCard => ({
+    id: `posicion-${index}`,
+    number,
+    grid: [...baseGrid],
+    sourceFile: "VRO.pdf",
+    sourcePage: 15,
+    status: "active",
+  }));
+  assert.deepEqual(
+    reconcileFourCardPositionIdentifiers(cards).map((card) => card.number),
+    ["0111625-1", "0111626-2", "0111627-3", "0111628-4"],
+  );
+});
+
+test("corrige por mayoría una familia repetida sin confundirla con una secuencia", () => {
+  assert.deepEqual(
+    reconcilePositionalIdentifierFamily(["038466", "088466-4", "088466", "088466"]),
+    ["088466-1", "088466-2", "088466-3", "088466-4"],
+  );
+  assert.deepEqual(
+    reconcilePositionalIdentifierFamily(["0183897", "0183898", "0183899", "0183900"]),
+    ["0183897", "0183898", "0183899", "0183900"],
+  );
+});
+
 const horizontalPattern: BingoPattern = {
   id: "linea-horizontal-prueba",
   name: "Línea horizontal de prueba",
@@ -977,12 +1047,15 @@ test("una hoja de números gana únicamente al completar su forma impresa", () =
   );
 });
 
-test("identifica las cuatro formas especiales 1, 3, 5 y 9", () => {
+test("identifica las formas especiales 1, 3, 4, 5, 7, 9 y signo +", () => {
   const layouts = {
     "1": [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
     "3": [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    "4": [0, 1, 2, 7, 10, 11, 13, 14, 17, 22],
     "5": [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    "7": [0, 4, 5, 9, 10, 11, 13, 14, 19, 24],
     "9": [0, 1, 2, 3, 4, 5, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    "+": [2, 7, 10, 11, 13, 14, 17, 22],
   } as const;
 
   for (const [form, cells] of Object.entries(layouts)) {
@@ -1000,7 +1073,7 @@ test("identifica las cuatro formas especiales 1, 3, 5 y 9", () => {
     };
     const called = new Set(grid.filter((value) => value > 0));
     const pattern = patternForCard(card, BUILTIN_PATTERNS[0]);
-    assert.equal(pattern.id, `forma-${form}-completa`);
+    assert.equal(pattern.id, form === "+" ? "forma-mas-completa" : `forma-${form}-completa`);
     assert.equal(isWinningCard(card, called, pattern), true);
     called.delete(grid[cells[0]]);
     assert.equal(isWinningCard(card, called, pattern), false);
@@ -1015,6 +1088,14 @@ test("conserva el número impreso y la forma leídos en la casilla central", () 
   assert.deepEqual(numberSheetMetadataFromOcrText("FORMA #9\n24146_6"), {
     form: "9",
     identifier: "24146-6",
+  });
+  assert.deepEqual(numberSheetMetadataFromOcrText("FORMA #4\nTABLA 0127728"), {
+    form: "4",
+    identifier: "0127728",
+  });
+  assert.deepEqual(numberSheetMetadataFromOcrText("FORMA #7"), {
+    form: "7",
+    identifier: null,
   });
   assert.deepEqual(numberSheetMetadataFromOcrText("Tab#23726-1"), {
     form: null,
@@ -1110,6 +1191,41 @@ test("separa dos cuadrículas escaneadas por sus líneas", () => {
 
   assert.equal(rectangles.length, 2);
   assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [50, 550]);
+});
+
+test("recupera seis figuras aunque solo conserven el borde exterior", () => {
+  const width = 1_000;
+  const height = 1_400;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const offset = (y * width + x) * 4;
+    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  for (const top of [250, 600, 950]) {
+    for (const [left, right] of [[40, 460], [540, 960]]) {
+      const bottom = top + 250;
+      for (let thickness = -1; thickness <= 1; thickness += 1) {
+        for (let y = top; y <= bottom; y += 1) {
+          drawPixel(left + thickness, y);
+          drawPixel(right + thickness, y);
+        }
+        for (let x = left; x <= right; x += 1) {
+          drawPixel(x, top + thickness);
+          drawPixel(x, bottom + thickness);
+        }
+      }
+      // Una figura abierta solo conserva algunos segmentos interiores.
+      for (let x = left; x <= left + 168; x += 1) drawPixel(x, top + 100);
+      for (let y = top; y <= top + 150; y += 1) drawPixel(left + 168, y);
+    }
+  }
+
+  const rectangles = detectSparseOuterGridRectangles(pixels, width, height);
+
+  assert.equal(rectangles.length, 6);
+  assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [40, 540, 40, 540, 40, 540]);
 });
 
 test("recupera una cuadrícula cuyo borde izquierdo fue recortado por la foto", () => {
@@ -1316,4 +1432,48 @@ test("reconstruye una tabla desde símbolos OCR ubicados por celda", () => {
   const grid = extractGridFromKnownOcrBlocks(blocks, 500, 500);
 
   assert.deepEqual(grid, baseGrid);
+});
+
+test("los formatos dispersos aceptan números 1-75 fuera de la columna B-I-N-G-O clásica", () => {
+  const values = new Map([
+    [0, 27],
+    [3, 5],
+    [6, 72],
+    [19, 14],
+  ]);
+  const words: OcrBlock["paragraphs"][number]["lines"][number]["words"] = [];
+  values.forEach((value, index) => {
+    const row = Math.floor(index / 5);
+    const column = index % 5;
+    const text = String(value);
+    const symbols = [...text].map((digit, digitIndex) => ({
+      text: digit,
+      confidence: 98,
+      bbox: {
+        x0: column * 100 + 32 + digitIndex * 18,
+        y0: row * 100 + 24,
+        x1: column * 100 + 47 + digitIndex * 18,
+        y1: row * 100 + 78,
+      },
+    }));
+    words.push({
+      text,
+      confidence: 98,
+      bbox: {
+        x0: symbols[0].bbox.x0,
+        y0: symbols[0].bbox.y0,
+        x1: symbols[symbols.length - 1].bbox.x1,
+        y1: symbols[0].bbox.y1,
+      },
+      symbols,
+    });
+  });
+  const blocks: OcrBlock[] = [{ paragraphs: [{ lines: [{ words }] }] }];
+  const grid = extractLooseSparseGridFromKnownOcrBlocks(blocks, 500, 500);
+
+  assert.equal(grid[0], 27);
+  assert.equal(grid[3], 5);
+  assert.equal(grid[6], 72);
+  assert.equal(grid[19], 14);
+  assert.equal(grid[12], 0);
 });

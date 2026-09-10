@@ -267,7 +267,7 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
   variants: [[0, 1, 2, 3, 4]],
 };
 
-export type NumberSheetForm = "1" | "3" | "5" | "9";
+export type NumberSheetForm = "1" | "3" | "4" | "5" | "7" | "9" | "+";
 
 const normalizeGameName = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
@@ -275,8 +275,11 @@ const normalizeGameName = (value: string) =>
 export const NUMBER_SHEET_FORM_CELLS: Record<NumberSheetForm, number[]> = {
   "1": [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
   "3": [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  "4": [0, 1, 2, 7, 10, 11, 13, 14, 17, 22],
   "5": [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  "7": [0, 4, 5, 9, 10, 11, 13, 14, 19, 24],
   "9": [0, 1, 2, 3, 4, 5, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  "+": [2, 7, 10, 11, 13, 14, 17, 22],
 };
 
 export const NUMBER_SHEET_PATTERNS: Record<NumberSheetForm, BingoPattern> =
@@ -285,9 +288,11 @@ export const NUMBER_SHEET_PATTERNS: Record<NumberSheetForm, BingoPattern> =
       ([form, cells]) => [
         form,
         {
-          id: `forma-${form}-completa`,
-          name: `Forma #${form} completa`,
-          description: `Todos los números impresos de la Forma #${form}.`,
+          id: form === "+" ? "forma-mas-completa" : `forma-${form}-completa`,
+          name: form === "+" ? "Signo + completo" : `Forma #${form} completa`,
+          description: form === "+"
+            ? "Todos los números impresos de la forma del signo +."
+            : `Todos los números impresos de la Forma #${form}.`,
           color: "#d7ff3f",
           category: "Hoja de números",
           difficulty: "Especial",

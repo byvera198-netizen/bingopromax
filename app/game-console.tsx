@@ -96,7 +96,7 @@ const CARD_TYPE_FILTERS: Array<{ id: CardTypeFilter; label: string }> = [
   { id: "all", label: "Todos" },
   { id: "sabrositos", label: "Sabrositos" },
   { id: "yapa", label: "Yapa" },
-  { id: "number-sheet", label: "Números 1 · 3 · 5 · 9" },
+  { id: "number-sheet", label: "Números 1 · 3 · 4 · 5 · 7 · 9 y +" },
 ];
 const NEON_ACCENTS = [
   { id: "lime", label: "Lima", color: "#d7ff3f" },
