@@ -319,6 +319,36 @@ export function numberSheetFormForGrid(grid: number[]): NumberSheetForm | null {
 }
 
 export function specialCardPatternForGrid(grid: number[], serial = "") {
+  const normalizedSerial = normalizeGameName(serial);
+  // La hoja adicional combina una forma de Línea con casillas vacías reales
+  // dentro de una matriz 5×5. No debe exigirse llenar las dieciséis casillas:
+  // gana cualquiera de sus cuatro líneas impresas de cinco números.
+  if (normalizedSerial.includes("linea") && grid.length === 25) {
+    const variants = [
+      [0, 1, 2, 3, 4],
+      [5, 6, 7, 8, 9],
+      [10, 11, 12, 13, 14],
+      [15, 16, 17, 18, 19],
+      [20, 21, 22, 23, 24],
+      [0, 5, 10, 15, 20],
+      [1, 6, 11, 16, 21],
+      [2, 7, 12, 17, 22],
+      [3, 8, 13, 18, 23],
+      [4, 9, 14, 19, 24],
+    ].filter((cells) => cells.every((index) => grid[index] > 0));
+    if (variants.length) {
+      return {
+        id: "linea-adicional",
+        name: "Línea",
+        description: "Cinco números en cualquiera de las líneas impresas del juego Línea.",
+        color: "#d7ff3f",
+        category: "Especial",
+        difficulty: "Especial",
+        cells: variants[0],
+        variants,
+      } satisfies BingoPattern;
+    }
+  }
   if (grid.length === 5) return COMPACT_CARD_PATTERN;
   if (grid.length >= 6 && grid.length < 25) {
     const cells = range(0, grid.length - 1);
@@ -339,7 +369,6 @@ export function specialCardPatternForGrid(grid: number[], serial = "") {
         ],
       },
     };
-    const normalizedSerial = normalizeGameName(serial);
     const serialPattern = normalizedSerial.includes("linea") && grid.length === 16
       ? metadata[16]
       : normalizedSerial.includes("loco") && grid.length === 10
@@ -379,7 +408,6 @@ export function specialCardPatternForGrid(grid: number[], serial = "") {
   const hasPrintedBlanks =
     occupiedCells.length >= 5 && occupiedCells.length < 24;
   if (!hasPrintedBlanks) return null;
-  const normalizedSerial = normalizeGameName(serial);
   const mask = occupiedCells.join("-");
   return {
     id: `forma-detectada-${mask}`,

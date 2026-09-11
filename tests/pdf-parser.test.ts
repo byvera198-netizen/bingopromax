@@ -245,6 +245,15 @@ test("no confunde una hoja clásica de cuatro cartones con juegos especiales", (
     specialPageLayoutFromOcrText("KEKE KEKE - FORMA #1 - FORMA #3", true, 4, 0.4),
     "number-sheet",
   );
+  assert.equal(
+    specialPageLayoutFromOcrText(
+      "HOJA DE ADICIONAL - 1 LINEA - 1 LOCO - ECHE LECHE - BOM BOM BUM - KEKE KEKE - YAPA",
+      true,
+      0,
+      0,
+    ),
+    "additional",
+  );
 });
 
 test("reconoce Línea y Loco en una hoja vertical y relee cifras B que pueden estar truncadas", () => {
@@ -460,7 +469,7 @@ test("muestra los cartones en el orden visual del PDF y no por avance", () => {
   );
 });
 
-test("ignora juegos retirados y conserva Yapa, Sabrosito y formas 1-3-5-9", () => {
+test("conserva los juegos especiales reconocidos al importar", () => {
   const makeCard = (id: string, serial: string, grid: number[]): BingoCard => ({
     id,
     number: `${id}-1`,
@@ -486,7 +495,7 @@ test("ignora juegos retirados y conserva Yapa, Sabrosito y formas 1-3-5-9", () =
   ];
   assert.deepEqual(
     filterEnabledImportGames(cards).map((card) => card.id),
-    ["normal", "yapa", "sabrosito", "forma"],
+    ["normal", "yapa", "sabrosito", "forma", "keke", "bom", "eche", "linea", "loco"],
   );
 });
 
@@ -1191,6 +1200,23 @@ test("separa dos cuadrículas escaneadas por sus líneas", () => {
 
   assert.equal(rectangles.length, 2);
   assert.deepEqual(rectangles.map((rectangle) => rectangle.x), [50, 550]);
+});
+
+test("Línea adicional conserva sus huecos y gana con una de sus líneas de cinco", () => {
+  const activePattern = BUILTIN_PATTERNS[0];
+  const linea: BingoCard = {
+    id: "linea-adicional-1",
+    number: "069195-1",
+    serial: "Línea",
+    grid: [0, 27, 0, 59, 0, 6, 22, 35, 47, 67, 0, 29, 0, 55, 0, 13, 30, 44, 50, 63, 0, 20, 0, 51, 0],
+    sourceFile: "adicional.pdf",
+    sourcePage: 13,
+    status: "active",
+  };
+
+  assert.equal(patternForCard(linea, activePattern).id, "linea-adicional");
+  assert.equal(isWinningCard(linea, new Set([6, 22, 35, 47]), activePattern), false);
+  assert.equal(isWinningCard(linea, new Set([6, 22, 35, 47, 67]), activePattern), true);
 });
 
 test("recupera seis figuras aunque solo conserven el borde exterior", () => {

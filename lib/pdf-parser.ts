@@ -4304,6 +4304,8 @@ interface SpecialPageCard {
   x: number;
   y: number;
   cells: RelativeNumberCell[];
+  /** Posiciones dentro de una matriz 5×5 cuando la figura conserva huecos. */
+  gridIndexes?: number[];
 }
 
 const cell = (
@@ -4349,6 +4351,81 @@ const gorditoSpecialCards: SpecialPageCard[] = [
   },
 ];
 
+// «Hoja de adicional» de Bingo de la Suerte. Sus seis juegos no tienen una
+// cuadrícula exterior convencional, por lo que se leen por las posiciones de
+// cada cifra, igual que Sabrositos. Las coordenadas se mantienen relativas a
+// la página para que funcionen en PDFs escaneados con otra resolución.
+const additionalSheetCards: SpecialPageCard[] = [
+  {
+    suffix: 1,
+    label: "Línea",
+    x: 0.25,
+    y: 0.30,
+    gridIndexes: [1, 3, 5, 6, 7, 8, 9, 11, 13, 15, 16, 17, 18, 19, 21, 23],
+    cells: [
+      cell(0.171, 0.222, [16, 30]), cell(0.337, 0.222, [46, 60]),
+      cell(0.087, 0.263, [1, 15]), cell(0.171, 0.263, [16, 30]), cell(0.254, 0.263, [31, 45]), cell(0.337, 0.263, [46, 60]), cell(0.421, 0.263, [61, 75]),
+      cell(0.171, 0.307, [16, 30]), cell(0.337, 0.307, [46, 60]),
+      cell(0.087, 0.349, [1, 15]), cell(0.171, 0.349, [16, 30]), cell(0.254, 0.349, [31, 45]), cell(0.337, 0.349, [46, 60]), cell(0.421, 0.349, [61, 75]),
+      cell(0.171, 0.390, [16, 30]), cell(0.337, 0.390, [46, 60]),
+    ],
+  },
+  {
+    suffix: 2,
+    label: "Loco",
+    x: 0.75,
+    y: 0.30,
+    cells: [
+      cell(0.753, 0.222, [31, 45]),
+      cell(0.586, 0.263, [1, 15]), cell(0.667, 0.263, [16, 30]), cell(0.753, 0.263, [31, 45]), cell(0.833, 0.263, [46, 60]), cell(0.915, 0.263, [61, 75]),
+      cell(0.753, 0.349, [31, 45]),
+      cell(0.667, 0.390, [16, 30]), cell(0.753, 0.390, [31, 45]), cell(0.834, 0.390, [46, 60]),
+    ],
+  },
+  {
+    suffix: 3,
+    label: "Eche Leche",
+    x: 0.25,
+    y: 0.60,
+    cells: [
+      cell(0.092, 0.551, [1, 75], 0.085, 0.07), cell(0.171, 0.551, [1, 75], 0.085, 0.07), cell(0.340, 0.551, [1, 75], 0.085, 0.07), cell(0.421, 0.551, [1, 75], 0.085, 0.07),
+      cell(0.129, 0.608, [1, 75], 0.085, 0.07), cell(0.254, 0.608, [1, 75], 0.085, 0.07), cell(0.378, 0.608, [1, 75], 0.085, 0.07),
+    ],
+  },
+  {
+    suffix: 4,
+    label: "Bom Bom Bum",
+    x: 0.75,
+    y: 0.60,
+    cells: [
+      cell(0.585, 0.551), cell(0.667, 0.551), cell(0.831, 0.551), cell(0.916, 0.551),
+      cell(0.585, 0.608), cell(0.667, 0.608), cell(0.831, 0.608), cell(0.916, 0.608),
+    ],
+  },
+  {
+    suffix: 5,
+    label: "Keke Keke",
+    x: 0.25,
+    y: 0.87,
+    cells: [
+      cell(0.087, 0.776, [1, 75], 0.10, 0.07, true), cell(0.421, 0.776, [1, 75], 0.10, 0.07, true),
+      cell(0.171, 0.851, [1, 75], 0.10, 0.07, true), cell(0.338, 0.851, [1, 75], 0.10, 0.07, true),
+      cell(0.087, 0.922, [1, 75], 0.10, 0.07, true), cell(0.421, 0.922, [1, 75], 0.10, 0.07, true),
+    ],
+  },
+  {
+    suffix: 6,
+    label: "Yapa",
+    x: 0.75,
+    y: 0.87,
+    cells: [
+      cell(0.585, 0.776, [1, 30], 0.10, 0.07, true), cell(0.753, 0.776, [16, 60], 0.10, 0.07, true), cell(0.915, 0.776, [46, 75], 0.10, 0.07, true),
+      cell(0.585, 0.851, [1, 30], 0.10, 0.07, true), cell(0.753, 0.851, [16, 60], 0.10, 0.07, true), cell(0.915, 0.851, [46, 75], 0.10, 0.07, true),
+      cell(0.585, 0.922, [1, 30], 0.10, 0.07, true), cell(0.753, 0.922, [16, 60], 0.10, 0.07, true), cell(0.915, 0.922, [46, 75], 0.10, 0.07, true),
+    ],
+  },
+];
+
 function cardNumberSuffix(card: BingoCard) {
   const suffix = Number(card.number.match(/-(\d+)$/)?.[1]);
   return Number.isInteger(suffix) ? suffix : null;
@@ -4368,7 +4445,17 @@ export function specialPageLayoutFromOcrText(
   const gorditoLabelCount = ["YAPA", "ECHE", "BOM"].filter((label) =>
     labelText.includes(label),
   ).length;
+  const additionalLabelCount = ["LINEA", "LOCO", "ECHE", "BOM", "KEKE", "YAPA"].filter(
+    (label) => labelText.includes(label),
+  ).length;
   const formaLabelCount = labelText.match(/FORMA/g)?.length ?? 0;
+  if (
+    isPortrait &&
+    labelText.includes("HOJA DE ADICIONAL") &&
+    additionalLabelCount >= 4
+  ) {
+    return "additional" as const;
+  }
   // Algunas emisiones incluyen únicamente la Yapa junto a los cuatro cartones
   // clásicos. Basta la etiqueta YAPA y la geometría de la hoja; los otros
   // juegos especiales se validan por sus propias cifras antes de agregarse.
@@ -4574,22 +4661,9 @@ export function sortCardsByPdfOrder(cards: BingoCard[]) {
 }
 
 export function filterEnabledImportGames(cards: BingoCard[]) {
-  return cards.filter((card) => {
-    const serial = (card.serial ?? "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase();
-    const isRemovedSpecialGame =
-      serial.includes("keke") ||
-      serial.includes("bom bom bum") ||
-      serial.includes("eche leche") ||
-      serial.includes("loco") ||
-      /^l.*nea\b/.test(serial);
-    if (isRemovedSpecialGame) {
-      return false;
-    }
-    return true;
-  });
+  // Cada figura reconocida pertenece a la partida cargada. No se descartan
+  // juegos por su nombre: la página adicional los entrega ya validados.
+  return cards;
 }
 
 interface RelativeSymbolReading {
@@ -4681,11 +4755,30 @@ async function recognizeRelativeCell(
   position: RelativeNumberCell,
   worker: OcrWorker,
 ) {
-  const left = Math.max(0, (position.x - position.width / 2) * source.width);
-  const top = Math.max(0, (position.y - position.height / 2) * source.height);
-  const width = Math.min(source.width - left, position.width * source.width);
-  const height = Math.min(source.height - top, position.height * source.height);
+  // En hojas escaneadas con marca de agua la tinta diagonal suele entrar por
+  // los bordes de una casilla. Para los formatos especiales se empieza por
+  // el centro, donde está el número impreso, antes de ampliar la lectura.
+  const edgeInset = position.preferSymbols ? 0.10 : 0;
+  const left = Math.max(
+    0,
+    (position.x - position.width / 2 + position.width * edgeInset) * source.width,
+  );
+  const top = Math.max(
+    0,
+    (position.y - position.height / 2 + position.height * edgeInset) * source.height,
+  );
+  const width = Math.min(
+    source.width - left,
+    position.width * (1 - edgeInset * 2) * source.width,
+  );
+  const height = Math.min(
+    source.height - top,
+    position.height * (1 - edgeInset * 2) * source.height,
+  );
   const range = position.range ?? [1, 75];
+  const thresholds = position.preferSymbols
+    ? [135, 165, 100, 195, 225]
+    : [165, 100, 135, 195, 225];
   for (const maxChroma of position.preferSymbols ? [256, 58] : [58]) {
     for (const pageSegMode of ["8", "7"]) {
       await worker.setParameters({
@@ -4693,7 +4786,7 @@ async function recognizeRelativeCell(
         tessedit_pageseg_mode: pageSegMode,
         preserve_interword_spaces: "1",
       });
-      for (const threshold of [165, 100, 135, 195, 225]) {
+      for (const threshold of thresholds) {
         const target = makeCanvas(400, 300);
         if (!target) continue;
         target.context.drawImage(source, left, top, width, height, 0, 0, 400, 300);
@@ -4714,7 +4807,7 @@ async function recognizeRelativeCell(
       tessedit_pageseg_mode: pageSegMode,
       preserve_interword_spaces: "1",
     });
-    for (const threshold of [165, 100, 135, 195, 225]) {
+    for (const threshold of thresholds) {
       const target = makeCanvas(420, 280);
       if (!target) continue;
       target.context.drawImage(
@@ -4792,7 +4885,11 @@ async function recognizeSpecialLayoutCrop(
     tessedit_pageseg_mode: "11",
     preserve_interword_spaces: "1",
   });
-  for (const threshold of [165, 135]) {
+  const thresholds = (layout.cells.some((position) => position.preferSymbols) ||
+    ["Línea", "Loco", "Eche Leche", "Bom Bom Bum"].includes(layout.label))
+    ? [135, 165, 100]
+    : [165, 135];
+  for (const threshold of thresholds) {
     const target = makeCanvas(targetWidth, targetHeight);
     if (!target) continue;
     target.context.drawImage(
@@ -5173,9 +5270,11 @@ async function recognizeSpecialPageCards(
   // La geometría de una hoja común también puede contener nueve cifras
   // promocionales en la zona superior. Solo se crea una Yapa cuando el OCR
   // encontró su etiqueta, evitando fabricar un juego a partir del membrete.
-  const layouts = specialLayout === "gordito"
-    ? yapaLayouts
-    : [];
+  const layouts = specialLayout === "additional"
+    ? additionalSheetCards
+    : specialLayout === "gordito"
+      ? yapaLayouts
+      : [];
   if (!layouts.length && specialLayout !== "number-sheet") {
     await worker.setParameters({
       tessedit_char_whitelist: "0123456789",
@@ -5204,27 +5303,32 @@ async function recognizeSpecialPageCards(
     : [];
   const cards: BingoCard[] = [];
   for (const layout of layouts) {
-    const directValues = await recognizeSpecialLayoutCrop(
-      source,
-      layout,
-      worker,
-    ) ?? (layout.label === "Yapa"
+    const directValues = (specialLayout === "additional"
+      ? null
+      : await recognizeSpecialLayoutCrop(
+        source,
+        layout,
+        worker,
+      )) ?? (layout.label === "Yapa" && specialLayout !== "additional"
       ? await recognizeYapaGridCrop(source, worker)
       : null);
     let values: number[] = directValues ? [...directValues] : [];
     const candidates: number[][] = [];
     const positions = directValues ? [] : layout.cells;
     for (const position of positions) {
+      const ocrPosition = specialLayout === "additional"
+        ? { ...position, preferSymbols: true }
+        : position;
       const symbolReading = readingFromRelativeSymbols(
         symbols,
         source.width,
         source.height,
-        position,
+        ocrPosition,
       );
       const symbolValue = symbolReading?.value ?? null;
       const croppedValue = isReliableTwoDigitSymbol(symbolReading)
         ? symbolReading.value
-        : await recognizeRelativeCell(source, position, worker);
+        : await recognizeRelativeCell(source, ocrPosition, worker);
       const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
       candidates.push(
@@ -5241,13 +5345,19 @@ async function recognizeSpecialPageCards(
     ) {
       continue;
     }
+    const grid = layout.gridIndexes
+      ? Array.from({ length: 25 }, (_, index) => {
+        const valueIndex = layout.gridIndexes!.indexOf(index);
+        return valueIndex === -1 ? 0 : values[valueIndex];
+      })
+      : values;
     cards.push({
       id: crypto.randomUUID(),
       number: family
         ? `${family}-${layout.suffix}`
         : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${layout.suffix}`,
       serial: layout.label,
-      grid: values,
+      grid,
       sourceFile: fileName,
       sourcePage: pageNumber,
       status: "active",
