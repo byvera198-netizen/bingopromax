@@ -3,6 +3,7 @@
 import {
   NUMBER_SHEET_FORM_CELLS,
   numberSheetFormForGrid,
+  validateCardGrid,
   type BingoCard,
   type NumberSheetForm,
 } from "./bingo";
@@ -3270,10 +3271,16 @@ async function recognizeDetectedGrids(
   pageNumber: number,
 ) {
   const detected: DetectedGrid[] = [];
+  const highConfidenceRectangles = rectangles.filter((item) => item.score >= 80);
   const isFourCardPortraitSheet =
     source.height > source.width &&
-    rectangles.length === 4 &&
-    rectangles.every((item) => item.score >= 65);
+    (
+      (rectangles.length === 4 && rectangles.every((item) => item.score >= 65)) ||
+      // Un borde o una línea publicitaria puede parecer una quinta cuadrícula.
+      // Si hay exactamente cuatro cartones con geometría fiable, se conserva
+      // ese conjunto y se ignora el falso positivo del membrete.
+      (rectangles.length <= 6 && highConfidenceRectangles.length === 4)
+    );
   const isTwoCardLandscapeSheet =
     source.width > source.height &&
     rectangles.length === 2 &&
@@ -3284,8 +3291,10 @@ async function recognizeDetectedGrids(
     rectangles.every((item) =>
       item.height >= source.height * 0.14 && item.height <= source.height * 0.25
     );
-  const eligibleRectangles = isFourCardPortraitSheet || isTwoCardLandscapeSheet
-    ? rectangles
+  const eligibleRectangles = isFourCardPortraitSheet
+    ? rectangles.length === 4 ? rectangles : highConfidenceRectangles
+    : isTwoCardLandscapeSheet
+      ? rectangles
     : rectangles.filter((item) => item.score >= 80);
   const firstRectangleTop = Math.min(
     ...eligibleRectangles.map((item) => item.y / source.height),
@@ -3821,29 +3830,24 @@ async function recognizeDetectedGrids(
   const detectedPortraitFamily = identifierFamilyConsensus(
     identifierParts.map((item) => item.family),
   );
-  const printedFamilyMatchesDetected =
-    printedPortraitFamily &&
-    detectedPortraitFamily &&
-    (
-      (printedPortraitFamily.length === detectedPortraitFamily.length &&
-        editDistance(printedPortraitFamily, detectedPortraitFamily) <= 2) ||
-      (printedPortraitFamily.length === detectedPortraitFamily.length + 1 &&
-        printedPortraitFamily.startsWith(detectedPortraitFamily))
-    );
   const portraitFamily =
     source.height > source.width && [4, 6].includes(eligibleRectangles.length)
-      ? printedPortraitFamily && (!detectedPortraitFamily || printedFamilyMatchesDetected)
-        ? printedPortraitFamily
-        : detectedPortraitFamily
+      // La franja superior se lee separada de las cuadrículas y es la fuente
+      // más estable cuando el OCR mezcla la marca de agua con Tab-1…Tab-4.
+      // Conservamos la comparación como respaldo para las páginas antiguas,
+      // pero nunca sustituimos una lectura válida del encabezado por cifras
+      // deterioradas de los cartones vecinos.
+      ? printedPortraitFamily ?? detectedPortraitFamily
       : null;
   if (portraitFamily) {
-    detected.forEach((item) => {
-      const match = item.identifier?.match(/^(\d{5,12})-(\d{1,3})$/);
-      if (match) item.identifier = `${portraitFamily}-${match[2]}`;
+    detected.forEach((item, index) => {
+      // La familia del membrete aplica a toda la hoja. Asignar el sufijo por
+      // posición evita que una etiqueta parcial (por ejemplo 01983212) se
+      // propague a los demás cartones cuando el agua de fondo tapa el Tab-N.
+      item.identifier = `${portraitFamily}-${index + 1}`;
     });
-    identifiers.forEach((item) => {
-      const match = item.value.match(/^(\d{5,12})-(\d{1,3})$/);
-      if (match) item.value = `${portraitFamily}-${match[2]}`;
+    identifiers.forEach((item, index) => {
+      item.value = `${portraitFamily}-${index + 1}`;
     });
   } else if (canonicalFamily && canonicalFamily[1] >= 2) {
     detected.forEach((item) => {
@@ -6085,6 +6089,33 @@ export function reconcileFourCardPositionIdentifiers(cards: BingoCard[]) {
     const key = `${card.sourceFile}\u0000${card.sourcePage}`;
     pageGroups.set(key, [...(pageGroups.get(key) ?? []), card]);
   }
+  // Un recuadro del membrete puede llegar como una cuadrícula vacía. Cuando
+  // ya existen exactamente cuatro cartones 5×5 completos en la misma hoja,
+  // ese marcador no representa un quinto cartón y no debe bloquear la
+  // secuencia ni el guardado de la importación.
+  const discardedPlaceholderIds = new Set<string>();
+  for (const pageCards of pageGroups.values()) {
+    const completeCards = pageCards.filter((card) =>
+      card.grid.length === 25 &&
+      card.grid.some((value) => value > 0) &&
+      !needsImportReview(card) &&
+      validateCardGrid(card.grid).length === 0,
+    );
+    if (completeCards.length !== 4) continue;
+    pageCards
+      .filter((card) =>
+        card.number.startsWith("SIN-ID-") &&
+        card.grid.length === 25 &&
+        card.grid.every((value) => value < 0) &&
+        card.serial === "Pendiente de revisión",
+      )
+      .forEach((card) => discardedPlaceholderIds.add(card.id));
+  }
+  if (discardedPlaceholderIds.size) {
+    for (const [key, pageCards] of pageGroups) {
+      pageGroups.set(key, pageCards.filter((card) => !discardedPlaceholderIds.has(card.id)));
+    }
+  }
   for (const [key, pageCards] of pageGroups) {
     if (pageCards.length !== 4) continue;
     const split = key.lastIndexOf("\u0000");
@@ -6203,7 +6234,9 @@ export function reconcileFourCardPositionIdentifiers(cards: BingoCard[]) {
       });
     }
   }
-  return resolved.map((card) => replacements.get(card.id) ?? card);
+  return resolved
+    .filter((card) => !discardedPlaceholderIds.has(card.id))
+    .map((card) => replacements.get(card.id) ?? card);
 }
 
 export async function parseBingoPdf(

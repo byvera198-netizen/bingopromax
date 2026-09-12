@@ -586,6 +586,34 @@ test("conserva una familia compartida y fuerza sufijos posicionales 1 a 4", () =
   );
 });
 
+test("descarta un falso recuadro pendiente si ya reconoció los cuatro cartones de la hoja", () => {
+  const cards: BingoCard[] = [
+    ...[1, 2, 3, 4].map((suffix) => ({
+      id: `real-${suffix}`,
+      number: `0198320-${suffix}`,
+      serial: "",
+      grid: [...baseGrid],
+      sourceFile: "RSur.pdf",
+      sourcePage: 3,
+      status: "active" as const,
+    })),
+    {
+      id: "membrete",
+      number: "SIN-ID-003-REV-1",
+      serial: "Pendiente de revisión",
+      grid: Array(25).fill(-1),
+      sourceFile: "RSur.pdf",
+      sourcePage: 3,
+      status: "active" as const,
+    },
+  ];
+
+  assert.deepEqual(
+    reconcileFourCardPositionIdentifiers(cards).map((card) => card.number),
+    ["0198320-1", "0198320-2", "0198320-3", "0198320-4"],
+  );
+});
+
 test("reconstruye una página de cuatro consecutivos aunque una etiqueta pierda o gane un dígito", () => {
   const cards = ["0111625", "00111626", "01243486163", "SIN-ID-015-4"].map((number, index): BingoCard => ({
     id: `posicion-${index}`,
