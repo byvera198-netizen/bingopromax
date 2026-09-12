@@ -34,6 +34,7 @@ import {
   identifierFamilyFromOcrText,
   importProviderStrategy,
   identifiersForDetectedGrids,
+  isTenSabrositoSheetLayout,
   isSupportedBingoImportFile,
   needsImportReview,
   validateBingoImportFileContent,
@@ -1450,6 +1451,21 @@ test("detecta los ocho cartones compactos de una hoja escaneada", () => {
   const rectangles = detectCompactRectangles(pixels, width, height);
 
   assert.equal(rectangles.length, 8);
+});
+
+test("identifica la hoja de diez Sabrositos por su distribución 2×5", () => {
+  const rectangles = Array.from({ length: 5 }, (_, row) =>
+    Array.from({ length: 2 }, (_, column) => ({
+      x: 60 + column * 650,
+      y: 280 + row * 250,
+      width: 540,
+      height: 225,
+      score: 98,
+    })),
+  ).flat();
+
+  assert.equal(isTenSabrositoSheetLayout(rectangles), true);
+  assert.equal(isTenSabrositoSheetLayout(rectangles.slice(0, 8)), false);
 });
 
 test("reconstruye una tabla desde símbolos OCR ubicados por celda", () => {

@@ -294,6 +294,26 @@ export interface CompactRectangle {
   score: number;
 }
 
+/**
+ * Reconoce la hoja de diez Sabrositos: dos columnas por cinco filas. La
+ * geometría por sí sola no basta para clasificarla; más abajo también se
+ * exige la etiqueta SABROSITO leída por OCR antes de crear los cartones.
+ */
+export function isTenSabrositoSheetLayout(rectangles: CompactRectangle[]) {
+  if (rectangles.length !== 10) return false;
+  const ordered = [...rectangles].sort((a, b) => a.y - b.y || a.x - b.x);
+  const rows = Array.from({ length: 5 }, (_, index) => ordered.slice(index * 2, index * 2 + 2));
+  if (rows.some((row) => row.length !== 2)) return false;
+  const rowHeights = rows.flatMap((row) => row.map((rectangle) => rectangle.height));
+  const rowWidths = rows.flatMap((row) => row.map((rectangle) => rectangle.width));
+  return rows.every((row) =>
+    row[0].x < row[1].x &&
+    Math.abs(row[0].y - row[1].y) <= Math.max(row[0].height, row[1].height) * 0.12,
+  ) &&
+    coefficientOfVariation(rowHeights) <= 0.12 &&
+    coefficientOfVariation(rowWidths) <= 0.12;
+}
+
 function longestDarkRun(
   length: number,
   isDark: (index: number) => boolean,
@@ -3913,6 +3933,121 @@ const compactCellPositions = [
   },
 ];
 
+// Esta variante de Sabrosito no usa cinco columnas B-I-N-G-O: imprime tres
+// números arriba y dos abajo, reservando el centro inferior para la serie.
+// Sus cifras están ligeramente más abajo que las de los Sabrositos antiguos.
+const tenSabrositoCellPositions = [
+  { x: 0.11, y: 0.28, width: 0.28, height: 0.38, crop: { x: 0, y: 0.1, width: 0.25, height: 0.34 } },
+  { x: 0.50, y: 0.28, width: 0.30, height: 0.38, crop: { x: 0.35, y: 0.1, width: 0.3, height: 0.34 } },
+  { x: 0.84, y: 0.28, width: 0.28, height: 0.38, crop: { x: 0.75, y: 0.1, width: 0.25, height: 0.34 } },
+  { x: 0.11, y: 0.75, width: 0.28, height: 0.36, crop: { x: 0, y: 0.59, width: 0.25, height: 0.36 } },
+  { x: 0.84, y: 0.75, width: 0.28, height: 0.36, crop: { x: 0.75, y: 0.59, width: 0.25, height: 0.36 } },
+] as const;
+
+function sabrositoSheetFamilyFromOcrText(text: string) {
+  const candidates = [...text
+    .replace(/[Oo]/g, "0")
+    .replace(/[Il|]/g, "1")
+    .matchAll(/#\s*(\d{5,10})(?!\d)/g)]
+    .map((match) => match[1]);
+  if (!candidates.length) return null;
+  return [...new Set(candidates)].sort(
+    (left, right) =>
+      candidates.filter((candidate) => candidate === right).length -
+        candidates.filter((candidate) => candidate === left).length ||
+      right.length - left.length,
+  )[0] ?? null;
+}
+
+function sabrositoSheetValueFromWords(
+  words: OcrWord[],
+  rectangle: CompactRectangle,
+  position: typeof tenSabrositoCellPositions[number],
+) {
+  const expectedX = rectangle.x + rectangle.width * position.x;
+  const expectedY = rectangle.y + rectangle.height * position.y;
+  return words.flatMap((word) => {
+    if (!/^\d{1,2}$/.test(word.text)) return [];
+    const value = Number(word.text);
+    const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
+    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    const wordHeight = word.bbox.y1 - word.bbox.y0;
+    if (
+      value < 1 || value > 75 ||
+      wordHeight < rectangle.height * 0.13 ||
+      wordHeight > rectangle.height * 0.48 ||
+      Math.abs(centerX - expectedX) > rectangle.width * position.width / 2 ||
+      Math.abs(centerY - expectedY) > rectangle.height * position.height / 2
+    ) {
+      return [];
+    }
+    const distance =
+      Math.abs(centerX - expectedX) / rectangle.width +
+      Math.abs(centerY - expectedY) / rectangle.height;
+    return [{ value, score: word.confidence - distance * 45 }];
+  }).sort((left, right) => right.score - left.score)[0]?.value ?? null;
+}
+
+async function recognizeTenSabrositoSheetCards(
+  source: HTMLCanvasElement,
+  rectangles: CompactRectangle[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+) {
+  if (!isTenSabrositoSheetLayout(rectangles)) return [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789#ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  const result = await worker.recognize(source, {}, { blocks: true, text: true });
+  const text = result.data.text ?? "";
+  if (!/S[A4]BROSIT[O0]/i.test(text)) return [];
+  const family = sabrositoSheetFamilyFromOcrText(text);
+  const words = result.data.blocks?.length ? ocrWords(result.data.blocks) : [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  const cards: BingoCard[] = [];
+  for (const [index, rectangle] of rectangles.entries()) {
+    const values: Array<number | null> = [];
+    for (const position of tenSabrositoCellPositions) {
+      const fromPage = sabrositoSheetValueFromWords(words, rectangle, position);
+      values.push(
+        fromPage ?? await recognizeCompactCell(
+          source,
+          rectangle,
+          position.crop,
+          [1, 75],
+          worker,
+          new Set<string>(),
+        ),
+      );
+    }
+    if (
+      values.some((value) => value === null) ||
+      new Set(values).size !== values.length
+    ) {
+      return [];
+    }
+    cards.push({
+      id: crypto.randomUUID(),
+      number: family
+        ? `${family}-${index + 1}`
+        : `SIN-ID-${String(pageNumber).padStart(3, "0")}-${index + 1}`,
+      serial: "Sabrosito",
+      grid: values as number[],
+      sourceFile: fileName,
+      sourcePage: pageNumber,
+      status: "active",
+    });
+  }
+  return cards;
+}
+
 function compactValueFromText(
   text: string,
   range: readonly [number, number],
@@ -4189,6 +4324,14 @@ async function recognizeCompactCards(
   pageNumber: number,
 ) {
   if (rectangles.length < 2) return [];
+  const tenSabrositos = await recognizeTenSabrositoSheetCards(
+    source,
+    rectangles,
+    worker,
+    fileName,
+    pageNumber,
+  );
+  if (tenSabrositos.length) return tenSabrositos;
   const identifiers = await recognizeCompactIdentifiers(source, rectangles, worker);
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -5397,6 +5540,10 @@ export async function runOcrCanvas(
   if (sparseOuterRectangles.length > rectangles.length) {
     rectangles = sparseOuterRectangles;
   }
+  const compactPageRectangles = rectangles.length
+    ? []
+    : detectCompactRectangles(pixels.data, canvas.width, canvas.height);
+  const tenSabrositoSheet = isTenSabrositoSheetLayout(compactPageRectangles);
   let detectedCards: BingoCard[] = [];
   if (rectangles.length) {
     detectedCards = await recognizeDetectedGrids(
@@ -5416,6 +5563,7 @@ export async function runOcrCanvas(
       ),
     ];
   } else if (
+    !tenSabrositoSheet &&
     canvas.height > canvas.width &&
     canvas.height / canvas.width >= 1.25 &&
     canvas.height / canvas.width <= 1.55
@@ -5476,6 +5624,21 @@ export async function runOcrCanvas(
     ) {
       rectangles = normalizedRectangles;
       detectedCards = candidateCards;
+    }
+  }
+  // Estas hojas no tienen líneas internas, por lo que no deben esperar al
+  // detector genérico de juegos especiales. Procesarlas primero evita OCR
+  // repetido y conserva los diez Sabrositos en su orden visual.
+  if (!detectedCards.length && !rectangles.some((rectangle) => rectangle.score >= 80)) {
+    if (tenSabrositoSheet) {
+      const sabrositoCards = await recognizeTenSabrositoSheetCards(
+        canvas,
+        compactPageRectangles,
+        worker,
+        fileName,
+        pageNumber,
+      );
+      if (sabrositoCards.length) return sabrositoCards;
     }
   }
   const specialCards = await recognizeSpecialPageCards(
