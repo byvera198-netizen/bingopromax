@@ -2,7 +2,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
   appId: "com.bingocontrolpro.ecuador",
-  appName: "Bingo ProMax",
+  appName: "Bingo Control Promax",
   webDir: "mobile-web",
   server: {
     androidScheme: "https",
