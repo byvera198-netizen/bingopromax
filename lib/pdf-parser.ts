@@ -4977,6 +4977,69 @@ async function recognizeRelativeCell(
   return null;
 }
 
+async function recognizeWatermarkedKekeCell(
+  source: HTMLCanvasElement,
+  position: RelativeNumberCell,
+  worker: OcrWorker,
+) {
+  // Los seis círculos de Keke Keke tienen el número centrado, pero una marca
+  // de agua gris suele pasar por el borde. Los umbrales bajos eliminan esa
+  // tinta antes de leer la cifra, sin afectar a las demás figuras de la hoja.
+  // El círculo inferior izquierdo queda parcialmente cubierto por la marca
+  // diagonal en algunas hojas. Mantener su contorno completo y ampliar la
+  // imagen impide que el 2 se confunda con un 5; los otros cinco círculos
+  // conservan el recorte interior habitual.
+  const isLowerLeftCircle = position.x < 0.1 && position.y > 0.9;
+  const edgeInset = isLowerLeftCircle ? 0 : 0.10;
+  const left = Math.max(
+    0,
+    (position.x - position.width / 2 + position.width * edgeInset) * source.width,
+  );
+  const top = Math.max(
+    0,
+    (position.y - position.height / 2 + position.height * edgeInset) * source.height,
+  );
+  const width = Math.min(
+    source.width - left,
+    position.width * (1 - edgeInset * 2) * source.width,
+  );
+  const height = Math.min(
+    source.height - top,
+    position.height * (1 - edgeInset * 2) * source.height,
+  );
+  const range = position.range ?? [1, 75];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  for (const maxChroma of [256, 58]) {
+    for (const threshold of [85, 70, 50, 100, 115, 135, 165, 195, 225]) {
+      const target = makeCanvas(
+        isLowerLeftCircle ? 500 : 400,
+        isLowerLeftCircle ? 400 : 300,
+      );
+      if (!target) continue;
+      target.context.drawImage(
+        source,
+        left,
+        top,
+        width,
+        height,
+        0,
+        0,
+        target.canvas.width,
+        target.canvas.height,
+      );
+      binarizeNumbers(target.canvas, target.context, threshold, maxChroma);
+      const result = await worker.recognize(target.canvas, {}, { text: true });
+      const value = valueFromCellText(result.data.text ?? "", range);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
 function validSpecialLayoutValues(
   layout: SpecialPageCard,
   values: number[],
@@ -5473,9 +5536,18 @@ async function recognizeSpecialPageCards(
         ocrPosition,
       );
       const symbolValue = symbolReading?.value ?? null;
-      const croppedValue = isReliableTwoDigitSymbol(symbolReading)
-        ? symbolReading.value
-        : await recognizeRelativeCell(source, ocrPosition, worker);
+      // Keke Keke está impreso en círculos anchos. En estas hojas la marca de
+      // agua cruza el área entre círculos y el OCR de página puede convertir
+      // un 54 en 64 o un 29 en 50 con confianza alta. Para este formato se
+      // prioriza siempre la lectura aislada de la casilla; el símbolo global
+      // queda solo como respaldo si no hubo lectura local.
+      const croppedValue =
+        specialLayout === "additional" && layout.label === "Keke Keke"
+          ? (await recognizeWatermarkedKekeCell(source, ocrPosition, worker)) ??
+            (await recognizeRelativeCell(source, ocrPosition, worker))
+          : isReliableTwoDigitSymbol(symbolReading)
+            ? symbolReading.value
+            : await recognizeRelativeCell(source, ocrPosition, worker);
       const value = croppedValue ?? symbolValue;
       values.push(value ?? -1);
       candidates.push(
