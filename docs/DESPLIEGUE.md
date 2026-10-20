@@ -43,6 +43,20 @@ producción debe llamarse exactamente `DB`. La API crea índices y columnas de
 compatibilidad en la primera solicitud; revisa los cambios antes de usar una
 instalación existente.
 
+Para generar el artefacto Wrangler con la base de producción de esta cuenta,
+define el nombre y el UUID antes del build. El UUID no es una contraseña, pero
+debe apuntar al D1 correcto:
+
+```powershell
+$env:CLOUDFLARE_D1_DATABASE_NAME = "bingo-control-pro-db"
+$env:CLOUDFLARE_D1_DATABASE_ID = "cd2052c1-5a5c-4542-aeeb-3d0c319f9f61"
+npm run build
+npx wrangler deploy --dry-run --config dist/server/wrangler.json
+```
+
+El `dry-run` debe mostrar `env.DB` asociado a `bingo-control-pro-db`. Nunca se
+debe desplegar usando `site-creator-d1` o el UUID de ceros.
+
 ## Acceso y roles
 
 - `byvera198@gmail.com` es el administrador inicial de ProMax.
