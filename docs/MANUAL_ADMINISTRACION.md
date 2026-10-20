@@ -2,9 +2,10 @@
 
 ## Datos y recuperación
 
-La información estructurada se guarda en D1. Los PDF originales se conservan en
-R2. La interfaz restaura la partida, cartones, bolillas, patrón y ganadores al
-volver a abrirse.
+La información estructurada se guarda en D1. Los PDF se procesan en el
+navegador y no se conservan después de extraer y confirmar los cartones. La
+interfaz restaura la partida, cartones, bolillas, patrón y ganadores al volver
+a abrirse.
 
 ## Roles operativos
 
@@ -15,8 +16,8 @@ un grupo concreto, configura la política privada del sitio publicado.
 
 ## Copias de seguridad
 
-La capa de alojamiento gestiona la durabilidad de D1 y R2. Para respaldo
-externo, exporta periódicamente el reporte Excel/CSV y conserva los PDF fuente.
+La capa de alojamiento gestiona la durabilidad de D1. Para respaldo externo,
+exporta periódicamente los reportes Excel/CSV y los datos operativos necesarios.
 Las migraciones versionadas están en `drizzle/`.
 
 ## Mantenimiento
@@ -30,7 +31,7 @@ Las migraciones versionadas están en `drizzle/`.
 
 - sentencias preparadas contra inyección SQL;
 - React escapa contenido de usuario contra XSS;
-- validación de tipo, checksum y metadatos de PDF;
-- índices y restricciones únicas para cartones, bolillas, archivos y ganadores;
+- validación de tipo, checksum y metadatos de PDF antes del procesamiento;
+- índices y restricciones únicas para cartones, bolillas y ganadores;
 - registro de auditoría para cambios relevantes;
 - límites funcionales de 1–90 en el bolillero.

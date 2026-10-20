@@ -7,13 +7,14 @@ endpoints se ejecutan en el mismo despliegue:
 
 - `GET /api/state`: crea/restaura la partida más reciente y entrega su estado.
 - `POST /api/state`: comandos de cartones, bolillas, patrones y ganadores.
-- `POST /api/files`: almacena un PDF validado y deduplicado.
+- `POST /api/files`: endpoint de compatibilidad; no almacena archivos fuente.
 
 ## Persistencia
 
-D1 contiene `games`, `cards`, `draws`, `patterns`, `winners`, `files` y
-`audit_logs`. R2 guarda los bytes originales de los PDF. El checksum SHA-256
-relaciona cada archivo con sus metadatos.
+D1 contiene `games`, `cards`, `draws`, `patterns`, `winners`, `memberships` y
+`audit_logs`. Los bytes originales de los PDF no se guardan: el navegador
+calcula el checksum y conserva únicamente los cartones confirmados y sus
+metadatos de origen.
 
 ## Importación PDF
 

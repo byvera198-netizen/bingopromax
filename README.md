@@ -16,7 +16,7 @@ detectar uno o varios ganadores de forma automática.
 - Historial de bolillas, cartones anulables, ganadores y auditoría.
 - Exportación de reportes a PDF, Excel y CSV.
 - Tema claro/oscuro, sonidos, diseño adaptable y recuperación automática.
-- Persistencia estructurada en D1 y almacenamiento de los PDF originales en R2.
+- Persistencia estructurada en D1; los PDF se procesan en el navegador y no se conservan.
 
 ## Inicio local
 
@@ -47,7 +47,7 @@ npm run db:generate
 
 - `app/page.tsx`: interfaz y flujos de operación.
 - `app/api/state/route.ts`: API de partidas, cartones, bolillas y ganadores.
-- `app/api/files/route.ts`: almacenamiento y deduplicación de PDF.
+- `app/api/files/route.ts`: respuesta de compatibilidad; los archivos fuente no se almacenan.
 - `lib/bingo.ts`: patrones y motor de validación.
 - `lib/pdf-parser.ts`: extracción PDF, reconocimiento OCR y armado de cartones.
 - `db/schema.ts`: modelo de datos.
@@ -56,11 +56,11 @@ npm run db:generate
 
 ## Seguridad y datos
 
-Todas las consultas usan sentencias preparadas. El almacenamiento de archivos
-acepta únicamente PDF y comprueba su huella SHA-256 para evitar duplicados. Las
-acciones quedan asociadas al usuario autenticado del espacio de trabajo cuando
-la plataforma envía su identidad; en desarrollo se registran como
-`Operador local`.
+Todas las consultas usan sentencias preparadas. Los PDF se validan, analizan y
+se descartan después de guardar únicamente los cartones confirmados; no se
+suben documentos fuente a un almacenamiento permanente. Las acciones quedan
+asociadas al usuario autenticado del espacio de trabajo cuando la plataforma
+envía su identidad; en desarrollo se registran como `Operador local`.
 
 El OCR es una ayuda de reconocimiento: antes de iniciar una partida conviene
 revisar visualmente los cartones importados, especialmente cuando el escaneo

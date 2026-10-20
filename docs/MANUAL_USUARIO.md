@@ -15,7 +15,7 @@ En **Cartones**, arrastra uno o varios PDF al área de importación o pulsa
 2. intenta leer primero el texto digital;
 3. usa OCR en páginas sin cuadrículas detectables;
 4. valida que cada tabla tenga 25 casillas (o 24 más centro libre);
-5. guarda los cartones y el PDF original.
+5. guarda los cartones confirmados y descarta el PDF fuente después del procesamiento.
 
 Las advertencias muestran páginas que necesitan revisión. El número de cartón
 generado incluye el nombre de archivo, página y posición, por lo que puede
