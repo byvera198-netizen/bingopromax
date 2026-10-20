@@ -6,11 +6,13 @@
 npm ci
 npm run build
 npm run smoke
+npm run smoke:worker
 npm run lint
 ```
 
-El smoke test comprueba que el build expone `/api/health` y que la respuesta
-contiene únicamente el estado público de disponibilidad.
+`smoke` comprueba el contrato del endpoint. `smoke:worker`, después del build,
+levanta el artefacto con Wrangler y comprueba portada 200, `/api/health` 200 y
+`/api/state` 403 sin sesión.
 
 ## Configuración externa
 
