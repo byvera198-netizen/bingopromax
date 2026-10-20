@@ -14,6 +14,10 @@ npm run lint
 levanta el artefacto con Wrangler y comprueba portada 200, `/api/health` 200 y
 `/api/state` 403 sin sesión.
 
+Para Pages, el paquete debe prepararse con `npm run pages:prepare`. No se debe
+publicar `dist/client` por separado: la aplicación necesita `_worker.js`, la
+carpeta `server` y los assets del cliente.
+
 ## Configuración externa
 
 1. Configurar el proyecto Supabase con autenticación por correo, confirmación
