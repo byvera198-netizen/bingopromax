@@ -14,9 +14,17 @@ npm run build
 npm test
 ```
 
-El build debe terminar con las rutas `/`, `/api/state` y `/api/files`. El endpoint
-`/api/files` se conserva por compatibilidad, pero devuelve `410`: los PDF se
+El build debe terminar con las rutas `/`, `/api/health`, `/api/state` y `/api/files`.
+`/api/health` devuelve un JSON mínimo para los monitores del hosting y no exige
+autenticación. El endpoint `/api/files` se conserva por compatibilidad, pero devuelve `410`: los PDF se
 procesan en el navegador y no se almacenan.
+
+`vinext start` no es un servidor Node genérico: las rutas de la aplicación usan
+`cloudflare:workers` y deben ejecutarse en el runtime Workers/Vinext compatible
+con Cloudflare. Si el entorno local no proporciona ese runtime, un error
+`ERR_UNSUPPORTED_ESM_URL_SCHEME` de Node indica una limitación del adaptador
+local, no un error de autenticación o de la aplicación. El build sigue siendo
+el artefacto de despliegue y debe validarse con el proveedor Cloudflare elegido.
 
 ## Supabase
 
@@ -54,4 +62,11 @@ instalación existente.
 5. Registrar bolillas repetidas y confirmar que la API las rechaza.
 6. Completar un patrón, verificar el ganador y exportar PDF, Excel y CSV.
 7. Cerrar sesión, volver a entrar y comprobar que la partida se restaura.
+
+## Comprobación de disponibilidad
+
+Después de publicar, solicita `GET https://tu-dominio/api/health`. Debe devolver
+`200` y un objeto con `ok: true` y `service: "bingo-control-promax"`. Este
+endpoint no valida Supabase ni D1; para validar autenticación y persistencia se
+debe ejecutar la lista de aceptación anterior con una cuenta real.
 

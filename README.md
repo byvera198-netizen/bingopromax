@@ -48,6 +48,7 @@ npm run db:generate
 - `app/page.tsx`: interfaz y flujos de operación.
 - `app/api/state/route.ts`: API de partidas, cartones, bolillas y ganadores.
 - `app/api/files/route.ts`: respuesta de compatibilidad; los archivos fuente no se almacenan.
+- `app/api/health/route.ts`: comprobación pública de disponibilidad del worker, sin datos de usuario.
 - `lib/bingo.ts`: patrones y motor de validación.
 - `lib/pdf-parser.ts`: extracción PDF, reconocimiento OCR y armado de cartones.
 - `db/schema.ts`: modelo de datos.
