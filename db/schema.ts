@@ -2,6 +2,7 @@ import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core
 
 export const games = sqliteTable("games", {
   id: text("id").primaryKey(),
+  ownerEmail: text("owner_email").notNull().default(""),
   name: text("name").notNull(),
   date: text("date").notNull(),
   prize: text("prize").notNull().default(""),
@@ -24,6 +25,8 @@ export const cards = sqliteTable(
     number: text("number").notNull(),
     serial: text("serial").notNull().default(""),
     gridJson: text("grid_json").notNull(),
+    cardType: text("card_type").notNull().default("classic-5x5"),
+    layoutJson: text("layout_json").notNull().default("{}"),
     sourceFile: text("source_file").notNull().default("Manual"),
     sourcePage: integer("source_page").notNull().default(0),
     status: text("status").notNull().default("active"),
@@ -61,6 +64,7 @@ export const gamePatterns = sqliteTable(
     patternId: text("pattern_id").notNull(),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     custom: integer("custom", { mode: "boolean" }).notNull().default(false),
+    deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
@@ -95,22 +99,6 @@ export const winners = sqliteTable(
     validatedAt: text("validated_at").notNull(),
   },
   (table) => [uniqueIndex("winners_game_card_pattern_unique").on(table.gameId, table.cardId, table.patternId)],
-);
-
-export const files = sqliteTable(
-  "files",
-  {
-    id: text("id").primaryKey(),
-    gameId: text("game_id").notNull(),
-    name: text("name").notNull(),
-    storageKey: text("storage_key").notNull(),
-    size: integer("size").notNull(),
-    checksum: text("checksum").notNull(),
-    pages: integer("pages").notNull().default(0),
-    cards: integer("cards").notNull().default(0),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => [uniqueIndex("files_game_checksum_unique").on(table.gameId, table.checksum)],
 );
 
 export const auditLogs = sqliteTable("audit_logs", {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
+import PwaRegister from "./pwa-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,7 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ||
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "Bingo Control Pro — Verificación automática";
+  const title = "Bingo Control ProMax — Verificación automática";
   const description =
     "Control profesional de partidas, importación de cartones PDF, bolillero y detección automática de ganadores.";
   const image = `${origin}/og.png`;
@@ -32,12 +33,25 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(origin),
     title,
     description,
+    manifest: "/manifest.webmanifest",
+    icons: {
+      icon: [{ url: "/pwa-icon.svg", type: "image/svg+xml" }],
+      apple: [{ url: "/pwa-icon.svg", type: "image/svg+xml" }],
+    },
+    appleWebApp: {
+      capable: true,
+      title: "Bingo ProMax",
+      statusBarStyle: "black-translucent",
+    },
+    other: {
+      "apple-mobile-web-app-capable": "yes",
+    },
     openGraph: {
       title,
       description,
       type: "website",
       locale: "es_EC",
-      images: [{ url: image, width: 1728, height: 911, alt: "Bingo Control Pro" }],
+      images: [{ url: image, width: 1728, height: 911, alt: "Bingo Control ProMax" }],
     },
     twitter: {
       card: "summary_large_image",
@@ -51,7 +65,10 @@ export async function generateMetadata(): Promise<Metadata> {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        {children}
+        <PwaRegister />
+      </body>
     </html>
   );
 }

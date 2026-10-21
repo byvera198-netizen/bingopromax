@@ -45,25 +45,31 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { User } from "@supabase/supabase-js";
+import type { Session, User } from "@supabase/supabase-js";
 import {
   BUILTIN_PATTERNS,
   COMPACT_CARD_PATTERN,
+  additionalPatternForCard,
   cardProgress,
+  cardLayoutFor,
+  createCardLayout,
   formatDuration,
   patternsForCard,
-  validateCardGrid,
+  validateBingoCard,
   winningPatternsForCard,
   type AppState,
   type AccessState,
   type BingoCard,
+  type CardLayout,
+  type CardType,
   type BingoPattern,
   type Draw,
   type Game,
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { fileChecksum, parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import { fileChecksum, identifyBingoSource, parseBingoFile, parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import { parseProMaxPackage, type ProMaxImportResult } from "@/lib/promax-package";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
@@ -72,6 +78,54 @@ type Toast = { id: string; tone: "success" | "warning" | "error"; message: strin
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
 const ADMIN_EMAIL = "byvera198@gmail.com";
+const ADMIN_EMAILS = ["byvera198@gmail.com", "bveraalvear@gmail.com"];
+const ADMIN_WHATSAPP = "593985280991";
+const PROMAX_IMPORT_CHUNK_SIZE = 500;
+const CARD_TYPE_OPTIONS: Array<{ value: CardType; label: string }> = [
+  { value: "classic-5x5", label: "Tradicional 5×5" },
+  { value: "linea-5", label: "Línea de 5 números" },
+  { value: "loco-10", label: "Llena el loco (10 números)" },
+  { value: "loco-11", label: "Llena el loco (11 números)" },
+  { value: "yapa-3x3", label: "Yapa 3×3" },
+  { value: "sabrosito-5", label: "Sabrosito (5 números)" },
+  { value: "eche-leche-7", label: "Eche leche (7 números)" },
+  { value: "bom-bom-8", label: "Bom bom bum (8 números)" },
+  { value: "keke-keke-6", label: "Keke Keke (6 números)" },
+  { value: "avion-9", label: "Avión (9 números)" },
+  { value: "flecha-9", label: "Flecha (9 números)" },
+  { value: "espada-7", label: "Espada (7 números)" },
+  { value: "pesa-7", label: "Pesa (7 números)" },
+  { value: "rombo-8", label: "Rombo (8 números)" },
+  { value: "bomba-8", label: "Bomba (8 números)" },
+  { value: "custom", label: "Estructura personalizada" },
+];
+
+type CardEditorMode = "import" | "saved";
+
+function resizeCardGrid(grid: number[], size: number, type: CardType) {
+  return Array.from({ length: size }, (_, index) => {
+    if (type === "classic-5x5" && index === 12) return grid[index] === 0 ? 0 : grid[index] ?? 0;
+    return grid[index] && grid[index] > 0 ? grid[index] : 0;
+  });
+}
+
+function cardEditorCanvas(card: BingoCard) {
+  const layout = cardLayoutFor(card);
+  if (card.grid.length === 25) return Array.from({ length: 25 }, (_, index) => card.grid[index] ?? 0);
+  const canvas = Array.from({ length: 25 }, () => 0);
+  layout.cells.forEach((cell, index) => {
+    const position = cell.row * 5 + cell.column;
+    if (position >= 0 && position < canvas.length) canvas[position] = card.grid[index] ?? 0;
+  });
+  return canvas;
+}
+
+function cardGridForLayout(canvas: number[], layout: CardLayout) {
+  if (layout.type === "classic-5x5" || (layout.rows === 5 && layout.columns === 5)) {
+    return Array.from({ length: 25 }, (_, index) => canvas[index] ?? 0);
+  }
+  return layout.cells.map((cell) => canvas[cell.row * 5 + cell.column] ?? 0);
+}
 
 function deviceId() {
   const key = "bingo-device-id";
@@ -81,6 +135,16 @@ function deviceId() {
     localStorage.setItem(key, id);
   }
   return id;
+}
+
+function createDemoState(): AppState {
+  const now = new Date().toISOString();
+  const pattern = BUILTIN_PATTERNS[0];
+  return {
+    game: { id: "demo", name: "Partida demo", date: now.slice(0, 10), prize: "Demostración", status: "ready", notes: "", activePatternId: pattern.id, activePatternName: pattern.name, activePatternCells: pattern.cells, autoPause: true, startedAt: null, createdAt: now, updatedAt: now },
+    cards: [], draws: [], winners: [], customPatterns: [], disabledPatternIds: [], deletedPatternIds: [], files: [],
+    access: { allowed: true, role: "member", email: "demo@bingocontrol.local", reason: "Modo demostración: máximo 20 bolillas." }, memberships: [],
+  };
 }
 
 async function api<T>(body: Record<string, unknown>): Promise<T> {
@@ -136,6 +200,7 @@ function StatCard({
 
 function BingoGrid({
   grid,
+  layout,
   called,
   pattern,
   compact = false,
@@ -145,6 +210,7 @@ function BingoGrid({
   onCellClick,
 }: {
   grid?: number[];
+  layout?: CardLayout;
   called?: Set<number>;
   pattern?: BingoPattern;
   compact?: boolean;
@@ -153,7 +219,7 @@ function BingoGrid({
   showPending?: boolean;
   onCellClick?: (index: number) => void;
 }) {
-  if (grid?.length === 5) {
+  if (grid?.length === 5 && (!layout || layout.type === "sabrosito-5")) {
     return (
       <div className={`compact-card-grid ${compact ? "compact" : ""} ${showPending ? "" : "hide-pending"}`}>
         <span className="compact-card-title">SABROSITO</span>
@@ -173,6 +239,33 @@ function BingoGrid({
             );
           })}
         </div>
+      </div>
+    );
+  }
+  if (layout && layout.type !== "classic-5x5") {
+    return (
+      <div
+        className={`variable-card-grid ${layout.cellShape ? `cell-${layout.cellShape}` : ""} ${compact ? "compact" : ""} ${showPending ? "" : "hide-pending"}`}
+        style={{ gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))` }}
+      >
+        {layout.cells.map((cell, index) => {
+          const value = grid?.[index] ?? 0;
+          const marked = Boolean(called?.has(value));
+          const target = Boolean(pattern?.cells.includes(index) || selected.includes(index));
+          return (
+            <button
+              aria-label={`Casilla ${index + 1}`}
+              className={`bingo-cell ${marked ? "marked" : ""} ${target ? "target" : ""}`}
+              disabled={!editable}
+              key={index}
+              onClick={() => onCellClick?.(index)}
+              style={{ gridColumn: cell.column + 1, gridRow: cell.row + 1 }}
+              type="button"
+            >
+              {editable ? (selected.includes(index) ? <Check size={16} /> : "") : value > 0 ? value : "?"}
+            </button>
+          );
+        })}
       </div>
     );
   }
@@ -236,6 +329,7 @@ function CardPreview({
   wins = [],
   onToggleStatus,
   onDelete,
+  onEdit,
   showCalled = true,
   showPattern = true,
   showPending = true,
@@ -244,8 +338,9 @@ function CardPreview({
   called: Set<number>;
   patterns: BingoPattern[];
   wins?: Winner[];
-  onToggleStatus: (card: BingoCard) => void;
+  onToggleStatus?: (card: BingoCard) => void;
   onDelete?: (card: BingoCard) => void;
+  onEdit?: (card: BingoCard) => void;
   showCalled?: boolean;
   showPattern?: boolean;
   showPending?: boolean;
@@ -260,9 +355,14 @@ function CardPreview({
           <strong>#{card.number}</strong>
         </div>
         <div className="ticket-actions">
-          <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>
+          {onEdit && (
+            <button className="icon-button small" title="Editar cartón" type="button" onClick={() => onEdit(card)}>
+              <PencilLine size={15} />
+            </button>
+          )}
+          {onToggleStatus && <button className="icon-button small" title={card.status === "active" ? "Anular cartón" : "Reactivar cartón"} type="button" onClick={() => onToggleStatus(card)}>
             <MoreHorizontal size={17} />
-          </button>
+          </button>}
           {onDelete && (
             <button className="icon-button small danger-button" title="Eliminar cartón" type="button" onClick={() => onDelete(card)}>
               <Trash2 size={15} />
@@ -279,6 +379,7 @@ function CardPreview({
       )}
       <BingoGrid
         grid={card.grid}
+        layout={card.layout}
         called={showCalled ? called : new Set<number>()}
         pattern={showPattern ? nearest.pattern : undefined}
         compact
@@ -342,6 +443,7 @@ export default function GameConsole() {
   const [authPassword, setAuthPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
   const [access, setAccess] = useState<AccessState | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -366,6 +468,15 @@ export default function GameConsole() {
   const [processingFiles, setProcessingFiles] = useState(false);
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [importDrafts, setImportDrafts] = useState<BingoCard[]>([]);
+  const [importPages, setImportPages] = useState(0);
+  const [importReviewOpen, setImportReviewOpen] = useState(false);
+  const [proMaxImport, setProMaxImport] = useState<ProMaxImportResult | null>(null);
+  const [proMaxImportBusy, setProMaxImportBusy] = useState(false);
+  const [proMaxImportProgress, setProMaxImportProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [syncProMaxPatterns, setSyncProMaxPatterns] = useState(true);
+  const [cardEditorMode, setCardEditorMode] = useState<CardEditorMode>("saved");
+  const [cardDraft, setCardDraft] = useState<BingoCard | null>(null);
   const [manualNumber, setManualNumber] = useState("");
   const [manualSerial, setManualSerial] = useState("");
   const [manualGrid, setManualGrid] = useState(initialGrid);
@@ -373,11 +484,18 @@ export default function GameConsole() {
   const [patternDescription, setPatternDescription] = useState("");
   const [patternCells, setPatternCells] = useState<number[]>([10, 11, 12, 13, 14]);
   const [patternColor, setPatternColor] = useState("#d7ff3f");
+  const [editingPattern, setEditingPattern] = useState<BingoPattern | null>(null);
+  const [selectedPatternIds, setSelectedPatternIds] = useState<string[]>([]);
+  const [patternLimit, setPatternLimit] = useState(60);
   const [gameDraft, setGameDraft] = useState({ name: "", date: "", prize: "", notes: "" });
   const [membershipName, setMembershipName] = useState("");
-  const [membershipPlan, setMembershipPlan] = useState<Membership["plan"]>("six-months");
+  const [membershipPlan, setMembershipPlan] = useState<Membership["plan"]>("monthly");
+  const [membershipReceipt, setMembershipReceipt] = useState("");
+  const [membershipPhone, setMembershipPhone] = useState("");
+  const [membershipChannel, setMembershipChannel] = useState<"email" | "whatsapp">("email");
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const proMaxFileInputRef = useRef<HTMLInputElement>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -440,6 +558,8 @@ export default function GameConsole() {
         if (authError) throw authError;
       } else if (authMode === "register") {
         if (!authName.trim()) throw new Error("Escribe tu nombre completo.");
+        const domain = authEmail.trim().toLowerCase().split("@").pop() || "";
+        if (["mailinator.com", "10minutemail.com", "guerrillamail.com", "tempmail.com", "yopmail.com", "sharklasers.com", "getnada.com", "emailondeck.com", "trashmail.com"].includes(domain)) throw new Error("Usa tu correo personal real; no se aceptan correos temporales.");
         const { error: authError } = await supabase.auth.signUp({
           email: authEmail.trim(),
           password: authPassword,
@@ -472,9 +592,39 @@ export default function GameConsole() {
     }
   };
 
+  const signInWithGoogle = async () => {
+    setAuthBusy(true);
+    setAuthMessage("");
+    const { error: authError } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (authError) {
+      setAuthMessage(authError.message || "No se pudo iniciar sesión con Google.");
+      setAuthBusy(false);
+    }
+  };
+
+  const sendDeveloperLink = async () => {
+    const email = authEmail.trim().toLowerCase();
+    if (!ADMIN_EMAILS.includes(email)) {
+      setAuthMessage("El enlace de desarrollador está disponible para las cuentas autorizadas.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage("");
+    const { error: authError } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    setAuthBusy(false);
+    setAuthMessage(authError ? authError.message : "Enlace enviado. Revisa ese mismo correo y ábrelo para entrar como desarrollador.");
+  };
+
   const requestMembership = async () => {
     if (!access?.email || !membershipName.trim()) {
       setError("Escribe tu nombre para enviar la solicitud.");
+      return;
+    }
+    if (!membershipReceipt.trim()) {
+      setError("Ingresa el número de comprobante de la transferencia.");
       return;
     }
     try {
@@ -483,9 +633,17 @@ export default function GameConsole() {
         email: access.email,
         name: membershipName.trim(),
         plan: membershipPlan,
+        receiptNumber: membershipReceipt.trim(),
+        contactChannel: membershipChannel,
+        phone: membershipPhone.trim(),
       });
-      const price = membershipPlan === "annual" ? "$10 anual" : "$5 por 6 meses";
-      window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(`Solicito activar mi cuenta de Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${access.email}\nPlan: ${price}`)}`, "_self");
+      const planLabel = membershipPlan === "annual" ? "1 año ($80)" : membershipPlan === "six-months" ? "6 meses ($50)" : "1 mes ($10)";
+      const message = `Solicito activar mi cuenta de Bingo Control.\n\nNombre: ${membershipName.trim()}\nCorreo: ${access.email}\nPlan: ${planLabel}\nComprobante: ${membershipReceipt.trim()}\nWhatsApp: ${membershipPhone.trim() || "No indicado"}`;
+      if (membershipChannel === "whatsapp") {
+        window.open(`https://wa.me/${ADMIN_WHATSAPP}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+      } else {
+        window.open(`mailto:${result.adminEmail}?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(message)}`, "_self");
+      }
       setAccess({ ...access, role: "pending", reason: "Solicitud enviada. Espera la aprobación del administrador." });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo enviar la solicitud.");
@@ -494,10 +652,13 @@ export default function GameConsole() {
 
   const manageMembership = async (membership: Membership, action: "approveMembership" | "rejectMembership" | "resetMembershipDevice") => {
     try {
-      const result = await api<{ email?: string; expiresAt?: string }>({ action, membershipId: membership.id });
+      const result = await api<{ email?: string; phone?: string; expiresAt?: string; activationCode?: string; contactChannel?: string }>({ action, membershipId: membership.id });
       await refresh(true);
       if (action === "approveMembership" && result.email) {
-        window.open(`mailto:${result.email}?subject=${encodeURIComponent("Cuenta activada - Bingo Control Pro")}&body=${encodeURIComponent(`Tu cuenta fue aprobada.\nPlan: ${membership.plan === "annual" ? "Anual ($10)" : "6 meses ($5)"}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\n\nIngresa a Bingo Control Pro con este mismo correo. El primer dispositivo quedará vinculado a tu cuenta.`)}`, "_self");
+        const planLabel = membership.plan === "annual" ? "1 año ($80)" : membership.plan === "six-months" ? "6 meses ($50)" : "1 mes ($10)";
+        const activationMessage = `Tu cuenta fue aprobada.\nPlan: ${planLabel}\nVigencia hasta: ${new Date(result.expiresAt || "").toLocaleDateString("es-EC")}\nCódigo de activación: ${result.activationCode || "Se activa al iniciar sesión"}\n\nIngresa a Bingo Control Pro con este mismo correo. El primer dispositivo quedará vinculado a tu cuenta.`;
+        if (result.contactChannel === "whatsapp") window.open(`https://wa.me/${String(result.phone || "").replace(/\D/g, "") || ADMIN_WHATSAPP}?text=${encodeURIComponent(activationMessage)}`, "_blank", "noopener,noreferrer");
+        else window.open(`mailto:${result.email}?subject=${encodeURIComponent("Cuenta activada - Bingo Control Pro")}&body=${encodeURIComponent(activationMessage)}`, "_self");
       }
       notify(action === "approveMembership" ? "Usuario aprobado; correo de activación preparado." : action === "rejectMembership" ? "Solicitud rechazada." : "Dispositivo restablecido.");
     } catch (caught) {
@@ -505,11 +666,26 @@ export default function GameConsole() {
     }
   };
 
+  const startDemo = () => {
+    setDemoMode(true);
+    setState(createDemoState());
+    setAccess(createDemoState().access);
+    setLoading(false);
+  };
+
   useEffect(() => {
     const bootstrapAuth = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      let session: Session | null = null;
+      try {
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("timeout")), 8000)),
+        ]);
+        session = result.data.session;
+      } catch {
+        // A stale browser lock must not leave the application on the
+        // verification screen forever; show the normal sign-in screen.
+      }
       setAuthUser(session?.user ?? null);
       setAuthReady(true);
       const recovery =
@@ -564,8 +740,8 @@ export default function GameConsole() {
       ...(state?.cards.some((card) => card.grid.length === 5)
         ? [COMPACT_CARD_PATTERN]
         : []),
-    ],
-    [state?.cards, state?.customPatterns],
+    ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id)),
+    [state?.cards, state?.customPatterns, state?.deletedPatternIds],
   );
   const allPatterns = useMemo(
     () =>
@@ -575,15 +751,18 @@ export default function GameConsole() {
     [availablePatterns, state?.disabledPatternIds],
   );
   const gamePatterns = allPatterns;
+  const visiblePatterns = useMemo(() => availablePatterns.slice(0, patternLimit), [availablePatterns, patternLimit]);
   const patternStatuses = useMemo(
     () =>
       gamePatterns.map((pattern) => {
         const compatibleCards = (state?.cards ?? []).filter(
-          (card) =>
-            card.status === "active" &&
-            (pattern.id === COMPACT_CARD_PATTERN.id
-              ? card.grid.length === 5
-              : card.grid.length !== 5),
+          (card) => {
+            if (card.status !== "active") return false;
+            if (pattern.id === COMPACT_CARD_PATTERN.id) return card.grid.length === 5;
+            const additional = additionalPatternForCard(card);
+            if (additional) return additional.id === pattern.id;
+            return card.grid.length !== 5;
+          },
         );
         const nearest = compatibleCards.reduce(
           (best, card) =>
@@ -630,6 +809,14 @@ export default function GameConsole() {
   const registerBall = useCallback(
     async (rawNumber: string | number) => {
       if (!state || !game) return;
+      if (demoMode && state.draws.length >= 20) {
+        notify("La demostración permite un máximo de 20 bolillas.", "warning");
+        setDemoMode(false);
+        setState(null);
+        setAccess(null);
+        setAuthMessage("Terminó tu demostración. Regístrate con tu correo personal para solicitar una membresía.");
+        return;
+      }
       const number = Number(rawNumber);
       if (!Number.isInteger(number) || number < 1 || number > 90) {
         notify("Ingresa un número entero entre 1 y 90.", "warning");
@@ -644,7 +831,9 @@ export default function GameConsole() {
         return;
       }
       try {
-        const result = await api<{ draw: Draw }>({ action: "saveDraw", gameId: game.id, number });
+        const result = demoMode
+          ? { draw: { id: crypto.randomUUID(), number, drawnAt: new Date().toISOString() } }
+          : await api<{ draw: Draw }>({ action: "saveDraw", gameId: game.id, number });
         const nextCalled = new Set(called);
         nextCalled.add(number);
         const detected = state.cards.flatMap<Winner>((card) =>
@@ -683,19 +872,14 @@ export default function GameConsole() {
         setBallInput("");
         playTone(Boolean(detected.length));
         if (detected.length) {
-          await api({
-            action: "recordWinners",
-            gameId: game.id,
-            winners: detected,
-            autoPause: game.autoPause,
-          });
+          if (!demoMode) await api({ action: "recordWinners", gameId: game.id, winners: detected, autoPause: game.autoPause });
           setWinnerModal(detected);
         }
       } catch (caught) {
         notify(caught instanceof Error ? caught.message : "No se pudo registrar la bolilla.", "error");
       }
     },
-    [allPatterns, called, game, notify, playTone, state],
+    [allPatterns, called, demoMode, game, notify, playTone, state],
   );
 
   const undoLastDraw = async () => {
@@ -807,6 +991,53 @@ export default function GameConsole() {
     }
   };
 
+  const openCardEditor = (card: BingoCard, mode: CardEditorMode = "saved") => {
+    const layout = cardLayoutFor(card);
+    setCardEditorMode(mode);
+    setCardDraft({ ...card, layout, grid: cardEditorCanvas(card) });
+  };
+
+  const updateCardDraftType = (type: CardType) => {
+    if (!cardDraft) return;
+    const previous = cardLayoutFor(cardDraft);
+    const layout = type === "custom"
+      ? (previous.type === "custom" ? previous : createCardLayout("custom", 5, 5))
+      : createCardLayout(type);
+    setCardDraft((current) => current ? { ...current, layout, grid: cardEditorCanvas(current) } : current);
+  };
+
+  const saveCardEdit = async () => {
+    if (!state || !cardDraft) return;
+    const layout = cardLayoutFor(cardDraft);
+    const grid = cardGridForLayout(cardDraft.grid, layout);
+    const number = cardDraft.number.trim();
+    const errors = validateBingoCard({ grid, layout });
+    if (!number) errors.unshift("Asigna un número al cartón.");
+    if (state.cards.some((card) => card.id !== cardDraft.id && card.number.trim().toLowerCase() === number.toLowerCase())) {
+      errors.unshift("Ya existe un cartón con ese número en esta partida.");
+    }
+    if (errors.length) {
+      setImportWarnings(errors);
+      notify(errors[0], "warning");
+      return;
+    }
+    const updated = { ...cardDraft, number, grid, layout, reviewStatus: "ready" as const, reviewNotes: [] };
+    try {
+      if (cardEditorMode === "import") {
+        setImportDrafts((current) => current.map((card) => card.id === updated.id ? updated : card));
+        setCardDraft(null);
+        notify(`Cartón #${number} corregido. Revisa y guárdalo en la partida.`);
+        return;
+      }
+      await api({ action: "updateCard", gameId: state.game.id, card: updated });
+      setState({ ...state, cards: state.cards.map((card) => card.id === updated.id ? updated : card) });
+      setCardDraft(null);
+      notify(`Cartón #${number} actualizado como ${layout.name}.`);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudo actualizar el cartón.", "error");
+    }
+  };
+
   const deleteVoidedCards = async () => {
     if (!state) return;
     const voided = state.cards.filter((card) => card.status === "void");
@@ -843,6 +1074,7 @@ export default function GameConsole() {
         disabledPatternIds: enabled
           ? state.disabledPatternIds.filter((id) => id !== pattern.id)
           : [...new Set([...state.disabledPatternIds, pattern.id])],
+        deletedPatternIds: (state.deletedPatternIds ?? []).filter((id) => id !== pattern.id),
       });
       notify(
         enabled
@@ -856,28 +1088,47 @@ export default function GameConsole() {
   };
 
   const deletePattern = async (pattern: BingoPattern) => {
-    if (!state || !pattern.custom || !window.confirm(`¿Eliminar “${pattern.name}” de esta partida?`)) return;
+    if (!state || !window.confirm(`¿Eliminar “${pattern.name}” de esta partida? Podrás usarlo en otras partidas.`)) return;
     try {
       await api({ action: "deletePattern", gameId: state.game.id, patternId: pattern.id });
       setState({
         ...state,
-        customPatterns: state.customPatterns.filter((item) => item.id !== pattern.id),
+        customPatterns: pattern.custom
+          ? state.customPatterns.filter((item) => item.id !== pattern.id)
+          : state.customPatterns,
         disabledPatternIds: state.disabledPatternIds.filter((id) => id !== pattern.id),
+        deletedPatternIds: [...new Set([...(state.deletedPatternIds ?? []), pattern.id])],
       });
-      notify(`Patrón “${pattern.name}” eliminado.`, "warning");
+      notify(`Patrón “${pattern.name}” eliminado de esta partida.`, "warning");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo eliminar el patrón.", "error");
     }
   };
 
+  const deleteSelectedPatterns = async () => {
+    if (!state || !selectedPatternIds.length) return;
+    const selected = availablePatterns.filter((pattern) => selectedPatternIds.includes(pattern.id));
+    if (!selected.length || !window.confirm(`¿Eliminar ${selected.length} patrones seleccionados de esta partida?`)) return;
+    try {
+      await api({ action: "deletePatterns", gameId: state.game.id, patternIds: selected.map((pattern) => pattern.id) });
+      const ids = new Set(selected.map((pattern) => pattern.id));
+      setState({ ...state, customPatterns: state.customPatterns.filter((pattern) => !ids.has(pattern.id)), disabledPatternIds: state.disabledPatternIds.filter((id) => !ids.has(id)), deletedPatternIds: [...new Set([...(state.deletedPatternIds ?? []), ...ids])] });
+      setSelectedPatternIds([]);
+      notify(`${selected.length} patrones eliminados.`, "warning");
+    } catch (caught) { notify(caught instanceof Error ? caught.message : "No se pudieron eliminar los patrones.", "error"); }
+  };
+
   const createNewGame = async () => {
-    const name = window.prompt("Nombre del nuevo juego:", "Nueva partida");
-    if (!name?.trim()) return;
+    // Creating a new game must be a single click operation. Browser prompts
+    // can be blocked by embedded browsers and used to leave the previous game
+    // visible when the prompt was dismissed or never rendered.
+    const date = new Date().toISOString().slice(0, 10);
+    const name = `Nueva partida ${date}`;
     try {
       await api({
         action: "createGame",
-        name: name.trim(),
-        date: new Date().toISOString().slice(0, 10),
+        name,
+        date,
       });
       await refresh();
       setView("dashboard");
@@ -890,7 +1141,8 @@ export default function GameConsole() {
   const saveManualCard = async () => {
     if (!state) return;
     const grid = manualGrid.map((value) => Number(value));
-    const errors = validateCardGrid(grid);
+    const layout = createCardLayout("classic-5x5");
+    const errors = validateBingoCard({ grid, layout });
     if (!manualNumber.trim()) errors.unshift("Asigna un número al cartón.");
     if (state.cards.some((card) => card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
       errors.unshift("Ya existe un cartón con ese número.");
@@ -908,6 +1160,8 @@ export default function GameConsole() {
       sourceFile: "Ingreso manual",
       sourcePage: 0,
       status: "active",
+      layout,
+      reviewStatus: "ready",
     };
     try {
       await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
@@ -923,7 +1177,7 @@ export default function GameConsole() {
     }
   };
 
-  const processFiles = async (files: File[]) => {
+  const legacyProcessFiles = async (files: File[]) => {
     if (!state || !files.length) return;
     const invalid = files.find((file) => file.type !== "application/pdf" && !file.name.endsWith(".pdf"));
     if (invalid) {
@@ -939,7 +1193,7 @@ export default function GameConsole() {
     try {
       for (const file of files) {
         const checksum = await fileChecksum(file);
-        if (state.files.some((entry) => entry.checksum === checksum)) {
+        if (false) {
           duplicateCount += 1;
           warnings.push(`${file.name}: el archivo ya había sido importado.`);
           continue;
@@ -1008,13 +1262,184 @@ export default function GameConsole() {
     }
   };
 
+  const processFiles = async (files: File[]) => {
+    if (!state || !files.length) return;
+    setProcessingFiles(true);
+    const warnings: string[] = [];
+    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
+    const drafts: BingoCard[] = [];
+    let pages = 0;
+    try {
+      for (const file of files) {
+        if (file.size > 25 * 1024 * 1024) {
+          warnings.push(`${file.name}: excede el límite de 25 MB.`);
+          continue;
+        }
+        try {
+          await identifyBingoSource(file);
+        } catch (caught) {
+          warnings.push(`${file.name}: ${caught instanceof Error ? caught.message : "formato no compatible"}`);
+          continue;
+        }
+        const parsed = await parseBingoFile(file, (progress) =>
+          setPdfProgress({ ...progress, file: file.name }),
+        );
+        pages += parsed.pages;
+        warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
+        parsed.cards.forEach((card) => {
+          const duplicate = Boolean(card.number) && usedNumbers.has(card.number.toLowerCase());
+          if (card.number) usedNumbers.add(card.number.toLowerCase());
+          drafts.push({
+            ...card,
+            reviewStatus: duplicate || card.reviewStatus === "needs-review" ? "needs-review" : "ready",
+            reviewNotes: [
+              ...(card.reviewNotes ?? []),
+              ...(duplicate ? ["La numeración ya existe en esta partida o en esta importación."] : []),
+            ],
+          });
+        });
+      }
+      const readyDrafts = drafts.filter((card) => card.reviewStatus !== "needs-review");
+      const pendingDrafts = drafts.filter((card) => card.reviewStatus === "needs-review");
+      if (readyDrafts.length) {
+        const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
+          action: "saveCards",
+          gameId: state.game.id,
+          cards: readyDrafts,
+        });
+        await refresh();
+        if (result.accepted) notify(`${result.accepted} cartón(es) guardados en la partida.`);
+        if (result.duplicates) warnings.push(`${result.duplicates} cartón(es) ya existían y fueron omitidos.`);
+        if (result.rejected) warnings.push(`${result.rejected} cartón(es) quedaron pendientes de revisión.`);
+      }
+      setImportWarnings(warnings);
+      setImportDrafts(pendingDrafts);
+      setImportPages(pages);
+      if (pendingDrafts.length) {
+        setImportReviewOpen(true);
+        notify(`${pendingDrafts.length} cartón(es) requieren revisión antes de guardarse.`, "warning");
+      } else {
+        setImportReviewOpen(false);
+        if (!readyDrafts.length) notify("No se detectaron cartones válidos para guardar.", "warning");
+      }
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
+      warnings.push(message);
+      setImportWarnings(warnings);
+      notify(message, "error");
+    } finally {
+      setProcessingFiles(false);
+      setPdfProgress(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const inspectProMaxPackage = async (file: File) => {
+    setProMaxImportBusy(true);
+    try {
+      const result = parseProMaxPackage(await file.text());
+      setProMaxImport(result);
+      setImportWarnings([...result.warnings, ...result.rejected].slice(0, 12));
+      notify(`${result.cards.length} cartón(es) listos para importar desde Studio.`);
+    } catch (caught) {
+      setProMaxImport(null);
+      notify(caught instanceof Error ? caught.message : "No se pudo leer el paquete de Studio.", "error");
+    } finally {
+      setProMaxImportBusy(false);
+      if (proMaxFileInputRef.current) proMaxFileInputRef.current.value = "";
+    }
+  };
+
+  const importProMaxPackage = async () => {
+    if (!state || !proMaxImport) return;
+    setProMaxImportBusy(true);
+    setProMaxImportProgress({ completed: 0, total: proMaxImport.cards.length });
+    let accepted = 0;
+    let duplicates = 0;
+    let rejected = 0;
+    try {
+      for (let offset = 0; offset < proMaxImport.cards.length; offset += PROMAX_IMPORT_CHUNK_SIZE) {
+        const chunk = proMaxImport.cards.slice(offset, offset + PROMAX_IMPORT_CHUNK_SIZE);
+        const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
+          action: "saveCards",
+          gameId: state.game.id,
+          cards: chunk,
+          source: "studio-package",
+        });
+        accepted += result.accepted;
+        duplicates += result.duplicates;
+        rejected += result.rejected;
+        setProMaxImportProgress({ completed: Math.min(offset + chunk.length, proMaxImport.cards.length), total: proMaxImport.cards.length });
+      }
+      let syncedPatterns = 0;
+      if (syncProMaxPatterns && proMaxImport.patterns.length && access?.role === "admin") {
+        const patternResult = await api<{ synced: number }>({
+          action: "syncPatterns",
+          gameId: state.game.id,
+          patterns: proMaxImport.patterns,
+          activePatternId: proMaxImport.game?.activePatternId ?? "",
+        });
+        syncedPatterns = patternResult.synced;
+      }
+      await refresh();
+      setProMaxImport(null);
+      const messages = [...proMaxImport.warnings, ...proMaxImport.rejected];
+      if (duplicates) messages.unshift(`${duplicates} cartón(es) ya existían y fueron omitidos.`);
+      if (rejected) messages.unshift(`${rejected} cartón(es) fueron rechazados por la API.`);
+      setImportWarnings(messages.slice(0, 12));
+      if (accepted) notify(`${accepted} cartón(es) de Studio importados correctamente.`);
+      if (syncedPatterns) notify(`${syncedPatterns} patrón(es) de Studio sincronizados para la partida.`);
+      if (!accepted) notify("No se importaron cartones nuevos.", "warning");
+    } catch (caught) {
+      setImportWarnings((current) => [`La importación se detuvo después de guardar ${accepted} cartón(es).`, ...current]);
+      notify(caught instanceof Error ? caught.message : "No se pudo importar el paquete de Studio.", "error");
+    } finally {
+      setProMaxImportBusy(false);
+      setProMaxImportProgress(null);
+    }
+  };
+
+  const saveImportedCards = async () => {
+    if (!state || !importDrafts.length) return;
+    // Opening the review is the explicit confirmation for cards that OCR
+    // flagged. The API still validates every grid and rejects invalid cards.
+    const readyCards = importDrafts.map((card) => ({ ...card, reviewStatus: "ready" as const }));
+    try {
+      const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
+        action: "saveCards",
+        gameId: state.game.id,
+        cards: readyCards,
+      });
+      await refresh();
+      setImportReviewOpen(false);
+      setImportDrafts([]);
+      const followUp: string[] = [];
+      if (result.duplicates) followUp.push(`${result.duplicates} cartón(es) ya existían y fueron omitidos.`);
+      if (result.rejected) followUp.push(`${result.rejected} cartón(es) quedaron pendientes de revisión.`);
+      setImportWarnings((current) => [...current, ...followUp]);
+      if (result.accepted) notify(`${result.accepted} cartón(es) guardados en la partida.`);
+      if (followUp.length) notify(followUp[0], "warning");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudieron guardar los cartones.", "error");
+    }
+  };
+
+  const openPatternEditor = (pattern?: BingoPattern) => {
+    setEditingPattern(pattern ?? null);
+    setPatternName(pattern?.name ?? "");
+    setPatternDescription(pattern?.description ?? "");
+    setPatternColor(pattern?.color ?? "#d7ff3f");
+    setPatternCells(pattern?.cells ?? [10, 11, 12, 13, 14]);
+    setPatternOpen(true);
+  };
+
   const saveCustomPattern = async () => {
     if (!state || !patternName.trim() || !patternCells.length) {
       notify("Escribe un nombre y selecciona al menos una casilla.", "warning");
       return;
     }
     const pattern: BingoPattern = {
-      id: `custom-${crypto.randomUUID()}`,
+      id: editingPattern?.id ?? `custom-${crypto.randomUUID()}`,
       name: patternName.trim(),
       description: patternDescription.trim() || "Patrón personalizado",
       color: patternColor,
@@ -1025,13 +1450,19 @@ export default function GameConsole() {
       custom: true,
     };
     try {
-      await api({ action: "savePattern", gameId: state.game.id, pattern });
-      setState({ ...state, customPatterns: [pattern, ...state.customPatterns] });
+      await api({ action: editingPattern ? "updatePattern" : "savePattern", gameId: state.game.id, pattern });
+      setState({
+        ...state,
+        customPatterns: editingPattern
+          ? state.customPatterns.map((item) => item.id === pattern.id ? pattern : item)
+          : [pattern, ...state.customPatterns],
+      });
       setPatternOpen(false);
+      setEditingPattern(null);
       setPatternName("");
       setPatternDescription("");
       setPatternCells([10, 11, 12, 13, 14]);
-      notify(`Patrón “${pattern.name}” guardado y activo en la partida.`);
+      notify(`Patrón “${pattern.name}” ${editingPattern ? "actualizado" : "guardado y activo"} en la partida.`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo guardar el patrón.", "error");
     }
@@ -1251,7 +1682,7 @@ export default function GameConsole() {
     );
   }
 
-  if (!authUser || authMode === "update") {
+  if ((!authUser && !demoMode) || authMode === "update") {
     const title =
       authMode === "register"
         ? "Crear una cuenta"
@@ -1299,9 +1730,19 @@ export default function GameConsole() {
               {authBusy ? "Procesando..." : authMode === "register" ? "Crear cuenta" : authMode === "recover" ? "Enviar enlace" : authMode === "update" ? "Guardar contraseña" : "Iniciar sesión"}
             </button>
           </form>
+          {authMode === "login" && (
+            <>
+              <div className="auth-divider"><span>o</span></div>
+              <button className="secondary-button auth-google" disabled={authBusy} onClick={() => void signInWithGoogle()} type="button">
+                Continuar con Google
+              </button>
+              {ADMIN_EMAILS.includes(authEmail.trim().toLowerCase()) && <button className="secondary-button" disabled={authBusy} onClick={() => void sendDeveloperLink()} type="button">Enviar enlace de desarrollador</button>}
+            </>
+          )}
           {authMode === "login" && <button className="auth-link" onClick={() => { setAuthMode("recover"); setAuthMessage(""); }} type="button">¿Olvidaste tu contraseña?</button>}
           {authMode === "recover" && <button className="auth-link" onClick={() => { setAuthMode("login"); setAuthMessage(""); }} type="button">Volver al inicio de sesión</button>}
-          <small>La única cuenta administradora es <strong>{ADMIN_EMAIL}</strong>. Los demás registros requieren aprobación y funcionan en un solo dispositivo.</small>
+          {authMode === "login" && <button className="secondary-button" onClick={startDemo} type="button">Probar demo — máximo 20 bolillas</button>}
+          <small>Desarrolladores: <strong>{ADMIN_EMAILS.join(" y ")}</strong>. Sus enlaces de correo dan control total; los demás registros requieren membresía.</small>
         </section>
       </main>
     );
@@ -1332,10 +1773,15 @@ export default function GameConsole() {
           {!pending && (
             <div className="form-stack">
               <label>Nombre completo<input onChange={(event) => setMembershipName(event.target.value)} placeholder="Tu nombre" value={membershipName} /></label>
+              <label>Número de comprobante<input onChange={(event) => setMembershipReceipt(event.target.value)} placeholder="Ej. 0012345678" value={membershipReceipt} /></label>
+              <label>WhatsApp <small>opcional</small><input onChange={(event) => setMembershipPhone(event.target.value)} placeholder="593999999999" value={membershipPhone} /></label>
               <div className="membership-plans">
-                <button className={membershipPlan === "six-months" ? "active" : ""} onClick={() => setMembershipPlan("six-months")} type="button"><strong>6 meses</strong><span>$5</span></button>
-                <button className={membershipPlan === "annual" ? "active" : ""} onClick={() => setMembershipPlan("annual")} type="button"><strong>1 año</strong><span>$10</span></button>
+                <button className={membershipPlan === "monthly" ? "active" : ""} onClick={() => setMembershipPlan("monthly")} type="button"><strong>1 mes</strong><span>$10</span></button>
+                <button className={membershipPlan === "six-months" ? "active" : ""} onClick={() => setMembershipPlan("six-months")} type="button"><strong>6 meses</strong><span>$50</span></button>
+                <button className={membershipPlan === "annual" ? "active" : ""} onClick={() => setMembershipPlan("annual")} type="button"><strong>1 año</strong><span>$80</span></button>
               </div>
+              <div className="membership-payment"><strong>Datos para la transferencia</strong><small>Titular: Byron Vera</small><small>Banco Pichincha · Ahorros 2210107606</small><small>Banco Internacional · Ahorros 1950703151</small><small>Banco Guayaquil · Ahorros 0061962064</small></div>
+              <div className="membership-channel"><button className={membershipChannel === "email" ? "active" : ""} onClick={() => setMembershipChannel("email")} type="button">Solicitar por correo</button><button className={membershipChannel === "whatsapp" ? "active" : ""} onClick={() => setMembershipChannel("whatsapp")} type="button">Solicitar por WhatsApp</button></div>
               <button className="primary-button" onClick={() => void requestMembership()} type="button">Solicitar aprobación</button>
             </div>
           )}
@@ -1369,7 +1815,7 @@ export default function GameConsole() {
         </div>
         <div className="operator">
           <div className="operator-avatar"><UserRound size={18} /></div>
-          <div><strong>{state.access.role === "admin" ? "Administrador" : "Operador"}</strong><span><i /> {authUser.email}</span></div>
+          <div><strong>{state.access.role === "admin" ? "Administrador" : "Operador"}</strong><span><i /> {authUser?.email || "Modo demo"}</span></div>
           <ChevronRight size={17} />
         </div>
         <nav>
@@ -1624,7 +2070,7 @@ export default function GameConsole() {
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
                 <div><span className="eyebrow">ADMINISTRACIÓN</span><h2>Cartones de la partida.</h2><p>Importa PDFs digitales o escaneados; también puedes completar una tabla manualmente.</p></div>
-                <button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button>
+                <div className="section-actions">{access?.role === "admin" && <><button className="secondary-button" onClick={() => proMaxFileInputRef.current?.click()} type="button"><FileText size={17} /> Importar Studio</button><button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button></>}</div>
               </div>
               <input
                 accept="application/pdf,.pdf"
@@ -1634,6 +2080,16 @@ export default function GameConsole() {
                 ref={fileInputRef}
                 type="file"
               />
+              {access?.role === "admin" && <input
+                accept="application/json,.json"
+                className="visually-hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void inspectProMaxPackage(file);
+                }}
+                ref={proMaxFileInputRef}
+                type="file"
+              />}
               <section
                 className={`upload-zone ${processingFiles ? "processing" : ""}`}
                 onDragOver={(event) => event.preventDefault()}
@@ -1657,6 +2113,25 @@ export default function GameConsole() {
                   </>
                 )}
               </section>
+              {proMaxImport && (
+                <section className="promax-import-panel">
+                  <div className="promax-import-head">
+                    <div><span className="eyebrow">PAQUETE VALIDADO</span><h3>Importación desde Bingo ProMax Studio</h3><p>Se incorporarán estos cartones a la partida actual. La partida y los cartones existentes no se reemplazarán.</p></div>
+                    <span className="secure-badge">v{proMaxImport.schemaVersion}</span>
+                  </div>
+                  <div className="promax-import-summary">
+                    <span><strong>{proMaxImport.cards.length}</strong><small>cartones válidos</small></span>
+                    <span><strong>{proMaxImport.rejected.length}</strong><small>pendientes</small></span>
+                    <span><strong>{proMaxImport.blocks}</strong><small>bloques</small></span>
+                    <span><strong>{proMaxImport.campaigns}</strong><small>campañas</small></span>
+                    <span><strong>{proMaxImport.patterns.length}</strong><small>patrones incluidos</small></span>
+                  </div>
+                  {proMaxImport.game && <div className="promax-import-game"><strong>{proMaxImport.game.name}</strong><span>{proMaxImport.game.date || "Fecha no indicada"} · patrón sugerido: {proMaxImport.game.activePatternName || "no indicado"}</span></div>}
+                  {access?.role === "admin" && proMaxImport.patterns.length > 0 && <label className="promax-import-option"><input checked={syncProMaxPatterns} disabled={proMaxImportBusy} onChange={(event) => setSyncProMaxPatterns(event.target.checked)} type="checkbox" /><span><strong>Sincronizar patrones del paquete</strong><small>Crea o actualiza los patrones de Studio y habilita los que estén marcados como activos.</small></span></label>}
+                  {proMaxImportProgress && <div className="promax-import-progress"><div><span>Importando por lotes de {PROMAX_IMPORT_CHUNK_SIZE} cartones</span><b>{proMaxImportProgress.completed.toLocaleString("es-EC")} / {proMaxImportProgress.total.toLocaleString("es-EC")}</b></div><i><em style={{ width: `${(proMaxImportProgress.completed / proMaxImportProgress.total) * 100}%` }} /></i></div>}
+                  <div className="promax-import-actions"><button className="ghost-button" disabled={proMaxImportBusy} onClick={() => setProMaxImport(null)} type="button">Cancelar</button><button className="primary-button" disabled={proMaxImportBusy || !proMaxImport.cards.length} onClick={() => void importProMaxPackage()} type="button">{proMaxImportBusy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} {proMaxImportBusy ? "Importando…" : "Importar en la partida actual"}</button></div>
+                </section>
+              )}
               {importWarnings.length > 0 && (
                 <section className="warning-box">
                   <AlertTriangle size={19} />
@@ -1688,8 +2163,9 @@ export default function GameConsole() {
                       card={card}
                       called={called}
                       key={card.id}
-                      onDelete={deleteCard}
-                      onToggleStatus={toggleCardStatus}
+                      onDelete={access?.role === "admin" ? deleteCard : undefined}
+                      onEdit={access?.role === "admin" ? openCardEditor : undefined}
+                      onToggleStatus={access?.role === "admin" ? toggleCardStatus : undefined}
                       patterns={allPatterns}
                       showCalled={cardLayers.called}
                       showPattern={cardLayers.pattern}
@@ -1700,7 +2176,7 @@ export default function GameConsole() {
                 </div>
               ) : (
                 <EmptyState
-                  action={<div className="empty-actions"><button className="primary-button" onClick={() => fileInputRef.current?.click()} type="button"><UploadCloud size={16} /> Importar PDF</button><button className="secondary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={16} /> Crear manual</button></div>}
+                  action={<div className="empty-actions"><button className="primary-button" onClick={() => fileInputRef.current?.click()} type="button"><UploadCloud size={16} /> Importar PDF</button>{access?.role === "admin" && <button className="secondary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={16} /> Crear manual</button>}</div>}
                   icon={Grid3X3}
                   text={search ? "Prueba con otro número, serie o nombre de archivo." : "Los cartones aparecerán aquí después de importarlos o crearlos."}
                   title={search ? "No hay coincidencias" : "La colección está vacía"}
@@ -1712,8 +2188,8 @@ export default function GameConsole() {
           {view === "patterns" && (
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
-                <div><span className="eyebrow">MODALIDADES</span><h2>Administra los patrones del juego.</h2><p>Inhabilita figuras ya premiadas, reactívalas o elimina patrones personalizados.</p></div>
-                <button className="primary-button" onClick={() => setPatternOpen(true)} type="button"><Plus size={17} /> Crear patrón</button>
+                <div><span className="eyebrow">MODALIDADES</span><h2>Administra los patrones del juego.</h2><p>Inhabilita figuras ya premiadas, reactívalas o elimina patrones de esta partida.</p></div>
+                <div className="section-actions"><button className="ghost-button" onClick={() => setSelectedPatternIds((current) => current.length === availablePatterns.length ? [] : availablePatterns.map((pattern) => pattern.id))} type="button">{selectedPatternIds.length === availablePatterns.length && availablePatterns.length ? "Deseleccionar todos" : "Seleccionar todos los patrones"}</button><button className="secondary-button" disabled={!selectedPatternIds.length} onClick={() => void deleteSelectedPatterns()} type="button"><Trash2 size={16} /> Eliminar seleccionados ({selectedPatternIds.length})</button><button className="primary-button" onClick={() => openPatternEditor()} type="button"><Plus size={17} /> Crear patrón</button></div>
               </div>
               <section className="active-pattern-hero all-patterns-hero">
                 <div>
@@ -1727,12 +2203,12 @@ export default function GameConsole() {
                 </div>
               </section>
               <div className="pattern-grid">
-                {availablePatterns.map((pattern) => {
+                {visiblePatterns.map((pattern) => {
                   const enabled = !state.disabledPatternIds.includes(pattern.id);
                   const hasWinner = state.winners.some((winner) => winner.patternId === pattern.id);
                   return (
                   <article className={`pattern-card ${enabled ? "active" : "disabled"}`} key={pattern.id}>
-                      <div className="pattern-card-top"><PatternMini pattern={pattern} /><span>{enabled ? <Check size={14} /> : <Pause size={14} />} {enabled ? "En juego" : "Inhabilitado"}</span></div>
+                      <div className="pattern-card-top"><PatternMini pattern={pattern} /><span><input aria-label={`Seleccionar ${pattern.name}`} checked={selectedPatternIds.includes(pattern.id)} onChange={(event) => setSelectedPatternIds((current) => event.target.checked ? [...new Set([...current, pattern.id])] : current.filter((id) => id !== pattern.id))} type="checkbox" /> {enabled ? <Check size={14} /> : <Pause size={14} />} {enabled ? "En juego" : "Inhabilitado"}</span></div>
                       <strong>{pattern.name}</strong>
                       <p>{pattern.description}</p>
                       {hasWinner && <div className="pattern-winner-note"><Trophy size={13} /> Ya tiene ganador</div>}
@@ -1740,13 +2216,15 @@ export default function GameConsole() {
                         <button className={enabled ? "ghost-button" : "secondary-button"} onClick={() => void togglePattern(pattern, !enabled)} type="button">
                           {enabled ? "Inhabilitar" : "Habilitar"}
                         </button>
-                        {pattern.custom && <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón" type="button"><Trash2 size={15} /></button>}
+                        {pattern.custom && <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><SquarePen size={15} /></button>}
+                        <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón de esta partida" type="button"><Trash2 size={15} /></button>
                       </div>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
                   </article>
                   );
                 })}
               </div>
+              {visiblePatterns.length < availablePatterns.length && <button className="secondary-button" onClick={() => setPatternLimit((current) => current + 60)} type="button">Cargar más patrones ({availablePatterns.length - visiblePatterns.length} restantes)</button>}
             </motion.div>
           )}
 
@@ -1827,7 +2305,7 @@ export default function GameConsole() {
                     <article key={membership.id}>
                       <span className={`membership-status status-${membership.status}`}>{membership.status}</span>
                       <div><strong>{membership.name || "Sin nombre"}</strong><small>{membership.email}</small></div>
-                      <div><b>{membership.plan === "annual" ? "Anual · $10" : "6 meses · $5"}</b><small>{membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small></div>
+                      <div><b>{membership.plan === "annual" ? "1 año · $80" : membership.plan === "six-months" ? "6 meses · $50" : "1 mes · $10"}</b><small>Comprobante: {membership.receiptNumber || "No indicado"} · {membership.expiresAt ? `Hasta ${new Date(membership.expiresAt).toLocaleDateString("es-EC")}` : "Sin activar"}</small></div>
                       <div className="membership-actions">
                         {membership.status !== "approved" && <button className="primary-button compact" onClick={() => void manageMembership(membership, "approveMembership")} type="button">Aprobar</button>}
                         {membership.deviceBound && <button className="secondary-button compact" onClick={() => void manageMembership(membership, "resetMembershipDevice")} type="button">Cambiar dispositivo</button>}
@@ -1844,6 +2322,41 @@ export default function GameConsole() {
       </section>
 
       <AnimatePresence>
+        {importReviewOpen && (
+          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
+            <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal import-review-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
+              <header>
+                <div><span className="eyebrow">REVISIÓN ANTES DE GUARDAR</span><h2>Cartones detectados</h2></div>
+                <button className="icon-button" onClick={() => setImportReviewOpen(false)} type="button"><X size={19} /></button>
+              </header>
+              <div className="import-review-summary">
+                <span><strong>{importPages}</strong> página(s)</span>
+                <span><strong>{importDrafts.length}</strong> cartón(es)</span>
+                <span><strong>{importDrafts.filter((card) => card.reviewStatus !== "needs-review").length}</strong> listos para guardar</span>
+                <span><strong>{importDrafts.filter((card) => card.reviewStatus === "needs-review").length}</strong> pendientes</span>
+              </div>
+              <p className="import-review-help">Confirma la numeración y el tipo de cartón. Solo los cartones listos se guardarán en la partida actual; los archivos PDF se procesan localmente y no se conservan.</p>
+              <div className="import-review-list">
+                {importDrafts.map((card) => {
+                  const needsReview = card.reviewStatus === "needs-review";
+                  return (
+                    <article className={needsReview ? "needs-review" : "ready-to-save"} key={card.id}>
+                      <div><strong>Cartón #{card.number || "sin número"}</strong><small>{card.sourceFile} · {card.sourcePage ? `pág. ${card.sourcePage}` : "ingreso"}</small></div>
+                      <span>{needsReview ? "Revisión requerida" : "Listo para guardar"}</span>
+                      <button className="secondary-button compact" onClick={() => openCardEditor(card, "import")} type="button"><SquarePen size={13} /> Editar casillas y forma</button>
+                      {card.reviewNotes?.length ? <p>{card.reviewNotes.join(" · ")}</p> : null}
+                    </article>
+                  );
+                })}
+              </div>
+              <footer>
+                <button className="ghost-button" onClick={() => { setImportReviewOpen(false); setImportDrafts([]); }} type="button">Cancelar</button>
+                <button className="primary-button" disabled={!importDrafts.length} onClick={() => void saveImportedCards()} type="button"><Check size={17} /> Guardar cartones revisados</button>
+              </footer>
+            </motion.section>
+          </motion.div>
+        )}
+
         {manualOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal manual-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
@@ -1880,10 +2393,59 @@ export default function GameConsole() {
           </motion.div>
         )}
 
+        {cardDraft && (
+          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
+            <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal card-editor-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
+              <header>
+                <div><span className="eyebrow">EDICIÓN DE CARTÓN</span><h2>{cardEditorMode === "import" ? "Corregir cartón detectado" : "Editar cartón"}</h2></div>
+                <button className="icon-button" onClick={() => setCardDraft(null)} type="button"><X size={19} /></button>
+              </header>
+              <div className="card-editor-layout">
+                <div className="card-editor-fields">
+                  <label>Número del cartón<input onChange={(event) => setCardDraft((current) => current ? { ...current, number: event.target.value } : current)} value={cardDraft.number} /></label>
+                  <label>Serie <small>opcional</small><input onChange={(event) => setCardDraft((current) => current ? { ...current, serial: event.target.value } : current)} value={cardDraft.serial ?? ""} /></label>
+                  <label>Tipo de juego
+                    <select onChange={(event) => updateCardDraftType(event.target.value as CardType)} value={cardDraft.layout?.type ?? "classic-5x5"}>
+                      {CARD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <div className="manual-note"><PencilLine size={17} /><p><strong>Corrección manual</strong>Completa las casillas faltantes o cambia la forma detectada. Al guardar se validan rangos, repetidos y duplicados.</p></div>
+                </div>
+                <div className="card-editor-grid">
+                  <div className="manual-bingo-head">{BINGO.map((letter) => <span key={letter}>{letter}</span>)}</div>
+                  <div>
+                    {Array.from({ length: 25 }, (_, index) => {
+                      const layout = cardLayoutFor(cardDraft);
+                      const allowed = layout.type === "classic-5x5" || layout.rows === 5 && layout.columns === 5
+                        ? true
+                        : layout.cells.some((cell) => cell.row * 5 + cell.column === index);
+                      const free = index === 12 && layout.type === "classic-5x5" && cardDraft.grid[index] === 0;
+                      return <input
+                        aria-label={`Casilla ${index + 1}`}
+                        className={free ? "free" : ""}
+                        disabled={!allowed || free}
+                        inputMode="numeric"
+                        key={index}
+                        max="90"
+                        min="1"
+                        onChange={(event) => setCardDraft((current) => current ? { ...current, grid: current.grid.map((value, cell) => cell === index ? Number(event.target.value.replace(/\D/g, "").slice(0, 2) || 0) : value) } : current)}
+                        placeholder={free ? "LIBRE" : allowed ? "—" : "·"}
+                        value={free ? "LIBRE" : cardDraft.grid[index] || ""}
+                      />;
+                    })}
+                  </div>
+                </div>
+              </div>
+              <p className="card-editor-help">Si el cartón fue clasificado como Sonrisa por error, selecciona «Tradicional 5×5» y completa las 25 casillas. Las casillas vacías de formatos adicionales quedan protegidas para no alterar su figura.</p>
+              <footer><button className="ghost-button" onClick={() => setCardDraft(null)} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveCardEdit()} type="button"><Check size={17} /> Guardar corrección</button></footer>
+            </motion.section>
+          </motion.div>
+        )}
+
         {patternOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal pattern-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
-              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>Nuevo patrón</h2></div><button className="icon-button" onClick={() => setPatternOpen(false)} type="button"><X size={19} /></button></header>
+              <header><div><span className="eyebrow">EDITOR VISUAL</span><h2>{editingPattern ? "Editar patrón" : "Nuevo patrón"}</h2></div><button className="icon-button" onClick={() => { setPatternOpen(false); setEditingPattern(null); }} type="button"><X size={19} /></button></header>
               <div className="pattern-editor">
                 <div>
                   <BingoGrid editable onCellClick={(index) => setPatternCells((current) => current.includes(index) ? current.filter((cell) => cell !== index) : [...current, index])} selected={patternCells} />
@@ -1896,7 +2458,7 @@ export default function GameConsole() {
                   <div className="selection-count"><Sparkles size={18} /><div><strong>{patternCells.length} casillas seleccionadas</strong><span>Dificultad estimada: {patternCells.length > 12 ? "Alta" : patternCells.length > 7 ? "Media" : "Fácil"}</span></div></div>
                 </div>
               </div>
-              <footer><button className="ghost-button" onClick={() => setPatternOpen(false)} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveCustomPattern()} type="button"><Check size={17} /> Guardar patrón</button></footer>
+              <footer><button className="ghost-button" onClick={() => { setPatternOpen(false); setEditingPattern(null); }} type="button">Cancelar</button><button className="primary-button" onClick={() => void saveCustomPattern()} type="button"><Check size={17} /> {editingPattern ? "Guardar cambios" : "Guardar patrón"}</button></footer>
             </motion.section>
           </motion.div>
         )}
@@ -1953,7 +2515,7 @@ export default function GameConsole() {
               <section><span className="settings-label">APARIENCIA</span><div className="theme-picker"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button></div></section>
               <section><span className="settings-label">COMPORTAMIENTO</span><label className="setting-row"><span><Volume2 size={18} /></span><div><strong>Sonidos</strong><small>Bolillas y anuncio de ganador</small></div><input checked={sound} onChange={(event) => setSound(event.target.checked)} type="checkbox" /></label><label className="setting-row"><span><Pause size={18} /></span><div><strong>Pausa automática</strong><small>Detener al detectar un bingo</small></div><input checked={game.autoPause} onChange={(event) => void updateAutoPause(event.target.checked)} type="checkbox" /></label></section>
               <section className="system-status"><span className="settings-label">ESTADO DEL SISTEMA</span><div><ShieldCheck size={20} /><p><strong>Todo operativo</strong><small>Datos persistentes y validación en tiempo real.</small></p></div></section>
-              <section><span className="settings-label">CUENTA</span><div className="account-summary"><UserRound size={18} /><div><strong>{authUser.email}</strong><small>{state.access.role === "admin" ? "Administrador" : "Usuario aprobado"}</small></div></div><button className="secondary-button account-signout" onClick={() => void supabase.auth.signOut()} type="button">Cerrar sesión</button></section>
+              <section><span className="settings-label">CUENTA</span><div className="account-summary"><UserRound size={18} /><div><strong>{authUser?.email || "Modo demo"}</strong><small>{state.access.role === "admin" ? "Administrador" : demoMode ? "Demostración" : "Usuario aprobado"}</small></div></div><button className="secondary-button account-signout" onClick={() => demoMode ? (setDemoMode(false), setState(null), setAccess(null)) : void supabase.auth.signOut()} type="button">Cerrar sesión</button></section>
             </motion.aside>
           </>
         )}

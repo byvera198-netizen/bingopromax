@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.BingoControlProMax" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#c8ff24</item>
+        <item name="android:navigationBarColor">#0b0f0d</item>
+        <item name="android:statusBarColor">#0b0f0d</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

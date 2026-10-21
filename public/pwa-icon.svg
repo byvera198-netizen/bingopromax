@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Bingo ProMax">
+  <rect width="512" height="512" rx="112" fill="#0b0f0d"/>
+  <rect x="38" y="38" width="436" height="436" rx="96" fill="#c8ff24"/>
+  <circle cx="410" cy="104" r="22" fill="#ffcf33"/>
+  <path fill="#0b0f0d" d="M150 118h120c76 0 122 36 122 96 0 35-18 61-49 75 38 12 59 40 59 79 0 67-50 106-137 106H150V118Zm82 67v76h35c28 0 43-14 43-38 0-25-15-38-43-38h-35Zm0 143v79h43c35 0 53-15 53-40 0-26-18-39-53-39h-43Z"/>
+</svg>

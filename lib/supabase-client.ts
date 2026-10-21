@@ -1,8 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
-export const SUPABASE_URL = "https://mnshvsxhntqsmzbvomhe.supabase.co";
+export const SUPABASE_URL = "https://qidfcahfwvdbysaszfhl.supabase.co";
 export const SUPABASE_PUBLISHABLE_KEY =
-  "sb_publishable_DBOaxRwgSRDSmdBtTEKTsQ_GB_sT8ZA";
+  "sb_publishable_YMUMwP2WAwEow03fi-nlJA_gYu0-uTK";
 
 export const supabase = createClient(
   SUPABASE_URL,
@@ -12,7 +12,7 @@ export const supabase = createClient(
       detectSessionInUrl: true,
       persistSession: true,
       autoRefreshToken: true,
-      flowType: "implicit",
+      flowType: "pkce",
     },
   },
 );

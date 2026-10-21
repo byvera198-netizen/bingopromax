@@ -1,0 +1,23 @@
+{
+  "name": "Bingo Control ProMax",
+  "short_name": "Bingo ProMax",
+  "description": "Control profesional de partidas, cartones PDF y verificación automática.",
+  "lang": "es-EC",
+  "dir": "ltr",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "landscape",
+  "theme_color": "#0b0f0d",
+  "background_color": "#0b0f0d",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
