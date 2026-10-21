@@ -920,6 +920,59 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "replacePattern") {
+      const pattern = body.pattern as BingoPattern;
+      const replacesPatternId = String(body.replacesPatternId ?? "").trim();
+      if (!gameId || !replacesPatternId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
+        return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
+      }
+      if (pattern.id === replacesPatternId) {
+        return Response.json({ error: "El patrón editado necesita un identificador nuevo." }, { status: 400 });
+      }
+      const changedAt = now();
+      // Editing an official figure creates a per-game custom replacement.
+      // The catalogue and every other game keep using the original figure.
+      await db.batch([
+        db.prepare(
+          `INSERT INTO patterns (
+            id, name, description, color, category, difficulty, cells_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          pattern.id,
+          pattern.name,
+          pattern.description,
+          pattern.color,
+          pattern.category,
+          pattern.difficulty,
+          JSON.stringify(pattern.cells),
+          changedAt,
+        ),
+        db.prepare(
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, created_at)
+           VALUES (?, ?, 1, 1, 0, ?)`
+        ).bind(gameId, pattern.id, changedAt),
+        db.prepare(
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, created_at)
+           VALUES (?, ?, 0, 0, 1, ?)
+           ON CONFLICT(game_id, pattern_id) DO UPDATE SET enabled = 0, deleted = 1`
+        ).bind(gameId, replacesPatternId, changedAt),
+        db.prepare(
+          `UPDATE games
+           SET active_pattern_id = ?, active_pattern_name = ?, active_pattern_cells = ?, updated_at = ?
+           WHERE id = ? AND active_pattern_id = ?`
+        ).bind(
+          pattern.id,
+          pattern.name,
+          JSON.stringify(pattern.cells),
+          changedAt,
+          gameId,
+          replacesPatternId,
+        ),
+      ]);
+      await audit(db, gameId, "REPLACE_PATTERN", `${replacesPatternId} → ${pattern.name}`, actor);
+      return Response.json({ ok: true });
+    }
+
     if (action === "togglePattern") {
       if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
       const patternId = String(body.patternId ?? "");

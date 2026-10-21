@@ -1438,8 +1438,9 @@ export default function GameConsole() {
       notify("Escribe un nombre y selecciona al menos una casilla.", "warning");
       return;
     }
+    const editingOfficial = Boolean(editingPattern && !editingPattern.custom);
     const pattern: BingoPattern = {
-      id: editingPattern?.id ?? `custom-${crypto.randomUUID()}`,
+      id: editingOfficial ? `custom-${crypto.randomUUID()}` : (editingPattern?.id ?? `custom-${crypto.randomUUID()}`),
       name: patternName.trim(),
       description: patternDescription.trim() || "Patrón personalizado",
       color: patternColor,
@@ -1450,12 +1451,23 @@ export default function GameConsole() {
       custom: true,
     };
     try {
-      await api({ action: editingPattern ? "updatePattern" : "savePattern", gameId: state.game.id, pattern });
+      await api({
+        action: editingOfficial ? "replacePattern" : (editingPattern ? "updatePattern" : "savePattern"),
+        gameId: state.game.id,
+        pattern,
+        ...(editingOfficial ? { replacesPatternId: editingPattern?.id } : {}),
+      });
       setState({
         ...state,
-        customPatterns: editingPattern
+        customPatterns: editingPattern && !editingOfficial
           ? state.customPatterns.map((item) => item.id === pattern.id ? pattern : item)
           : [pattern, ...state.customPatterns],
+        deletedPatternIds: editingOfficial && editingPattern
+          ? [...new Set([...(state.deletedPatternIds ?? []), editingPattern.id])]
+          : state.deletedPatternIds,
+        disabledPatternIds: editingOfficial && editingPattern
+          ? state.disabledPatternIds.filter((id) => id !== editingPattern.id)
+          : state.disabledPatternIds,
       });
       setPatternOpen(false);
       setEditingPattern(null);
@@ -2216,7 +2228,7 @@ export default function GameConsole() {
                         <button className={enabled ? "ghost-button" : "secondary-button"} onClick={() => void togglePattern(pattern, !enabled)} type="button">
                           {enabled ? "Inhabilitar" : "Habilitar"}
                         </button>
-                        {pattern.custom && <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón" type="button"><SquarePen size={15} /></button>}
+                        <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón en esta partida" type="button"><SquarePen size={15} /></button>
                         <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón de esta partida" type="button"><Trash2 size={15} /></button>
                       </div>
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
