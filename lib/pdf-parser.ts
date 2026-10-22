@@ -574,7 +574,7 @@ function hasAdditionalGameMarker(items: PdfTextItem[]) {
   // Sabrosito sheets often contain a compact 3+2 layout and watermarks that
   // make the PDF text layer incomplete.  Treat the label as an additional
   // game marker so the OCR fallback is always run for these pages.
-  return /\b(avion|flecha|espada|pesa|rombo|bomba|sonrisa|mini\s*o|perrito|cruz|martillo|yapa|eche\s*leche|bom\s*bom|keke|loco|linea|sabrosit(?:o|os))\b/.test(text);
+  return /\b(avion|flecha|espada|pesa|rombo|bomba|sonrisa|mini\s*o|perrito|cruz|martillo|yapa|eche\s*leche|bom\s*bom|keke|loco|linea|numero(?:s)?|sabrosit(?:o|os))\b/.test(text);
 }
 
 function groupIntoRows(numbers: PositionedNumber[]) {
@@ -2427,7 +2427,7 @@ export async function parseBingoPdf(
 
       if (!pageCards.length) {
         warnings.push(
-          `Página ${pageNumber}: no se encontró un cartón 5×5 o Sabrosito válido. Puedes crearlo con “Ingreso manual”.`,
+          `Página ${pageNumber}: no se encontró un cartón o juego adicional válido. Puedes corregirlo con “Ingreso manual”.`,
         );
       }
       cards.push(...pageCards);
