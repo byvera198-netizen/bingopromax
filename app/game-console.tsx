@@ -74,6 +74,7 @@ import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
+type PatternFilter = "all" | "cartones" | "numeros" | "adicionales";
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
@@ -351,8 +352,9 @@ function CardPreview({
     <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
       <header>
         <div>
-          <span>Cartón</span>
-          <strong>#{card.number}</strong>
+          <span>Número del cartón</span>
+          <strong className="ticket-number" title={card.number}>#{card.number}</strong>
+          <small className="ticket-page">{card.sourcePage ? `Página ${card.sourcePage}` : "Página no indicada"}</small>
         </div>
         <div className="ticket-actions">
           {onEdit && (
@@ -486,6 +488,7 @@ export default function GameConsole() {
   const [patternColor, setPatternColor] = useState("#d7ff3f");
   const [editingPattern, setEditingPattern] = useState<BingoPattern | null>(null);
   const [selectedPatternIds, setSelectedPatternIds] = useState<string[]>([]);
+  const [patternFilter, setPatternFilter] = useState<PatternFilter>("all");
   const [patternLimit, setPatternLimit] = useState(60);
   const [gameDraft, setGameDraft] = useState({ name: "", date: "", prize: "", notes: "" });
   const [membershipName, setMembershipName] = useState("");
@@ -743,6 +746,18 @@ export default function GameConsole() {
     ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id)),
     [state?.cards, state?.customPatterns, state?.deletedPatternIds],
   );
+  const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
+    const category = pattern.category.toLocaleLowerCase("es");
+    if (category === "números" || category === "numeros") return "numeros";
+    if (category === "juegos adicionales" || pattern.id === COMPACT_CARD_PATTERN.id) return "adicionales";
+    return "cartones";
+  }, []);
+  const filteredPatterns = useMemo(
+    () => patternFilter === "all"
+      ? availablePatterns
+      : availablePatterns.filter((pattern) => patternBucket(pattern) === patternFilter),
+    [availablePatterns, patternBucket, patternFilter],
+  );
   const allPatterns = useMemo(
     () =>
       availablePatterns.filter(
@@ -751,7 +766,7 @@ export default function GameConsole() {
     [availablePatterns, state?.disabledPatternIds],
   );
   const gamePatterns = allPatterns;
-  const visiblePatterns = useMemo(() => availablePatterns.slice(0, patternLimit), [availablePatterns, patternLimit]);
+  const visiblePatterns = useMemo(() => filteredPatterns.slice(0, patternLimit), [filteredPatterns, patternLimit]);
   const patternStatuses = useMemo(
     () =>
       gamePatterns.map((pattern) => {
@@ -818,8 +833,8 @@ export default function GameConsole() {
         return;
       }
       const number = Number(rawNumber);
-      if (!Number.isInteger(number) || number < 1 || number > 90) {
-        notify("Ingresa un número entero entre 1 y 90.", "warning");
+      if (!Number.isInteger(number) || number < 1 || number > 75) {
+        notify("Ingresa un número entero entre 1 y 75.", "warning");
         return;
       }
       if (called.has(number)) {
@@ -1903,7 +1918,7 @@ export default function GameConsole() {
 
               <div className="stats-grid">
                 <StatCard accent="lime" detail={`${state.cards.filter((card) => card.status === "active").length} activos`} icon={Grid3X3} label="Cartones cargados" value={state.cards.length} />
-                <StatCard accent="mint" detail={`${90 - state.draws.length} restantes`} icon={CircleGauge} label="Bolillas sorteadas" value={state.draws.length} />
+                <StatCard accent="mint" detail={`${75 - state.draws.length} restantes`} icon={CircleGauge} label="Bolillas sorteadas" value={state.draws.length} />
                 <StatCard accent="amber" detail={state.winners.length ? "Validación confirmada" : "Sin coincidencias completas"} icon={Trophy} label="Ganadores" value={state.winners.length} />
                 <StatCard accent="blue" detail="Evaluación simultánea" icon={Sparkles} label="Patrones activos" value={gamePatterns.length} />
               </div>
@@ -1926,7 +1941,7 @@ export default function GameConsole() {
                         <input
                           id="ball-number"
                           inputMode="numeric"
-                          max="90"
+                          max="75"
                           min="1"
                           onChange={(event) => setBallInput(event.target.value.replace(/\D/g, "").slice(0, 2))}
                           onKeyDown={(event) => { if (event.key === "Enter") void registerBall(ballInput); }}
@@ -1947,7 +1962,7 @@ export default function GameConsole() {
                     {ballBoardOpen && (
                       <motion.div animate={{ height: "auto", opacity: 1 }} className="number-board-wrap" exit={{ height: 0, opacity: 0 }} initial={{ height: 0, opacity: 0 }}>
                         <div className="number-board">
-                          {Array.from({ length: 90 }, (_, index) => index + 1).map((number) => (
+                          {Array.from({ length: 75 }, (_, index) => index + 1).map((number) => (
                             <button
                               className={called.has(number) ? "called" : ""}
                               disabled={called.has(number) || game.status === "paused"}
@@ -1967,7 +1982,7 @@ export default function GameConsole() {
                 <section className="panel history-panel">
                   <div className="panel-heading">
                     <div><span className="eyebrow"><History size={13} /> SECUENCIA</span><h3>Historial de bolillas</h3></div>
-                    <strong>{Math.round((state.draws.length / 90) * 100)}%</strong>
+                    <strong>{Math.round((state.draws.length / 75) * 100)}%</strong>
                   </div>
                   {state.draws.length ? (
                     <>
@@ -1976,7 +1991,7 @@ export default function GameConsole() {
                           <span className={index === 0 ? "latest" : ""} key={draw.id}>{draw.number}</span>
                         ))}
                       </div>
-                      <div className="game-progress"><span><i style={{ width: `${(state.draws.length / 90) * 100}%` }} /></span><small>{90 - state.draws.length} números restantes</small></div>
+                      <div className="game-progress"><span><i style={{ width: `${(state.draws.length / 75) * 100}%` }} /></span><small>{75 - state.draws.length} números restantes</small></div>
                     </>
                   ) : (
                     <EmptyState icon={CircleGauge} text="Cada bolilla aparecerá aquí en el orden exacto de salida." title="Aún no empieza el sorteo" />
@@ -2201,7 +2216,19 @@ export default function GameConsole() {
             <motion.div animate={{ opacity: 1, y: 0 }} className="view-stack" initial={{ opacity: 0, y: 8 }}>
               <div className="section-heading">
                 <div><span className="eyebrow">MODALIDADES</span><h2>Administra los patrones del juego.</h2><p>Inhabilita figuras ya premiadas, reactívalas o elimina patrones de esta partida.</p></div>
-                <div className="section-actions"><button className="ghost-button" onClick={() => setSelectedPatternIds((current) => current.length === availablePatterns.length ? [] : availablePatterns.map((pattern) => pattern.id))} type="button">{selectedPatternIds.length === availablePatterns.length && availablePatterns.length ? "Deseleccionar todos" : "Seleccionar todos los patrones"}</button><button className="secondary-button" disabled={!selectedPatternIds.length} onClick={() => void deleteSelectedPatterns()} type="button"><Trash2 size={16} /> Eliminar seleccionados ({selectedPatternIds.length})</button><button className="primary-button" onClick={() => openPatternEditor()} type="button"><Plus size={17} /> Crear patrón</button></div>
+                <div className="section-actions"><button className="ghost-button" onClick={() => setSelectedPatternIds((current) => current.length === filteredPatterns.length ? [] : filteredPatterns.map((pattern) => pattern.id))} type="button">{selectedPatternIds.length === filteredPatterns.length && filteredPatterns.length ? "Deseleccionar todos" : "Seleccionar todos los patrones"}</button><button className="secondary-button" disabled={!selectedPatternIds.length} onClick={() => void deleteSelectedPatterns()} type="button"><Trash2 size={16} /> Eliminar seleccionados ({selectedPatternIds.length})</button><button className="primary-button" onClick={() => openPatternEditor()} type="button"><Plus size={17} /> Crear patrón</button></div>
+              </div>
+              <div className="pattern-filter-bar" aria-label="Filtrar patrones">
+                <span>Filtrar patrones:</span>
+                {([
+                  ["all", "Todos"],
+                  ["cartones", "Cartones"],
+                  ["numeros", "Números"],
+                  ["adicionales", "Adicionales"],
+                ] as Array<[PatternFilter, string]>).map(([value, label]) => {
+                  const count = value === "all" ? availablePatterns.length : availablePatterns.filter((pattern) => patternBucket(pattern) === value).length;
+                  return <button aria-pressed={patternFilter === value} className={patternFilter === value ? "active" : ""} key={value} onClick={() => { setPatternFilter(value); setPatternLimit(60); }} type="button">{label} <b>{count}</b></button>;
+                })}
               </div>
               <section className="active-pattern-hero all-patterns-hero">
                 <div>
@@ -2236,7 +2263,7 @@ export default function GameConsole() {
                   );
                 })}
               </div>
-              {visiblePatterns.length < availablePatterns.length && <button className="secondary-button" onClick={() => setPatternLimit((current) => current + 60)} type="button">Cargar más patrones ({availablePatterns.length - visiblePatterns.length} restantes)</button>}
+              {visiblePatterns.length < filteredPatterns.length && <button className="secondary-button" onClick={() => setPatternLimit((current) => current + 60)} type="button">Cargar más patrones ({filteredPatterns.length - visiblePatterns.length} restantes)</button>}
             </motion.div>
           )}
 

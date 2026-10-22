@@ -237,7 +237,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ticket > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .ticket-actions { display: flex; align-items: center; gap: 5px; }
 .danger-button { color: var(--red) !important; }
-.ticket > header > div { min-width: 0; display: flex; flex-direction: column; }.ticket > header span { color: var(--muted); font-size: 7px; text-transform: uppercase; letter-spacing: .12em; }.ticket > header strong { overflow: hidden; margin-top: 2px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+.ticket > header > div { min-width: 0; display: flex; flex-direction: column; }.ticket > header span { color: var(--muted); font-size: 7px; text-transform: uppercase; letter-spacing: .12em; }.ticket > header strong { overflow: hidden; margin-top: 2px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }.ticket > header strong.ticket-number { max-width: 100%; overflow-wrap: anywhere; white-space: normal; line-height: 1.2; }.ticket-page { margin-top: 4px; color: var(--lime); font-size: 8px; font-weight: 700; }
 .ticket-wins { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: -2px 0 9px; padding: 6px 7px; border: 1px solid rgba(215,255,63,.2); border-radius: 7px; background: var(--lime-soft); color: var(--lime); }
 .ticket-wins span { overflow: hidden; color: var(--text); font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-wins b { font-size: 6px; text-transform: uppercase; letter-spacing: .08em; }
@@ -290,6 +290,10 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .pattern-stack-preview .pattern-mini { width: 58px; height: 58px; grid-template-columns: repeat(5, 7px); gap: 3px; border-radius: 13px; box-shadow: 0 12px 35px rgba(0,0,0,.16); }
 .pattern-stack-preview .pattern-mini i { width: 7px; height: 7px; }
 .pattern-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pattern-filter-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 10px; }
+.pattern-filter-bar button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-size: 10px; font-weight: 700; cursor: pointer; }
+.pattern-filter-bar button:hover, .pattern-filter-bar button.active { border-color: var(--lime); color: var(--text); background: var(--lime-soft); }
+.pattern-filter-bar button b { color: var(--lime); font-family: var(--font-geist-mono); font-size: 9px; }
 .pattern-card { display: flex; flex-direction: column; min-height: 190px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); text-align: left; cursor: pointer; transition: .18s; }
 .pattern-card:hover { transform: translateY(-2px); border-color: var(--muted-2); }.pattern-card.active { border-color: rgba(215,255,63,.28); cursor: default; box-shadow: inset 0 0 0 1px rgba(215,255,63,.05); }
 .pattern-card.disabled { opacity: .62; filter: saturate(.35); cursor: default; }
