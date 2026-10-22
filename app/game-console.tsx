@@ -82,6 +82,13 @@ const ADMIN_EMAIL = "byvera198@gmail.com";
 const ADMIN_EMAILS = ["byvera198@gmail.com", "bveraalvear@gmail.com"];
 const ADMIN_WHATSAPP = "593985280991";
 const PROMAX_IMPORT_CHUNK_SIZE = 500;
+
+function sortPatternsNaturally(patterns: BingoPattern[]) {
+  return [...patterns].sort((left, right) =>
+    left.name.localeCompare(right.name, "es", { numeric: true, sensitivity: "base" })
+    || left.id.localeCompare(right.id, "es", { numeric: true, sensitivity: "base" }),
+  );
+}
 const CARD_TYPE_OPTIONS: Array<{ value: CardType; label: string }> = [
   { value: "classic-5x5", label: "Tradicional 5×5" },
   { value: "linea-5", label: "Línea de 5 números" },
@@ -737,13 +744,13 @@ export default function GameConsole() {
   const game = state?.game;
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
   const availablePatterns = useMemo(
-    () => [
+    () => sortPatternsNaturally([
       ...BUILTIN_PATTERNS,
       ...(state?.customPatterns ?? []),
       ...(state?.cards.some((card) => card.grid.length === 5)
         ? [COMPACT_CARD_PATTERN]
         : []),
-    ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id)),
+    ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id))),
     [state?.cards, state?.customPatterns, state?.deletedPatternIds],
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
@@ -759,10 +766,9 @@ export default function GameConsole() {
     [availablePatterns, patternBucket, patternFilter],
   );
   const allPatterns = useMemo(
-    () =>
-      availablePatterns.filter(
-        (pattern) => !state?.disabledPatternIds.includes(pattern.id),
-      ),
+    () => sortPatternsNaturally(availablePatterns.filter(
+      (pattern) => !state?.disabledPatternIds.includes(pattern.id),
+    )),
     [availablePatterns, state?.disabledPatternIds],
   );
   const gamePatterns = allPatterns;
