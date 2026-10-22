@@ -866,7 +866,15 @@ export function patternsForCard(
     return activePatterns.filter((pattern) => pattern.id === additional.id);
   }
   return isClassicCard(card)
-    ? activePatterns.filter((pattern) => pattern.id !== COMPACT_CARD_PATTERN.id)
+    ? activePatterns.filter((pattern) => {
+        const category = pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        // Additional sheets (including Sabrositos, letters and numbered
+        // figures) must never be evaluated on a traditional 5×5 ticket.
+        return pattern.id !== COMPACT_CARD_PATTERN.id &&
+          category !== "juegos adicionales" &&
+          category !== "letras" &&
+          category !== "numeros";
+      })
     : [completionPatternFor(card)];
 }
 

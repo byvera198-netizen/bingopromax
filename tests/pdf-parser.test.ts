@@ -9,6 +9,7 @@ import {
   validateBingoCard,
   isWinningCard,
   patternForCard,
+  patternsForCard,
   winningPatternsForCard,
   type BingoCard,
 } from "../lib/bingo";
@@ -337,6 +338,15 @@ test("un cartón Sabrosito gana al completar sus cinco números", () => {
     progress: 0.8,
   });
   assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
+});
+
+test("un cartón 5×5 no evalúa patrones de hojas adicionales", () => {
+  const active = BUILTIN_PATTERNS;
+  const ids = new Set(patternsForCard({ grid: baseGrid } as BingoCard, active).map((pattern) => pattern.id));
+  assert.equal(ids.has("adicional-avion"), false);
+  assert.equal(ids.has("letra-a"), false);
+  assert.equal(ids.has("numero-1"), false);
+  assert.equal(ids.has("linea-horizontal"), true);
 });
 
 test("separa dos cuadrículas escaneadas por sus líneas", () => {
