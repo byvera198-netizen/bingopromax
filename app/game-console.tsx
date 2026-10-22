@@ -75,6 +75,7 @@ import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
 type PatternFilter = "all" | "cartones" | "numeros" | "adicionales";
+type CardFilter = "all" | "5x5" | "sabrositos" | "numeros" | "adicionales";
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
@@ -115,6 +116,16 @@ function resizeCardGrid(grid: number[], size: number, type: CardType) {
     if (type === "classic-5x5" && index === 12) return grid[index] === 0 ? 0 : grid[index] ?? 0;
     return grid[index] && grid[index] > 0 ? grid[index] : 0;
   });
+}
+
+function cardFilterFor(card: BingoCard): Exclude<CardFilter, "all"> {
+  if (card.grid.length === 25) return "5x5";
+  const layoutType = String(card.layout?.type ?? "").toLowerCase();
+  if (layoutType.includes("sabrosito")) return "sabrositos";
+  const additional = additionalPatternForCard(card);
+  const category = additional?.category.toLocaleLowerCase("es") ?? "";
+  if (category === "números" || category === "numeros" || additional?.name.toLocaleLowerCase("es").startsWith("número")) return "numeros";
+  return "adicionales";
 }
 
 function cardEditorCanvas(card: BingoCard) {
@@ -466,6 +477,7 @@ export default function GameConsole() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [winnerModal, setWinnerModal] = useState<Winner[]>([]);
   const [search, setSearch] = useState("");
+  const [cardFilter, setCardFilter] = useState<CardFilter>("all");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [nowTick, setNowTick] = useState(0);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -1673,11 +1685,14 @@ export default function GameConsole() {
     const term = search.trim().toLowerCase();
     return state.cards
       .filter(
-        (card) =>
-          !term ||
-        card.number.toLowerCase().includes(term) ||
-        card.sourceFile.toLowerCase().includes(term) ||
-        card.serial?.toLowerCase().includes(term),
+        (card) => {
+          const matchesFilter = cardFilter === "all" || cardFilterFor(card) === cardFilter;
+          const matchesSearch = !term
+            || card.number.toLowerCase().includes(term)
+            || card.sourceFile.toLowerCase().includes(term)
+            || card.serial?.toLowerCase().includes(term);
+          return matchesFilter && matchesSearch;
+        },
       )
       .sort(
         (a, b) =>
@@ -1694,7 +1709,7 @@ export default function GameConsole() {
             state.winners.filter((winner) => winner.cardId === a.id),
           ).progress.progress,
       );
-  }, [allPatterns, called, search, state]);
+  }, [allPatterns, called, cardFilter, search, state]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -2182,6 +2197,19 @@ export default function GameConsole() {
               <div className="cards-toolbar">
                 <div className="search-box"><Search size={17} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
                 <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
+              </div>
+              <div className="pattern-filter-bar card-filter-bar" aria-label="Filtrar cartones por formato">
+                <span>Filtrar cartones:</span>
+                {([
+                  ["all", "Todos"],
+                  ["5x5", "Cartones 5×5"],
+                  ["sabrositos", "Sabrositos"],
+                  ["numeros", "Números"],
+                  ["adicionales", "Juegos adicionales"],
+                ] as Array<[CardFilter, string]>).map(([value, label]) => {
+                  const count = value === "all" ? state.cards.length : state.cards.filter((card) => cardFilterFor(card) === value).length;
+                  return <button aria-pressed={cardFilter === value} className={cardFilter === value ? "active" : ""} key={value} onClick={() => setCardFilter(value)} type="button">{label} <b>{count}</b></button>;
+                })}
               </div>
               <div className="card-legend" aria-label="Controles de visualización del cartón">
                 <button aria-pressed={cardLayers.called} className={cardLayers.called ? "active" : ""} onClick={() => setCardLayers((current) => ({ ...current, called: !current.called }))} type="button"><i className="called-number" /> Número sorteado</button>
