@@ -336,13 +336,15 @@ export function detectCompactRectangles(
     Array.from({ length: height }, (_, y) => ({
       position: y,
       strength: longestDarkRun(width, (x) => isDark(x, y), 3),
-    })).filter((line) => line.strength >= width * 0.22),
+    // Watermarks interrupt the printed frame, so accept shorter continuous
+    // runs while the corner and edge-density checks below still reject noise.
+    })).filter((line) => line.strength >= width * 0.16),
   );
   const vertical = groupLineBands(
     Array.from({ length: width }, (_, x) => ({
       position: x,
       strength: longestDarkRun(height, (y) => isDark(x, y), 3),
-    })).filter((line) => line.strength >= height * 0.08),
+    })).filter((line) => line.strength >= height * 0.055),
   );
   const candidates: CompactRectangle[] = [];
   for (let leftIndex = 0; leftIndex < vertical.length; leftIndex += 1) {
@@ -373,7 +375,7 @@ export function detectCompactRectangles(
             top < height * 0.14 ||
             // Sabrosito cards are short 3+2 cards; on A4 scans their
             // height is commonly close to 8–11% of the page.
-            rectangleHeight < height * 0.08 ||
+            rectangleHeight < height * 0.065 ||
             rectangleHeight > height * 0.3
           ) {
             continue;
@@ -415,7 +417,7 @@ export function detectCompactRectangles(
             }
             return sum + dark / Math.max(1, samples);
           }, 0) / 4;
-          if (edgeDensity < 0.45) continue;
+          if (edgeDensity < 0.32) continue;
           candidates.push({
             x: left,
             y: top,
