@@ -571,10 +571,11 @@ function identifiersFromTextItems(items: PdfTextItem[]) {
 
 function hasAdditionalGameMarker(items: PdfTextItem[]) {
   const text = items.map((item) => item.str).join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  // Sabrosito sheets often contain a compact 3+2 layout and watermarks that
-  // make the PDF text layer incomplete.  Treat the label as an additional
-  // game marker so the OCR fallback is always run for these pages.
-  return /\b(avion|flecha|espada|pesa|rombo|bomba|sonrisa|mini\s*o|perrito|cruz|martillo|yapa|eche\s*leche|bom\s*bom|keke|loco|linea|numero(?:s)?|sabrosit(?:o|os))\b/.test(text);
+  // Only force OCR for pages explicitly identified as special sheets. A
+  // generic "línea" or "número" mention appears in ordinary 5×5 headers and
+  // used to trigger a second full-page OCR pass for every already-readable
+  // page, making large PDFs unnecessarily slow.
+  return /\bhoja\s+de\s+(?:adicional|numero(?:s)?)\b|\bhoja\s+de\s+sabrosit(?:o|os)\b|\bsabrosit(?:o|os)\b/.test(text);
 }
 
 function groupIntoRows(numbers: PositionedNumber[]) {
