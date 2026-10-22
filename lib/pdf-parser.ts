@@ -2259,11 +2259,27 @@ async function runOcrCanvas(
       pageNumber,
     );
   }
-  const compactRectangles = detectCompactRectangles(
+  let compactRectangles = detectCompactRectangles(
     pixels.data,
     canvas.width,
     canvas.height,
   );
+  // Run the frame detector once more on a high-contrast copy. Gray diagonal
+  // watermarks can interrupt the original luminance image even though the
+  // black Sabrosito borders remain clearly recoverable after binarization.
+  if (!compactRectangles.length) {
+    const cleaned = makeCanvas(canvas.width, canvas.height);
+    if (cleaned) {
+      cleaned.context.drawImage(canvas, 0, 0);
+      binarizeNumbers(cleaned.canvas, cleaned.context, { luminance: 165, chroma: 72 });
+      const cleanedPixels = cleaned.context.getImageData(0, 0, cleaned.canvas.width, cleaned.canvas.height);
+      compactRectangles = detectCompactRectangles(
+        cleanedPixels.data,
+        cleaned.canvas.width,
+        cleaned.canvas.height,
+      );
+    }
+  }
   const compactCards = await recognizeCompactCards(
     canvas,
     compactRectangles,
