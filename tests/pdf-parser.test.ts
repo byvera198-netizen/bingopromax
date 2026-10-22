@@ -437,6 +437,35 @@ test("detecta los diez cartones Sabrosito de una hoja completa", () => {
   assert.equal(rectangles.length, 10);
 });
 
+test("detecta cartones Sabrosito alargados de una hoja A4", () => {
+  const width = 1_000;
+  const height = 1_650;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const drawPixel = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = 0;
+    pixels[offset + 1] = 0;
+    pixels[offset + 2] = 0;
+    pixels[offset + 3] = 255;
+  };
+  for (let column = 0; column < 2; column += 1) {
+    const left = 70 + column * 455;
+    const top = 300;
+    const rectangleWidth = 405;
+    const rectangleHeight = 165;
+    for (let x = left; x <= left + rectangleWidth; x += 1) {
+      drawPixel(x, top);
+      drawPixel(x, top + rectangleHeight);
+    }
+    for (let y = top; y <= top + rectangleHeight; y += 1) {
+      drawPixel(left, y);
+      drawPixel(left + rectangleWidth, y);
+    }
+  }
+  const rectangles = detectCompactRectangles(pixels, width, height);
+  assert.equal(rectangles.length, 2);
+});
+
 test("reconoce un formato adicional Mini O con centro libre", () => {
   const items: PdfTextItem[] = [
     { str: "4 61 64", transform: [1, 0, 0, 1, 120, 500], width: 120, height: 20 },

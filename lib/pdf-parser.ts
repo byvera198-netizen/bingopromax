@@ -342,7 +342,7 @@ export function detectCompactRectangles(
     Array.from({ length: width }, (_, x) => ({
       position: x,
       strength: longestDarkRun(height, (y) => isDark(x, y), 3),
-    })).filter((line) => line.strength >= height * 0.12),
+    })).filter((line) => line.strength >= height * 0.08),
   );
   const candidates: CompactRectangle[] = [];
   for (let leftIndex = 0; leftIndex < vertical.length; leftIndex += 1) {
@@ -371,13 +371,17 @@ export function detectCompactRectangles(
           const rectangleHeight = bottom - top;
           if (
             top < height * 0.14 ||
-            rectangleHeight < height * 0.12 ||
+            // Sabrosito cards are short 3+2 cards; on A4 scans their
+            // height is commonly close to 8–11% of the page.
+            rectangleHeight < height * 0.08 ||
             rectangleHeight > height * 0.3
           ) {
             continue;
           }
           const ratio = rectangleWidth / rectangleHeight;
-          if (ratio < 1.25 || ratio > 2.15) continue;
+          // The printed Sabrosito frame is wider than the synthetic compact
+          // fixtures used by older tests (roughly 2.4–2.8:1).
+          if (ratio < 1.25 || ratio > 3.2) continue;
           const radius = Math.max(2, Math.round(Math.min(width, height) * 0.002));
           const corners = [
             [left, top],
