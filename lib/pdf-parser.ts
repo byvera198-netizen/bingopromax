@@ -2264,6 +2264,7 @@ async function runOcrCanvas(
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
+  options: { forceFullPageOcr?: boolean } = {},
 ) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return [];
@@ -2325,7 +2326,12 @@ async function runOcrCanvas(
     regionCards.length > 0 &&
     (rectangles.length === 0 || standardRegionsComplete) &&
     (compactRectangles.length === 0 || compactRegionsComplete);
-  if (hasCompleteRegions) return regionCards;
+  // A page may contain valid-looking rectangular regions and still be a
+  // sheet of Sabrositos or additional games.  In that case returning the
+  // regional result early hides the sparse forms that only the full-page OCR
+  // pass can assemble.  The caller sets this flag when the PDF text layer
+  // identifies a special sheet (and image imports always use the same path).
+  if (hasCompleteRegions && !options.forceFullPageOcr) return regionCards;
 
   const result = await worker.recognize(
     canvas,
@@ -2377,6 +2383,7 @@ async function runOcr(
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
+  options: { forceFullPageOcr?: boolean } = {},
 ) {
   const baseViewport = pageProxy.getViewport({ scale: 1 });
   const scale = Math.max(
@@ -2391,7 +2398,7 @@ async function runOcr(
     canvasContext: target.context,
     viewport,
   }).promise;
-  return runOcrCanvas(target.canvas, worker, fileName, pageNumber);
+  return runOcrCanvas(target.canvas, worker, fileName, pageNumber, options);
 }
 
 export async function parseBingoPdf(
@@ -2456,7 +2463,15 @@ export async function parseBingoPdf(
         });
         try {
           ocrWorker ??= await createOcrWorker();
-          const ocrCards = await runOcr(page, ocrWorker, file.name, pageNumber);
+          const ocrCards = await runOcr(
+            page,
+            ocrWorker,
+            file.name,
+            pageNumber,
+            {
+              forceFullPageOcr: hasAdditionalGameMarker(items) || items.length === 0,
+            },
+          );
           // Keep classic 5×5 OCR cards as well: additional figures are often
           // printed on a 5×5-looking sheet and their identifying shape can be
           // lost if OCR output is filtered by layout type.
@@ -2530,7 +2545,9 @@ export async function parseBingoImage(
   bitmap.close();
   const worker = await createOcrWorker();
   try {
-    const cards = await runOcrCanvas(target.canvas, worker, file.name, 1);
+    const cards = await runOcrCanvas(target.canvas, worker, file.name, 1, {
+      forceFullPageOcr: true,
+    });
     const warnings = cards.length
       ? []
       : ["No se detectó un cartón en la imagen. Comprueba que esté enfocada y completa."];
