@@ -18,6 +18,7 @@ import {
   detectGridRectangles,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  hasAdditionalGameMarker,
   mergeDetectedCards,
   type OcrBlock,
   type PdfTextItem,
@@ -31,6 +32,17 @@ const baseGrid = [
   4, 19, 34, 49, 64,
   5, 20, 35, 50, 65,
 ];
+
+test("no confunde la mención de Sabrosito del encabezado con una hoja especial", () => {
+  assert.equal(
+    hasAdditionalGameMarker([{ str: "2 H. SABROSITO", transform: [1, 0, 0, 1, 10, 10] }]),
+    false,
+  );
+  assert.equal(
+    hasAdditionalGameMarker([{ str: "HOJA DE SABROSITO", transform: [1, 0, 0, 1, 10, 10] }]),
+    true,
+  );
+});
 
 test("importa patrones del paquete de Bingo ProMax Studio", () => {
   const result = parseProMaxPackage(JSON.stringify({

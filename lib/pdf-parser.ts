@@ -572,13 +572,17 @@ function identifiersFromTextItems(items: PdfTextItem[]) {
   );
 }
 
-function hasAdditionalGameMarker(items: PdfTextItem[]) {
+export function hasAdditionalGameMarker(items: PdfTextItem[]) {
   const text = items.map((item) => item.str).join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   // Only force OCR for pages explicitly identified as special sheets. A
   // generic "línea" or "número" mention appears in ordinary 5×5 headers and
   // used to trigger a second full-page OCR pass for every already-readable
   // page, making large PDFs unnecessarily slow.
-  return /\bhoja\s+de\s+(?:adicional|numero(?:s)?)\b|\bhoja\s+de\s+sabrosit(?:o|os)\b|\bsabrosit(?:o|os)\b/.test(text);
+  // A regular 5×5 sheet often mentions the Sabrosito prize in its header
+  // (for example “2 H. SABROSITO”).  That text must not force the expensive
+  // special-sheet OCR path; only an explicit sheet heading identifies a
+  // Sabrosito/additional page.
+  return /\bhoja\s+de\s+(?:adicional|numero(?:s)?)\b|\bhoja\s+de\s+sabrosit(?:o|os)\b/.test(text);
 }
 
 function groupIntoRows(numbers: PositionedNumber[]) {
