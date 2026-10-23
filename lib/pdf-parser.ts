@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BUILTIN_PATTERNS,
   cardLayoutFor,
   createCardLayout,
   additionalPatternForCard,
@@ -1034,6 +1035,29 @@ const specialCardDefinitions: SpecialCardDefinition[] = [
   { layout: createCardLayout("eche-leche-7"), rowLengths: [4, 3] },
   { layout: createCardLayout("bom-bom-8"), rowLengths: [4, 4] },
   { layout: createCardLayout("keke-keke-6"), rowLengths: [2, 2, 2] },
+  // Numeric sheets use the same five-row 5×5 canvas as the letter sheets,
+  // but only the cells that draw the glyph contain numbers.  They used to be
+  // present in the catalog but absent from the OCR shape detector, so the
+  // importer returned zero cards for pages containing Número 1, 3, 4, 5, 7,
+  // 9, + or =.  Build their row signatures directly from the canonical
+  // pattern definitions so recognition stays in sync with the UI catalog.
+  ...BUILTIN_PATTERNS
+    .filter((pattern) =>
+      pattern.category === "Números" ||
+      ["adicional-forma-mas", "adicional-forma-igual"].includes(pattern.id),
+    )
+    .map((pattern) => {
+      const rowLengths = Array.from({ length: 5 }, (_, row) =>
+        pattern.cells.filter((cell) => Math.floor(cell / 5) === row).length,
+      );
+      return {
+        layout: additionalLayout(pattern.name, pattern.cells.map((cell) => ({
+          row: Math.floor(cell / 5),
+          column: cell % 5,
+        }))),
+        rowLengths,
+      } satisfies SpecialCardDefinition;
+    }),
 ];
 
 function flexibleRowSegments(numbers: PositionedNumber[]) {

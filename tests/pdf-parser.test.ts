@@ -308,6 +308,24 @@ test("reconoce cartones 5×5 con figuras de letra o número", () => {
   }
 });
 
+test("detecta las formas numéricas de las hojas de números", () => {
+  const pattern = BUILTIN_PATTERNS.find((item) => item.id === "numero-3");
+  assert.ok(pattern);
+  const rows = Array.from({ length: 5 }, (_, row) =>
+    pattern.cells
+      .filter((cell) => Math.floor(cell / 5) === row)
+      .map((cell) => cell % 5),
+  );
+  const items: PdfTextItem[] = rows.map((columns, row) => ({
+    str: columns.map((column) => String(row * 10 + column + 1)).join(" "),
+    transform: [1, 0, 0, 1, 100, 700 - row * 45],
+    width: Math.max(20, columns.length * 30),
+    height: 20,
+  }));
+  const cards = extractCardsFromTextItems(items, "hoja-de-numeros.pdf", 1);
+  assert.ok(cards.some((card) => card.layout?.name === "Número 3"));
+});
+
 test("reconoce un juego adicional por la figura aunque falte el título", () => {
   const grid = Array(25).fill(0);
   const avion = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-avion");
