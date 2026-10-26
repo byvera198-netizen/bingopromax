@@ -1067,6 +1067,19 @@ export default function GameConsole() {
   };
 
   const openCardEditor = (card: BingoCard, mode: CardEditorMode = "saved") => {
+    if (mode === "import" && state) {
+      const existing = [
+        ...state.cards,
+        ...importDrafts.filter((candidate) => candidate.id !== card.id),
+      ];
+      if (!deduplicateBingoCards([card], existing).cards.length) {
+        const remaining = importDrafts.filter((candidate) => candidate.id !== card.id);
+        setImportDrafts(remaining);
+        if (!remaining.length) setImportReviewOpen(false);
+        notify("Este cartón ya está cargado o repetido; se omitió sin pedir corrección.", "warning");
+        return;
+      }
+    }
     const layout = cardLayoutFor(card);
     setCardEditorMode(mode);
     setCardDraft({ ...card, layout, grid: cardEditorCanvas(card) });
@@ -1088,6 +1101,21 @@ export default function GameConsole() {
     const number = cardDraft.number.trim();
     const errors = validateBingoCard({ grid, layout });
     if (!number) errors.unshift("Asigna un número al cartón.");
+    const updated = { ...cardDraft, number, grid, layout, reviewStatus: "ready" as const, reviewNotes: [] };
+    if (cardEditorMode === "import") {
+      const existing = [
+        ...state.cards,
+        ...importDrafts.filter((candidate) => candidate.id !== updated.id),
+      ];
+      if (!deduplicateBingoCards([updated], existing).cards.length) {
+        const remaining = importDrafts.filter((card) => card.id !== updated.id);
+        setImportDrafts(remaining);
+        if (!remaining.length) setImportReviewOpen(false);
+        setCardDraft(null);
+        notify("Este cartón ya está cargado o repetido; se omitió sin pedir corrección.", "warning");
+        return;
+      }
+    }
     if (state.cards.some((card) => card.id !== cardDraft.id && card.number.trim().toLowerCase() === number.toLowerCase())) {
       errors.unshift("Ya existe un cartón con ese número en esta partida.");
     }
@@ -1096,7 +1124,6 @@ export default function GameConsole() {
       notify(errors[0], "warning");
       return;
     }
-    const updated = { ...cardDraft, number, grid, layout, reviewStatus: "ready" as const, reviewNotes: [] };
     try {
       if (cardEditorMode === "import") {
         setImportDrafts((current) => current.map((card) => card.id === updated.id ? updated : card));

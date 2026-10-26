@@ -1,4 +1,4 @@
-const CACHE_NAME = "bingopromax-pwa-v7";
+const CACHE_NAME = "bingopromax-pwa-v8";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/pwa-icon.svg"];
 
 self.addEventListener("install", (event) => {
