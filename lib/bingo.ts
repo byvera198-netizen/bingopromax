@@ -818,15 +818,20 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
  * title, so recognition is based on the figure itself.
  */
 export function additionalPatternForCard(
-  card: Pick<BingoCard, "grid">,
+  card: Pick<BingoCard, "grid" | "layout"> & Partial<Pick<BingoCard, "serial" | "sourceFile">>,
+  candidates: BingoPattern[] = BUILTIN_PATTERNS,
 ) {
   if (card.grid.length !== 25) return null;
+  const layout = cardLayoutFor(card);
+  // A regular 5×5 ticket may have a free square. Never reinterpret it as an
+  // additional sheet based only on the positions of zero-valued cells.
+  if (layout.type === "classic-5x5") return null;
   const occupied = card.grid
     .map((value, index) => (value > 0 ? index : -1))
     .filter((index) => index >= 0);
-  return BUILTIN_PATTERNS.find(
+  return candidates.find(
     (pattern) =>
-      ["Juegos adicionales", "Letras", "Números"].includes(pattern.category) &&
+      pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "juegos adicionales" &&
       pattern.cells.length === occupied.length &&
       pattern.cells.every((cell, index) => cell === occupied[index]),
   ) ?? null;
@@ -861,19 +866,25 @@ export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
-  const additional = additionalPatternForCard(card);
+  const additional = additionalPatternForCard(card, [
+    ...BUILTIN_PATTERNS,
+    ...activePatterns.filter((pattern) => !BUILTIN_PATTERNS.some((builtin) => builtin.id === pattern.id)),
+  ]);
   if (additional) {
-    return activePatterns.filter((pattern) => pattern.id === additional.id);
+    return activePatterns.filter((pattern) =>
+      pattern.id === additional.id ||
+      (pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "juegos adicionales" &&
+        pattern.cells.length === additional.cells.length &&
+        pattern.cells.every((cell, index) => cell === additional.cells[index])),
+    );
   }
   return isClassicCard(card)
     ? activePatterns.filter((pattern) => {
         const category = pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        // Additional sheets (including Sabrositos, letters and numbered
-        // figures) must never be evaluated on a traditional 5×5 ticket.
+        // Additional game sheets and Sabrositos never run on a traditional
+        // ticket. Letter and number figures remain selectable 5×5 wins.
         return pattern.id !== COMPACT_CARD_PATTERN.id &&
-          category !== "juegos adicionales" &&
-          category !== "letras" &&
-          category !== "numeros";
+          category !== "juegos adicionales";
       })
     : [completionPatternFor(card)];
 }

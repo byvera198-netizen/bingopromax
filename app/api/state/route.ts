@@ -810,7 +810,9 @@ export async function POST(request: Request) {
           name: name.slice(0, 120),
           description: String(source.description ?? "Patrón importado desde Bingo ProMax Studio").trim().slice(0, 500),
           color: /^#[0-9a-f]{6}$/i.test(String(source.color ?? "")) ? String(source.color) : "#d7ff3f",
-          category: "Studio",
+          // Preserve Studio's group so additional-only forms stay isolated
+          // from classic 5×5 tickets after synchronization.
+          category: String(source.group ?? "Studio").trim().slice(0, 80) || "Studio",
           difficulty: cells.length > 12 ? "Alta" : cells.length > 7 ? "Media" : "Fácil",
           cells,
           active: source.active === true,

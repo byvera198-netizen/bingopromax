@@ -829,10 +829,8 @@ export default function GameConsole() {
         const compatibleCards = (state?.cards ?? []).filter(
           (card) => {
             if (card.status !== "active") return false;
-            if (pattern.id === COMPACT_CARD_PATTERN.id) return card.grid.length === 5;
-            const additional = additionalPatternForCard(card);
-            if (additional) return additional.id === pattern.id;
-            return card.grid.length !== 5;
+            if (pattern.id === COMPACT_CARD_PATTERN.id) return cardLayoutFor(card).type === "sabrosito-5";
+            return patternsForCard(card, [pattern]).some((candidate) => candidate.id === pattern.id);
           },
         );
         const nearest = compatibleCards.reduce(

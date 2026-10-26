@@ -482,13 +482,14 @@ test("incluye el catálogo de letras y números sin patrones repetidos", () => {
   });
 });
 
-test("reconoce cartones 5×5 con figuras de letra o número", () => {
+test("no confunde formas seleccionables de 5×5 con juegos adicionales", () => {
   for (const patternName of ["Letra A", "Letra Z", "Número 4", "Número 9"]) {
     const pattern = BUILTIN_PATTERNS.find((item) => item.name === patternName);
     assert.ok(pattern);
     const grid = Array(25).fill(0);
     pattern.cells.forEach((cell, index) => { grid[cell] = index + 1; });
-    assert.equal(additionalPatternForCard({ grid })?.name, patternName);
+    assert.equal(additionalPatternForCard({ grid }), null);
+    assert.ok(patternsForCard({ grid } as BingoCard, [pattern]).some((item) => item.id === pattern.id));
   }
 });
 
@@ -552,13 +553,34 @@ test("un cartón Sabrosito gana al completar sus cinco números", () => {
   assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
 });
 
-test("un cartón 5×5 no evalúa patrones de hojas adicionales", () => {
+test("un cartón 5×5 admite letras/números seleccionados y excluye juegos adicionales", () => {
   const active = BUILTIN_PATTERNS;
   const ids = new Set(patternsForCard({ grid: baseGrid } as BingoCard, active).map((pattern) => pattern.id));
   assert.equal(ids.has("adicional-avion"), false);
-  assert.equal(ids.has("letra-a"), false);
-  assert.equal(ids.has("numero-1"), false);
+  assert.equal(ids.has("letra-a"), true);
+  assert.equal(ids.has("numero-1"), true);
   assert.equal(ids.has("linea-horizontal"), true);
+});
+
+test("un juego adicional solo se valida en la forma de hoja que le corresponde", () => {
+  const avion = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-avion");
+  const espada = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-espada");
+  assert.ok(avion && espada);
+  const grid = Array(25).fill(0);
+  avion.cells.forEach((cell, index) => { grid[cell] = index + 1; });
+  const card = { grid } as BingoCard;
+  const matches = patternsForCard(card, [avion, espada]);
+  assert.deepEqual(matches.map((pattern) => pattern.id), [avion.id]);
+});
+
+test("conserva los patrones de adicionales sincronizados desde Studio y los aísla por geometría", () => {
+  const avion = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-avion");
+  assert.ok(avion);
+  const studioAvion = { ...avion, id: "studio-avion", category: "Juegos adicionales", custom: true };
+  const grid = Array(25).fill(0);
+  avion.cells.forEach((cell, index) => { grid[cell] = index + 1; });
+  assert.deepEqual(patternsForCard({ grid } as BingoCard, [studioAvion]).map((pattern) => pattern.id), ["studio-avion"]);
+  assert.equal(patternsForCard({ grid: baseGrid } as BingoCard, [studioAvion]).length, 0);
 });
 
 test("separa dos cuadrículas escaneadas por sus líneas", () => {
