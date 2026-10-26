@@ -38,7 +38,8 @@ test("incluye los flujos operativos y administrativos principales", async () => 
 
   assert.match(page, /parseBingoPdf/);
   assert.match(page, /const saveImportedCards/);
-  assert.match(page, /action: "saveCards"/);
+  assert.match(page, /deduplicateBingoCards/);
+  assert.match(route, /if \(action === "saveCards"\)/);
   assert.match(page, /Guardar cartones revisados/);
   assert.match(page, /saveManualCard/);
   assert.match(page, /registerBall/);

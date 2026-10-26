@@ -480,6 +480,39 @@ export function isClassicCard(card: Pick<BingoCard, "grid" | "layout">) {
   return cardLayoutFor(card).type === "classic-5x5";
 }
 
+/** Stable identity for a card's playable content; source file/page/id are ignored. */
+export function cardContentSignature(
+  card: Pick<BingoCard, "grid" | "layout"> & Partial<Pick<BingoCard, "serial" | "sourceFile">>,
+) {
+  const layout = cardLayoutFor(card);
+  const layoutKey = layout.type === "custom"
+    ? layout.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase()
+    : layout.type;
+  return `${layoutKey}|${card.grid.join(",")}`;
+}
+
+export function deduplicateBingoCards<T extends Pick<BingoCard, "number" | "grid" | "layout"> & Partial<Pick<BingoCard, "serial" | "sourceFile">>>(
+  incoming: T[],
+  existing: T[] = [],
+) {
+  const usedNumbers = new Set(existing.map((card) => card.number.trim().toLocaleLowerCase("es")));
+  const usedSignatures = new Set(existing.map(cardContentSignature));
+  const cards: T[] = [];
+  let duplicates = 0;
+  for (const card of incoming) {
+    const number = card.number.trim().toLocaleLowerCase("es");
+    const signature = cardContentSignature(card);
+    if ((number && usedNumbers.has(number)) || usedSignatures.has(signature)) {
+      duplicates += 1;
+      continue;
+    }
+    if (number) usedNumbers.add(number);
+    usedSignatures.add(signature);
+    cards.push(card);
+  }
+  return { cards, duplicates };
+}
+
 const range = (start: number, end: number) =>
   Array.from({ length: end - start + 1 }, (_, index) => start + index);
 const rows = range(0, 4).map((row) => range(row * 5, row * 5 + 4));

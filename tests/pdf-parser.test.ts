@@ -6,6 +6,7 @@ import {
   additionalPatternForCard,
   cardProgress,
   cardLayoutFor,
+  deduplicateBingoCards,
   validateBingoCard,
   isWinningCard,
   patternForCard,
@@ -571,6 +572,21 @@ test("un juego adicional solo se valida en la forma de hoja que le corresponde",
   const card = { grid } as BingoCard;
   const matches = patternsForCard(card, [avion, espada]);
   assert.deepEqual(matches.map((pattern) => pattern.id), [avion.id]);
+});
+
+test("omite un cartón repetido por número o por contenido, aunque cambie de página y archivo", () => {
+  const layout = cardLayoutFor({ grid: baseGrid });
+  const first: BingoCard = {
+    id: "card-1", number: "C-001", serial: "", grid: baseGrid,
+    sourceFile: "hoja-a.pdf", sourcePage: 1, status: "active", layout,
+  };
+  const sameContent = { ...first, id: "card-2", number: "OTRO-ID", sourceFile: "hoja-b.pdf", sourcePage: 34 };
+  const sameNumber = { ...first, id: "card-3", number: "c-001", grid: [...baseGrid].reverse() };
+  const unique = { ...first, id: "card-4", number: "C-002", grid: [...baseGrid].reverse() };
+
+  const result = deduplicateBingoCards([first, sameContent, sameNumber, unique]);
+  assert.deepEqual(result.cards.map((card) => card.id), ["card-1", "card-4"]);
+  assert.equal(result.duplicates, 2);
 });
 
 test("conserva los patrones de adicionales sincronizados desde Studio y los aísla por geometría", () => {

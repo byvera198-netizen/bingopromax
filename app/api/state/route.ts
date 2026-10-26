@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import {
+  cardContentSignature,
   cardLayoutFor,
   validateBingoCard,
   type BingoCard,
@@ -118,6 +119,7 @@ const schemaStatements = [
     grid_json TEXT NOT NULL,
     card_type TEXT NOT NULL DEFAULT 'classic-5x5',
     layout_json TEXT NOT NULL DEFAULT '{}',
+    fingerprint TEXT NOT NULL DEFAULT '',
     source_file TEXT NOT NULL DEFAULT 'Manual',
     source_page INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
@@ -215,6 +217,7 @@ async function ensureSchema(db: D1) {
     "ALTER TABLE games ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE cards ADD COLUMN card_type TEXT NOT NULL DEFAULT 'classic-5x5'",
     "ALTER TABLE cards ADD COLUMN layout_json TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE cards ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE member_messages ADD COLUMN read_at TEXT",
     "ALTER TABLE game_patterns ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE memberships ADD COLUMN receipt_number TEXT",
@@ -229,6 +232,11 @@ async function ensureSchema(db: D1) {
     }
   }
   try { await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS memberships_receipt_unique_idx ON memberships(receipt_number) WHERE receipt_number IS NOT NULL AND receipt_number <> ''").run(); } catch { /* legacy D1 may not support partial indexes */ }
+  try {
+    await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS cards_game_fingerprint_unique_idx ON cards(game_id, fingerprint) WHERE fingerprint <> ''").run();
+  } catch {
+    // Legacy rows have no fingerprint yet; imports still compare their decoded grids.
+  }
   // Create this optimization index only after the compatibility migration.
   // Older D1 databases may have member_messages without read_at.
   try {
@@ -650,10 +658,22 @@ export async function POST(request: Request) {
         return Response.json({ error: "No hay cartones válidos para guardar." }, { status: 400 });
       }
       const existing = await db
-        .prepare("SELECT number FROM cards WHERE game_id = ?")
+        .prepare("SELECT number, grid_json, layout_json, serial, source_file FROM cards WHERE game_id = ?")
         .bind(gameId)
-        .all<{ number: string }>();
+        .all<{ number: string; grid_json: string; layout_json: string; serial: string; source_file: string }>();
       const numbers = new Set((existing.results ?? []).map((row) => row.number.toLowerCase()));
+      const signatures = new Set((existing.results ?? []).flatMap((row) => {
+        try {
+          return [cardContentSignature({
+            grid: JSON.parse(row.grid_json) as number[],
+            layout: JSON.parse(row.layout_json) as BingoCard["layout"],
+            serial: row.serial,
+            sourceFile: row.source_file,
+          })];
+        } catch {
+          return [];
+        }
+      }));
       const rejected = cards.filter(
         (card) =>
           !card.number.trim() ||
@@ -669,8 +689,15 @@ export async function POST(request: Request) {
           duplicates += 1;
           continue;
         }
+        const normalized = { ...card, layout: cardLayoutFor(card) };
+        const signature = cardContentSignature(normalized);
+        if (signatures.has(signature)) {
+          duplicates += 1;
+          continue;
+        }
         numbers.add(number.toLowerCase());
-        accepted.push({ ...card, number, layout: cardLayoutFor(card), reviewStatus: "ready" });
+        signatures.add(signature);
+        accepted.push({ ...normalized, number, reviewStatus: "ready" });
       }
       if (accepted.length) {
         // D1 batches have a statement limit. Imports commonly contain 120+
@@ -684,8 +711,8 @@ export async function POST(request: Request) {
               db
                 .prepare(
                   `INSERT INTO cards (
-                    id, game_id, number, serial, grid_json, card_type, layout_json, source_file, source_page, status, created_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    id, game_id, number, serial, grid_json, card_type, layout_json, fingerprint, source_file, source_page, status, created_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .bind(
                   card.id,
@@ -695,6 +722,7 @@ export async function POST(request: Request) {
                   JSON.stringify(card.grid),
                   card.layout?.type ?? "custom",
                   JSON.stringify(card.layout),
+                  cardContentSignature(card),
                   card.sourceFile,
                   card.sourcePage,
                   card.status,
@@ -1099,10 +1127,28 @@ export async function POST(request: Request) {
         .bind(gameId, normalized.number, normalized.id)
         .first<{ id: string }>();
       if (duplicate) return Response.json({ error: "Ya existe un cartón con esa numeración." }, { status: 409 });
+      const fingerprint = cardContentSignature(normalized);
+      const existingCards = await db.prepare(
+        "SELECT id, fingerprint, grid_json, layout_json, serial, source_file FROM cards WHERE game_id = ? AND id <> ?",
+      ).bind(gameId, normalized.id).all<Record<string, unknown>>();
+      const duplicateContent = (existingCards.results ?? []).some((row) => {
+        if (String(row.fingerprint ?? "")) return row.fingerprint === fingerprint;
+        try {
+          return cardContentSignature({
+            grid: JSON.parse(String(row.grid_json)) as number[],
+            layout: JSON.parse(String(row.layout_json)) as BingoCard["layout"],
+            serial: String(row.serial ?? ""),
+            sourceFile: String(row.source_file ?? ""),
+          }) === fingerprint;
+        } catch {
+          return false;
+        }
+      });
+      if (duplicateContent) return Response.json({ error: "Este cartón ya está cargado en la partida." }, { status: 409 });
       await db.batch([
         db
           .prepare(
-            `UPDATE cards SET number = ?, serial = ?, grid_json = ?, card_type = ?, layout_json = ?, status = ?
+            `UPDATE cards SET number = ?, serial = ?, grid_json = ?, card_type = ?, layout_json = ?, fingerprint = ?, status = ?
              WHERE game_id = ? AND id = ?`,
           )
           .bind(
@@ -1111,6 +1157,7 @@ export async function POST(request: Request) {
             JSON.stringify(normalized.grid),
             normalized.layout!.type,
             JSON.stringify(normalized.layout!),
+            cardContentSignature(normalized),
             normalized.status,
             gameId,
             normalized.id,

@@ -50,6 +50,8 @@ import {
   BUILTIN_PATTERNS,
   COMPACT_CARD_PATTERN,
   additionalPatternForCard,
+  cardContentSignature,
+  deduplicateBingoCards,
   cardProgress,
   cardLayoutFor,
   createCardLayout,
@@ -68,7 +70,7 @@ import {
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { fileChecksum, getBingoSourcePageCount, identifyBingoSource, parseBingoFile, parseBingoPdf, type BingoSourceKind, type PdfParseProgress } from "@/lib/pdf-parser";
+import { getBingoSourcePageCount, identifyBingoSource, parseBingoFile, parseBingoPdf, type BingoSourceKind, type PdfParseProgress } from "@/lib/pdf-parser";
 import { parseProMaxPackage, type ProMaxImportResult } from "@/lib/promax-package";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
@@ -1224,6 +1226,10 @@ export default function GameConsole() {
     if (state.cards.some((card) => card.number.toLowerCase() === manualNumber.trim().toLowerCase())) {
       errors.unshift("Ya existe un cartón con ese número.");
     }
+    const manualSignature = cardContentSignature({ grid, layout });
+    if (state.cards.some((card) => cardContentSignature(card) === manualSignature)) {
+      errors.unshift("Este cartón ya está cargado en la partida.");
+    }
     if (errors.length) {
       setImportWarnings(errors);
       notify(errors[0], "warning");
@@ -1263,34 +1269,24 @@ export default function GameConsole() {
     }
     setProcessingFiles(true);
     const warnings: string[] = [];
-    const signatures = new Set(state.cards.map((card) => card.grid.join(",")));
+    const signatures = new Set(state.cards.map(cardContentSignature));
     const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
     let imported = 0;
     let duplicateCount = 0;
     try {
       for (const file of files) {
-        const checksum = await fileChecksum(file);
-        if (false) {
-          duplicateCount += 1;
-          warnings.push(`${file.name}: el archivo ya había sido importado.`);
-          continue;
-        }
         const parsed = await parseBingoPdf(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
         warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
-        const uniqueCards = parsed.cards
-          .filter((card) => !signatures.has(card.grid.join(",")))
-          .map((card, index) => {
-            signatures.add(card.grid.join(","));
-            let number = card.number;
-            if (usedNumbers.has(number.toLowerCase())) {
-              number = `${number}-${checksum.slice(0, 6).toUpperCase()}${index ? `-${index + 1}` : ""}`;
-            }
-            while (usedNumbers.has(number.toLowerCase())) number = `${number}-2`;
-            usedNumbers.add(number.toLowerCase());
-            return { ...card, number };
-          });
+        const uniqueCards = parsed.cards.filter((card) => {
+          const signature = cardContentSignature(card);
+          const numberKey = card.number.trim().toLowerCase();
+          if (signatures.has(signature) || (numberKey && usedNumbers.has(numberKey))) return false;
+          signatures.add(signature);
+          if (numberKey) usedNumbers.add(numberKey);
+          return true;
+        });
         duplicateCount += parsed.cards.length - uniqueCards.length;
         if (!uniqueCards.length) {
           warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
@@ -1369,9 +1365,9 @@ export default function GameConsole() {
     setPageSelectionOpen(false);
     setProcessingFiles(true);
     const warnings: string[] = [];
-    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
     const drafts: BingoCard[] = [];
     let pages = 0;
+    let duplicateCount = 0;
     try {
       for (const entry of filesToProcess) {
         const parsed = await parseBingoFile(
@@ -1382,20 +1378,17 @@ export default function GameConsole() {
         pages += parsed.pages;
         warnings.push(...parsed.warnings.map((warning) => `${entry.file.name} · ${warning}`));
         parsed.cards.forEach((card) => {
-          const duplicate = Boolean(card.number) && usedNumbers.has(card.number.toLowerCase());
-          if (card.number) usedNumbers.add(card.number.toLowerCase());
           drafts.push({
             ...card,
-            reviewStatus: duplicate || card.reviewStatus === "needs-review" ? "needs-review" : "ready",
-            reviewNotes: [
-              ...(card.reviewNotes ?? []),
-              ...(duplicate ? ["La numeración ya existe en esta partida o en esta importación."] : []),
-            ],
+            reviewStatus: card.reviewStatus === "needs-review" ? "needs-review" : "ready",
+            reviewNotes: card.reviewNotes ?? [],
           });
         });
       }
-      const readyDrafts = drafts.filter((card) => card.reviewStatus !== "needs-review");
-      const pendingDrafts = drafts.filter((card) => card.reviewStatus === "needs-review");
+      const unique = deduplicateBingoCards(drafts, state.cards);
+      duplicateCount = unique.duplicates;
+      const readyDrafts = unique.cards.filter((card) => card.reviewStatus !== "needs-review");
+      const pendingDrafts = unique.cards.filter((card) => card.reviewStatus === "needs-review");
       if (readyDrafts.length) {
         // Imported PDF cards are intentionally session-only. Keep them in the
         // active game state without sending the PDF or card rows to D1/R2.
@@ -1414,6 +1407,11 @@ export default function GameConsole() {
       } else {
         setImportReviewOpen(false);
         if (!readyDrafts.length) notify("No se detectaron cartones válidos para guardar.", "warning");
+      }
+      if (duplicateCount) {
+        warnings.push(`${duplicateCount} cartón(es) repetidos fueron omitidos; no se agregaron a la partida.`);
+        setImportWarnings([...warnings]);
+        notify(`${duplicateCount} cartón(es) repetidos omitidos.`, "warning");
       }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "No se pudo completar la importación.";
@@ -1449,11 +1447,13 @@ export default function GameConsole() {
     setProMaxImportBusy(true);
     setProMaxImportProgress({ completed: 0, total: proMaxImport.cards.length });
     try {
+      const uniqueImport = deduplicateBingoCards(proMaxImport.cards, state.cards);
+      const uniqueCards = uniqueImport.cards;
       setState((current) => current
-        ? { ...current, cards: [...current.cards, ...proMaxImport.cards] }
+        ? { ...current, cards: [...current.cards, ...uniqueCards] }
         : current);
-      proMaxImport.cards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
-      setProMaxImportProgress({ completed: proMaxImport.cards.length, total: proMaxImport.cards.length });
+      uniqueCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+      setProMaxImportProgress({ completed: uniqueCards.length, total: proMaxImport.cards.length });
       let syncedPatterns = 0;
       if (syncProMaxPatterns && proMaxImport.patterns.length && access?.role === "admin") {
         const patternResult = await api<{ synced: number }>({
@@ -1467,7 +1467,8 @@ export default function GameConsole() {
       setProMaxImport(null);
       const messages = [...proMaxImport.warnings, ...proMaxImport.rejected];
       setImportWarnings(messages.slice(0, 12));
-      if (proMaxImport.cards.length) notify(`${proMaxImport.cards.length} cartón(es) cargados temporalmente desde Studio.`);
+      if (uniqueCards.length) notify(`${uniqueCards.length} cartón(es) únicos cargados temporalmente desde Studio.`);
+      if (uniqueImport.duplicates) notify(`${uniqueImport.duplicates} cartón(es) repetidos de Studio fueron omitidos.`, "warning");
       if (syncedPatterns) notify(`${syncedPatterns} patrón(es) de Studio sincronizados para la partida.`);
     } catch (caught) {
       setImportWarnings((current) => [`La importación temporal se detuvo: ${caught instanceof Error ? caught.message : "error desconocido"}`, ...current]);
@@ -1482,7 +1483,9 @@ export default function GameConsole() {
     if (!state || !importDrafts.length) return;
     // Opening the review is the explicit confirmation for cards that OCR
     // flagged. The API still validates every grid and rejects invalid cards.
-    const readyCards = importDrafts.map((card) => ({ ...card, reviewStatus: "ready" as const }));
+    const uniqueReview = deduplicateBingoCards(importDrafts, state.cards);
+    const readyCards = uniqueReview.cards.map((card) => ({ ...card, reviewStatus: "ready" as const }));
+    const skippedDuplicates = uniqueReview.duplicates;
     try {
       setState((current) => current
         ? { ...current, cards: [...current.cards, ...readyCards] }
@@ -1492,7 +1495,8 @@ export default function GameConsole() {
       setImportDrafts([]);
       const followUp: string[] = [];
       setImportWarnings((current) => [...current, ...followUp]);
-      if (readyCards.length) notify(`${readyCards.length} cartón(es) cargados temporalmente en la partida.`);
+      if (readyCards.length) notify(`${readyCards.length} cartón(es) únicos cargados temporalmente en la partida.`);
+      if (skippedDuplicates) notify(`${skippedDuplicates} cartón(es) repetidos fueron omitidos y no se agregaron.`, "warning");
       if (followUp.length) notify(followUp[0], "warning");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudieron guardar los cartones.", "error");
