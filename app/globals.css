@@ -319,6 +319,19 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(3,5,4,.75); backdrop-filter: blur(8px); }
 .modal { width: min(760px, 100%); max-height: calc(100vh - 40px); overflow: auto; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
 .modal > header, .modal > footer { display: flex; align-items: center; justify-content: space-between; padding: 18px 21px; border-bottom: 1px solid var(--line); }.modal > header h2 { margin: 5px 0 0; font-size: 19px; letter-spacing: -.035em; }.modal > footer { justify-content: flex-end; gap: 7px; border-top: 1px solid var(--line); border-bottom: 0; }
+.page-selection-modal { width: min(780px, 100%); }
+.page-selection-help { margin: 14px 21px; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.page-selection-files { display: flex; flex-direction: column; gap: 10px; max-height: min(55vh, 520px); overflow: auto; padding: 0 21px 18px; }
+.page-selection-file { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.page-selection-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.page-selection-heading > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.page-selection-heading strong { overflow: hidden; color: var(--text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.page-selection-heading small { color: var(--muted); font-size: 8px; }
+.page-selection-heading > div:last-child { display: flex; flex: 0 0 auto; gap: 5px; }
+.page-selection-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.page-selection-grid label { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 8px; cursor: pointer; }
+.page-selection-grid label.selected { border-color: rgba(215,255,63,.45); background: var(--lime-soft); color: var(--text); }
+.page-selection-grid input { accent-color: var(--lime); }
 .manual-layout, .pattern-editor { display: grid; grid-template-columns: .8fr 1.2fr; gap: 28px; padding: 23px; }
 .manual-fields, .form-stack { display: flex; flex-direction: column; gap: 14px; }
 .manual-fields label:not(.free-toggle), .form-stack label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 650; }.manual-fields label small { color: var(--muted-2); font-weight: 450; }
@@ -460,7 +473,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   .live-pattern-grid { grid-template-columns: 1fr; max-height: 520px; }.live-pattern-card { border-right: 0 !important; }
   .live-ticket-grid { grid-template-columns: 1fr; }.card-legend b { width: 100%; margin-left: 0; }
   .active-pattern-hero { align-items: flex-start; gap: 18px; padding: 22px; }.active-pattern-hero > .pattern-mini { width: 88px; height: 88px; grid-template-columns: repeat(5, 9px); gap: 4px; }.active-pattern-hero > .pattern-mini i { width: 9px; height: 9px; }.active-pattern-hero h3 { font-size: 20px; }.pattern-stack-preview { grid-template-columns: auto; }.pattern-stack-preview .pattern-mini:nth-child(n+3) { display: none; }
-  .manual-layout, .pattern-editor { grid-template-columns: 1fr; padding: 18px; }.modal-backdrop { padding: 8px; }.modal { max-height: calc(100vh - 16px); }.manual-grid { order: -1; }.winner-modal { padding: 30px 18px; }.winner-modal h2 { font-size: 41px; }.winner-details > div { grid-template-columns: 50px 1fr; }.winner-details time { display: none; }.winner-actions { flex-direction: column; }
+  .manual-layout, .pattern-editor { grid-template-columns: 1fr; padding: 18px; }.modal-backdrop { padding: 8px; }.modal { max-height: calc(100vh - 16px); }.manual-grid { order: -1; }.winner-modal { padding: 30px 18px; }.winner-modal h2 { font-size: 41px; }.winner-details > div { grid-template-columns: 50px 1fr; }.winner-details time { display: none; }.winner-actions { flex-direction: column; }.page-selection-heading { align-items: flex-start; flex-direction: column; }
   .report-summary dl { grid-template-columns: 1fr; }.report-summary dl div:nth-last-child(-n+2) { border-bottom: 1px solid var(--line-soft); }.report-summary dl div:last-child { border-bottom: 0; }
   .form-row { grid-template-columns: 1fr; }
 }

@@ -68,7 +68,7 @@ import {
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { fileChecksum, identifyBingoSource, parseBingoFile, parseBingoPdf, type PdfParseProgress } from "@/lib/pdf-parser";
+import { fileChecksum, getBingoSourcePageCount, identifyBingoSource, parseBingoFile, parseBingoPdf, type BingoSourceKind, type PdfParseProgress } from "@/lib/pdf-parser";
 import { parseProMaxPackage, type ProMaxImportResult } from "@/lib/promax-package";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
@@ -76,6 +76,7 @@ type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
 type PatternFilter = "all" | "cartones" | "numeros" | "adicionales";
 type CardFilter = "all" | "5x5" | "sabrositos" | "numeros" | "adicionales";
+type PageSelectionDraft = { id: string; file: File; kind: BingoSourceKind; pageCount: number; selectedPages: number[] };
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
@@ -495,6 +496,9 @@ export default function GameConsole() {
     typeof window === "undefined" || localStorage.getItem("bingo-sound") !== "off",
   );
   const [processingFiles, setProcessingFiles] = useState(false);
+  const [preparingPageSelection, setPreparingPageSelection] = useState(false);
+  const [pageSelectionOpen, setPageSelectionOpen] = useState(false);
+  const [pageSelectionDrafts, setPageSelectionDrafts] = useState<PageSelectionDraft[]>([]);
   const [pdfProgress, setPdfProgress] = useState<(PdfParseProgress & { file: string }) | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importDrafts, setImportDrafts] = useState<BingoCard[]>([]);
@@ -1299,13 +1303,11 @@ export default function GameConsole() {
     }
   };
 
-  const processFiles = async (files: File[]) => {
-    if (!state || !files.length) return;
-    setProcessingFiles(true);
+  const prepareFilesForImport = async (files: File[]) => {
+    if (!state || !files.length || preparingPageSelection || processingFiles) return;
+    setPreparingPageSelection(true);
     const warnings: string[] = [];
-    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
-    const drafts: BingoCard[] = [];
-    let pages = 0;
+    const selections: PageSelectionDraft[] = [];
     try {
       for (const file of files) {
         if (file.size > 50 * 1024 * 1024) {
@@ -1313,16 +1315,57 @@ export default function GameConsole() {
           continue;
         }
         try {
-          await identifyBingoSource(file);
+          const kind = await identifyBingoSource(file);
+          const pageCount = await getBingoSourcePageCount(file);
+          selections.push({
+            id: crypto.randomUUID(),
+            file,
+            kind,
+            pageCount,
+            selectedPages: Array.from({ length: pageCount }, (_, index) => index + 1),
+          });
         } catch (caught) {
           warnings.push(`${file.name}: ${caught instanceof Error ? caught.message : "formato no compatible"}`);
-          continue;
         }
-        const parsed = await parseBingoFile(file, (progress) =>
-          setPdfProgress({ ...progress, file: file.name }),
+      }
+      setImportWarnings(warnings);
+      setPageSelectionDrafts(selections);
+      setPageSelectionOpen(selections.length > 0);
+      if (!selections.length && !warnings.length) notify("No se seleccionaron archivos válidos.", "warning");
+    } finally {
+      setPreparingPageSelection(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const updateSelectedPages = (id: string, nextPages: number[]) => {
+    setPageSelectionDrafts((current) => current.map((entry) => entry.id === id
+      ? { ...entry, selectedPages: [...new Set(nextPages)].filter((page) => page >= 1 && page <= entry.pageCount).sort((a, b) => a - b) }
+      : entry));
+  };
+
+  const processSelectedFiles = async () => {
+    if (!state) return;
+    const filesToProcess = pageSelectionDrafts.filter((entry) => entry.selectedPages.length > 0);
+    if (!filesToProcess.length) {
+      notify("Selecciona al menos una página para cargar.", "warning");
+      return;
+    }
+    setPageSelectionOpen(false);
+    setProcessingFiles(true);
+    const warnings: string[] = [];
+    const usedNumbers = new Set(state.cards.map((card) => card.number.toLowerCase()));
+    const drafts: BingoCard[] = [];
+    let pages = 0;
+    try {
+      for (const entry of filesToProcess) {
+        const parsed = await parseBingoFile(
+          entry.file,
+          (progress) => setPdfProgress({ ...progress, file: entry.file.name }),
+          entry.selectedPages,
         );
         pages += parsed.pages;
-        warnings.push(...parsed.warnings.map((warning) => `${file.name} · ${warning}`));
+        warnings.push(...parsed.warnings.map((warning) => `${entry.file.name} · ${warning}`));
         parsed.cards.forEach((card) => {
           const duplicate = Boolean(card.number) && usedNumbers.has(card.number.toLowerCase());
           if (card.number) usedNumbers.add(card.number.toLowerCase());
@@ -1365,6 +1408,7 @@ export default function GameConsole() {
     } finally {
       setProcessingFiles(false);
       setPdfProgress(null);
+      setPageSelectionDrafts([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -2107,7 +2151,7 @@ export default function GameConsole() {
                 accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png"
                 className="visually-hidden"
                 multiple
-                onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
+                onChange={(event) => void prepareFilesForImport(Array.from(event.target.files ?? []))}
                 ref={fileInputRef}
                 type="file"
               />
@@ -2126,10 +2170,15 @@ export default function GameConsole() {
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
-                  void processFiles(Array.from(event.dataTransfer.files));
+                  void prepareFilesForImport(Array.from(event.dataTransfer.files));
                 }}
               >
-                {processingFiles ? (
+                {preparingPageSelection ? (
+                  <>
+                    <span className="upload-icon"><LoaderCircle className="spin" size={29} /></span>
+                    <div><strong>Preparando selección de páginas</strong><p>Leyendo la cantidad de páginas de cada archivo; todavía no inicia el OCR.</p></div>
+                  </>
+                ) : processingFiles ? (
                   <>
                     <span className="upload-icon"><LoaderCircle className="spin" size={29} /></span>
                     <div><strong>{pdfProgress?.stage ?? "Preparando PDF"}</strong><p>{pdfProgress?.file} · página {pdfProgress?.page ?? 0} de {pdfProgress?.pages ?? 0}</p></div>
@@ -2378,6 +2427,36 @@ export default function GameConsole() {
       </section>
 
       <AnimatePresence>
+        {pageSelectionOpen && (
+          <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
+            <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal page-selection-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>
+              <header>
+                <div><span className="eyebrow">IMPORTACIÓN TEMPORAL</span><h2>Selecciona las páginas a cargar</h2></div>
+                <button aria-label="Cerrar selección de páginas" className="icon-button" onClick={() => { setPageSelectionOpen(false); setPageSelectionDrafts([]); }} type="button"><X size={19} /></button>
+              </header>
+              <p className="page-selection-help">Por defecto están seleccionadas todas las páginas. Ajusta cada archivo por separado; solo las páginas marcadas pasarán al reconocimiento de cartones.</p>
+              <div className="page-selection-files">
+                {pageSelectionDrafts.map((entry) => (
+                  <section className="page-selection-file" key={entry.id}>
+                    <div className="page-selection-heading">
+                      <div><strong title={entry.file.name}>{entry.file.name}</strong><small>{entry.pageCount} {entry.pageCount === 1 ? "página" : "páginas"} · {entry.selectedPages.length} seleccionadas</small></div>
+                      <div><button className="ghost-button compact" onClick={() => updateSelectedPages(entry.id, Array.from({ length: entry.pageCount }, (_, index) => index + 1))} type="button">Todas</button><button className="ghost-button compact" onClick={() => updateSelectedPages(entry.id, [])} type="button">Ninguna</button></div>
+                    </div>
+                    <div aria-label={`Páginas de ${entry.file.name}`} className="page-selection-grid">
+                      {Array.from({ length: entry.pageCount }, (_, index) => index + 1).map((page) => (
+                        <label className={entry.selectedPages.includes(page) ? "selected" : ""} key={page}>
+                          <input checked={entry.selectedPages.includes(page)} onChange={(event) => updateSelectedPages(entry.id, event.target.checked ? [...entry.selectedPages, page] : entry.selectedPages.filter((value) => value !== page))} type="checkbox" />
+                          <span>Página {page}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              <footer><button className="ghost-button" onClick={() => { setPageSelectionOpen(false); setPageSelectionDrafts([]); }} type="button">Cancelar</button><button className="primary-button" disabled={!pageSelectionDrafts.some((entry) => entry.selectedPages.length)} onClick={() => void processSelectedFiles()} type="button"><UploadCloud size={16} /> Cargar {pageSelectionDrafts.reduce((total, entry) => total + entry.selectedPages.length, 0)} páginas</button></footer>
+            </motion.section>
+          </motion.div>
+        )}
         {importReviewOpen && (
           <motion.div animate={{ opacity: 1 }} className="modal-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }}>
             <motion.section animate={{ opacity: 1, scale: 1, y: 0 }} className="modal import-review-modal" exit={{ opacity: 0, scale: 0.98, y: 12 }} initial={{ opacity: 0, scale: 0.98, y: 12 }}>

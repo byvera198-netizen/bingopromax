@@ -108,6 +108,16 @@ export interface PdfParseResult {
   warnings: string[];
 }
 
+export function normalizePdfPageSelection(pageCount: number, selectedPages?: number[]) {
+  const validPageCount = Math.max(0, Math.floor(pageCount));
+  if (selectedPages === undefined) {
+    return Array.from({ length: validPageCount }, (_, index) => index + 1);
+  }
+  return [...new Set(selectedPages
+    .filter((page) => Number.isInteger(page) && page >= 1 && page <= validPageCount))]
+    .sort((left, right) => left - right);
+}
+
 export interface GridRectangle {
   x: number;
   y: number;
@@ -3480,6 +3490,7 @@ async function runOcr(
 export async function parseBingoPdf(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
+  selectedPages?: number[],
 ): Promise<PdfParseResult> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -3491,22 +3502,23 @@ export async function parseBingoPdf(
     isEvalSupported: false,
   }).promise;
   const pageCount = pdf.numPages;
+  const pagesToProcess = normalizePdfPageSelection(pageCount, selectedPages);
   const pageResults: Array<{ cards: BingoCard[]; warnings: string[] }> =
     Array.from({ length: pageCount }, () => ({ cards: [], warnings: [] }));
   // Three workers keep multi-page scans moving while keeping memory bounded.
   // Pages are still merged in their original order below.
-  const workerCount = Math.min(3, pageCount);
+  const workerCount = Math.min(3, pagesToProcess.length);
   const ocrWorkers: Array<OcrWorker | null> = Array(workerCount).fill(null);
 
   try {
-    const processPage = async (pageNumber: number, workerIndex: number) => {
+    const processPage = async (pageNumber: number, workerIndex: number, selectionIndex: number) => {
       const result = pageResults[pageNumber - 1];
       try {
       onProgress({
         page: pageNumber,
         pages: pageCount,
         stage: "Leyendo texto",
-        percent: Math.round(((pageNumber - 1) / pageCount) * 100),
+        percent: Math.round((selectionIndex / pagesToProcess.length) * 100),
       });
       const page = await pdf.getPage(pageNumber);
       const text = await page.getTextContent();
@@ -3549,7 +3561,7 @@ export async function parseBingoPdf(
           page: pageNumber,
           pages: pageCount,
           stage: "Aplicando OCR",
-          percent: Math.round(((pageNumber - 0.5) / pageCount) * 100),
+          percent: Math.round(((selectionIndex + 0.5) / pagesToProcess.length) * 100),
         });
         try {
           ocrWorkers[workerIndex] ??= await createOcrWorker();
@@ -3591,12 +3603,9 @@ export async function parseBingoPdf(
         );
       }
     };
-    for (let start = 1; start <= pageCount; start += workerCount) {
-      const batch = Array.from(
-        { length: Math.min(workerCount, pageCount - start + 1) },
-        (_, offset) => start + offset,
-      );
-      await Promise.all(batch.map((pageNumber, offset) => processPage(pageNumber, offset)));
+    for (let start = 0; start < pagesToProcess.length; start += workerCount) {
+      const batch = pagesToProcess.slice(start, start + workerCount);
+      await Promise.all(batch.map((pageNumber, offset) => processPage(pageNumber, offset, start + offset)));
     }
   } finally {
     await Promise.all(
@@ -3606,19 +3615,38 @@ export async function parseBingoPdf(
   }
 
   onProgress({
-    page: pageCount,
+    page: pagesToProcess.at(-1) ?? pageCount,
     pages: pageCount,
     stage: "Validando",
     percent: 100,
   });
   return {
     cards: pageResults.flatMap((result) => result.cards),
-    pages: pageCount,
+    pages: pagesToProcess.length,
     warnings: pageResults.flatMap((result) => result.warnings),
   };
 }
 
 export type BingoSourceKind = "pdf" | "image";
+
+export async function getBingoSourcePageCount(file: File): Promise<number> {
+  const kind = await identifyBingoSource(file);
+  if (kind === "image") return 1;
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
+  const pdf = await pdfjs.getDocument({
+    data: await file.arrayBuffer(),
+    isEvalSupported: false,
+  }).promise;
+  try {
+    return pdf.numPages;
+  } finally {
+    await pdf.destroy();
+  }
+}
 
 export async function identifyBingoSource(file: File): Promise<BingoSourceKind> {
   const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
@@ -3670,9 +3698,10 @@ export async function parseBingoImage(
 export async function parseBingoFile(
   file: File,
   onProgress: (progress: PdfParseProgress) => void,
+  selectedPages?: number[],
 ): Promise<PdfParseResult> {
   const kind = await identifyBingoSource(file);
-  return kind === "pdf" ? parseBingoPdf(file, onProgress) : parseBingoImage(file, onProgress);
+  return kind === "pdf" ? parseBingoPdf(file, onProgress, selectedPages) : parseBingoImage(file, onProgress);
 }
 
 export async function fileChecksum(file: File) {

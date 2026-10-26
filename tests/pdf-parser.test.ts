@@ -25,6 +25,7 @@ import {
   isSabrositoSheetHeading,
   mergeDetectedCards,
   numberPatternCellIndexes,
+  normalizePdfPageSelection,
   removeSabrositoCardsFromClassicSheets,
   shouldReadSpecialSheetRegions,
   shouldProbeSabrositoGeometryFallback,
@@ -41,6 +42,12 @@ const baseGrid = [
   4, 19, 34, 49, 64,
   5, 20, 35, 50, 65,
 ];
+
+test("la selección de páginas PDF incluye todas por defecto y normaliza las elegidas", () => {
+  assert.deepEqual(normalizePdfPageSelection(5), [1, 2, 3, 4, 5]);
+  assert.deepEqual(normalizePdfPageSelection(5, [5, 4, 4, 0, 6, 2.5]), [4, 5]);
+  assert.deepEqual(normalizePdfPageSelection(5, []), []);
+});
 
 test("clasifica hojas adicionales por las casillas ocupadas, no por OCR unido", () => {
   const smile = Array.from({ length: 5 }, () => Array(5).fill(0));
