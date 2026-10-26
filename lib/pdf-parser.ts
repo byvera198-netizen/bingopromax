@@ -2981,7 +2981,7 @@ async function recognizeAnchoredSheetCards(
       const bingoColumnRanges: [number, number][] = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
       const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
         rect.y / source.height + y * rect.height / source.height, size, kind === "number"
-          ? { allowedRange: bingoColumnRanges[cell.column], preferGrayscale: true }
+          ? { allowedRange: bingoColumnRanges[cell.column] }
           : {});
       matrix[cell.row][cell.column] = value;
     }
