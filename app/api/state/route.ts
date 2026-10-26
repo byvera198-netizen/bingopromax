@@ -1215,9 +1215,18 @@ export async function POST(request: Request) {
       // previous game before creating the replacement so old cards cannot
       // reappear after the next synchronization or consume D1 storage.
       const oldGames = await db
-        .prepare("SELECT id FROM games WHERE owner_email = ?")
+        .prepare("SELECT id FROM games WHERE owner_email = ? ORDER BY created_at DESC")
         .bind(actor)
         .all<{ id: string }>();
+      const sourceGameId = oldGames.results?.[0]?.id;
+      const savedPatternDefaults = sourceGameId
+        ? await db.prepare(
+            `SELECT gp.pattern_id, gp.enabled, gp.custom, gp.deleted,
+                    p.name, p.description, p.color, p.category, p.difficulty, p.cells_json, p.created_at AS pattern_created_at
+             FROM game_patterns gp LEFT JOIN patterns p ON p.id = gp.pattern_id
+             WHERE gp.game_id = ?`,
+          ).bind(sourceGameId).all<Record<string, unknown>>()
+        : { results: [] as Record<string, unknown>[] };
       // D1 limits the number of statements in a single batch.  A user may
       // have accumulated many old games, so clean each game in a small batch
       // and only insert the replacement after every old record is gone.
@@ -1231,7 +1240,6 @@ export async function POST(request: Request) {
           db.prepare("DELETE FROM games WHERE id = ?").bind(oldGame.id),
         ]);
       }
-      await db.prepare("DELETE FROM patterns WHERE id NOT IN (SELECT pattern_id FROM game_patterns)").run();
       await db
         .prepare(
           `INSERT INTO games (
@@ -1241,6 +1249,36 @@ export async function POST(request: Request) {
         )
         .bind(id, actor, name, date, prize, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
         .run();
+      const defaultRows = savedPatternDefaults.results ?? [];
+      const copyStatements = defaultRows.flatMap((row) => {
+        const patternId = String(row.pattern_id);
+        const custom = Boolean(row.custom);
+        const statements = [];
+        if (custom && row.name) {
+          statements.push(db.prepare(
+            `INSERT OR REPLACE INTO patterns (id, name, description, color, category, difficulty, cells_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(
+            patternId,
+            String(row.name),
+            String(row.description ?? ""),
+            String(row.color ?? "#d7ff3f"),
+            String(row.category ?? "Personalizado"),
+            String(row.difficulty ?? "Media"),
+            String(row.cells_json ?? "[]"),
+            String(row.pattern_created_at ?? createdAt),
+          ));
+        }
+        statements.push(db.prepare(
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).bind(id, patternId, Boolean(row.enabled) ? 1 : 0, custom ? 1 : 0, Boolean(row.deleted) ? 1 : 0, createdAt));
+        return statements;
+      });
+      for (let offset = 0; offset < copyStatements.length; offset += 40) {
+        await db.batch(copyStatements.slice(offset, offset + 40));
+      }
+      await db.prepare("DELETE FROM patterns WHERE id NOT IN (SELECT pattern_id FROM game_patterns)").run();
       await audit(db, id, "CREATE_GAME", name, actor);
       return Response.json({ id });
     }
