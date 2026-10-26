@@ -18,8 +18,17 @@ import {
   detectGridRectangles,
   extractGridFromKnownOcrBlocks,
   extractCardsFromTextItems,
+  effectiveClassicGridCount,
   hasAdditionalGameMarker,
+  isExplicitSpecialSheetHeading,
+  isNumberPatternSheetHeading,
+  isSabrositoSheetHeading,
   mergeDetectedCards,
+  numberPatternCellIndexes,
+  removeSabrositoCardsFromClassicSheets,
+  shouldReadSpecialSheetRegions,
+  shouldProbeSabrositoGeometryFallback,
+  specialLayoutNameForCellRows,
   type OcrBlock,
   type PdfTextItem,
 } from "../lib/pdf-parser";
@@ -33,6 +42,69 @@ const baseGrid = [
   5, 20, 35, 50, 65,
 ];
 
+test("clasifica hojas adicionales por las casillas ocupadas, no por OCR unido", () => {
+  const smile = Array.from({ length: 5 }, () => Array(5).fill(0));
+  smile[1][1] = 15; smile[1][3] = 49;
+  smile[2][0] = 1; smile[2][4] = 62;
+  smile[3][1] = 16; smile[3][2] = 28; smile[3][3] = 57;
+  assert.equal(specialLayoutNameForCellRows(smile), "Sonrisa");
+
+  const cross = Array.from({ length: 5 }, () => Array(5).fill(0));
+  cross[0][2] = 24;
+  cross[1] = [8, 12, 27, 67, 72];
+  cross[3][2] = 35;
+  cross[4][2] = 49;
+  assert.equal(specialLayoutNameForCellRows(cross), "Cruz");
+});
+
+test("no clasifica una tabla completa 5×5 como juego adicional", () => {
+  const classic = Array.from({ length: 5 }, (_, row) =>
+    Array.from({ length: 5 }, (_, column) => row * 5 + column + 1),
+  );
+  assert.equal(specialLayoutNameForCellRows(classic), null);
+});
+
+test("usa geometría para activar OCR regional en hojas especiales con OCR escaso", () => {
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: false,
+    classicRectangleCount: 0,
+    compactRectangleCount: 10,
+  }), true);
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: false,
+    classicRectangleCount: 4,
+    compactRectangleCount: 10,
+  }), false);
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: true,
+    classicRectangleCount: 0,
+    compactRectangleCount: 10,
+  }), false);
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: true,
+    classicRectangleCount: 4,
+    compactRectangleCount: 10,
+    explicitSpecialMarker: true,
+  }), true);
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: false,
+    classicRectangleCount: 0,
+    compactRectangleCount: 45,
+  }), false);
+  assert.equal(shouldReadSpecialSheetRegions({
+    forceFullPageOcr: true,
+    pageComplete: false,
+    classicRectangleCount: 0,
+    compactRectangleCount: 45,
+    explicitSpecialMarker: true,
+  }), true);
+});
+
 test("no confunde la mención de Sabrosito del encabezado con una hoja especial", () => {
   assert.equal(
     hasAdditionalGameMarker([{ str: "2 H. SABROSITO", transform: [1, 0, 0, 1, 10, 10] }]),
@@ -41,6 +113,99 @@ test("no confunde la mención de Sabrosito del encabezado con una hoja especial"
   assert.equal(
     hasAdditionalGameMarker([{ str: "HOJA DE SABROSITO", transform: [1, 0, 0, 1, 10, 10] }]),
     true,
+  );
+});
+
+test("solo usa el fallback de Sabrositos cuando hay un encabezado explícito", () => {
+  assert.equal(isSabrositoSheetHeading("HOJA DE SABROSITO · 5 SABROSITOS DE 30"), true);
+  assert.equal(isSabrositoSheetHeading("Bingo tradicional · 2 H. SABROSITO"), false);
+});
+
+test("distingue la geometría 2×5 de Sabrositos de una hoja 5×5", () => {
+  assert.equal(shouldProbeSabrositoGeometryFallback({
+    explicitHeading: false,
+    classicRectangleCount: 0,
+    compactRectangleCount: 10,
+  }), true);
+  assert.equal(shouldProbeSabrositoGeometryFallback({
+    explicitHeading: false,
+    classicRectangleCount: 0,
+    compactRectangleCount: 45,
+  }), false);
+  assert.equal(shouldProbeSabrositoGeometryFallback({
+    explicitHeading: true,
+    classicRectangleCount: 2,
+    compactRectangleCount: 10,
+  }), false);
+});
+
+test("usa muchos marcos compactos como evidencia de página clásica 5×5", () => {
+  assert.equal(effectiveClassicGridCount(0, 45), 2);
+  assert.equal(effectiveClassicGridCount(0, 10), 0);
+  assert.equal(effectiveClassicGridCount(4, 10), 4);
+});
+
+test("detecta encabezados OCR de juegos adicionales sin leer promociones comunes", () => {
+  assert.equal(isExplicitSpecialSheetHeading("HOJA DE ADICIONAL"), true);
+  assert.equal(isExplicitSpecialSheetHeading("HOJADEADICIONA"), true);
+  assert.equal(isExplicitSpecialSheetHeading("ADL1 #015263"), true);
+  assert.equal(isExplicitSpecialSheetHeading("2 H. SABROSITO"), false);
+});
+
+test("reconoce el encabezado de páginas escaneadas con formas numéricas", () => {
+  assert.equal(isNumberPatternSheetHeading("HOJA DE NÚMEROS"), true);
+  assert.equal(isNumberPatternSheetHeading("HOJA DE NUMEROS"), true);
+  assert.equal(isNumberPatternSheetHeading("BINGO 1 2 3 4 5"), false);
+});
+
+test("no clasifica como Sabrosito una página con varios cartones 5×5", () => {
+  const items: PdfTextItem[] = [];
+  for (let card = 0; card < 4; card += 1) {
+    const x = card % 2 === 0 ? 60 : 430;
+    const top = card < 2 ? 700 : 350;
+    for (let row = 0; row < 5; row += 1) {
+      const offset = card;
+      const values = [
+        1 + row + offset,
+        16 + row + offset,
+        31 + row + offset,
+        46 + row + offset,
+        61 + row + offset,
+      ];
+      items.push({
+        str: values.join(" "),
+        transform: [1, 0, 0, 1, x, top - row * 42],
+        width: 150,
+        height: 20,
+      });
+    }
+  }
+  // Simulate unrelated prize/ad copy that happens to form a 3+2 OCR signature.
+  items.push(
+    { str: "15 9 4", transform: [1, 0, 0, 1, 260, 820], width: 90, height: 18 },
+    { str: "2 1", transform: [1, 0, 0, 1, 275, 772], width: 60, height: 18 },
+  );
+
+  assert.ok(
+    extractCardsFromTextItems(items.slice(-2), "anuncio.pdf", 1)
+      .some((card) => card.layout?.type === "sabrosito-5"),
+    "la muestra debe reproducir la falsa firma 3+2 que se elimina con la geometría 5×5",
+  );
+  const cards = extractCardsFromTextItems(items, "hoja-5x5-con-anuncio.pdf", 1);
+  assert.equal(cards.filter((card) => card.layout?.type === "classic-5x5").length, 4);
+  assert.equal(cards.some((card) => card.layout?.type === "sabrosito-5"), false);
+  const falseSabrosito: BingoCard = {
+    id: "s",
+    number: "s",
+    grid: [1, 2, 3, 4, 5],
+    sourceFile: "scan.pdf",
+    sourcePage: 1,
+    status: "active",
+    layout: cardLayoutFor({ grid: [1, 2, 3, 4, 5] }),
+  };
+  assert.equal(
+    removeSabrositoCardsFromClassicSheets([falseSabrosito], 4).length,
+    0,
   );
 });
 
@@ -338,6 +503,16 @@ test("detecta las formas numéricas de las hojas de números", () => {
   assert.ok(cards.some((card) => card.layout?.name === "Número 3"));
 });
 
+test("mapea todas las casillas impresas de las formas 1, 3, 5 y 9", () => {
+  assert.equal(numberPatternCellIndexes(1).length, 10);
+  assert.equal(numberPatternCellIndexes(3).length, 16);
+  assert.equal(numberPatternCellIndexes(5).length, 16);
+  assert.equal(numberPatternCellIndexes(9).length, 17);
+  assert.ok(numberPatternCellIndexes(5).includes(19)); // Forma 5: borde exterior derecho.
+  assert.ok(numberPatternCellIndexes(9).includes(1)); // Forma 9: segunda casilla superior.
+  assert.ok(numberPatternCellIndexes(9).includes(3)); // Forma 9: cuarta casilla superior.
+});
+
 test("reconoce un juego adicional por la figura aunque falte el título", () => {
   const grid = Array(25).fill(0);
   const avion = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-avion");
@@ -611,6 +786,48 @@ test("reconoce las seis formas de juego de la hoja de adicionales", () => {
     assert.equal(card.grid.length, count);
     assert.equal(card.grid.filter((value) => value > 0).length, count);
   }
+});
+
+test("recupera las seis formas mezcladas en una sola hoja de adicionales", () => {
+  const forms: Array<[string, number[][], number, number]> = [
+    ["Avión", [[41], [2, 52], [14, 37, 70], [17, 55], [50]], 80, 730],
+    ["Flecha", [[9, 20, 44], [15, 28], [19, 54], [63], [67]], 420, 730],
+    ["Espada", [[50], [53], [56, 68], [64], [61, 72]], 80, 470],
+    ["Pesa", [[21, 49], [13, 41, 54], [36, 51]], 420, 470],
+    ["Rombo", [[22], [20, 37], [4, 44], [21, 38], [26]], 80, 230],
+    ["Bomba", [[12, 64], [30], [27, 56], [43], [18, 72]], 420, 230],
+  ];
+  const items: PdfTextItem[] = forms.flatMap(([, rows, x, y]) =>
+    rows.map((row, index) => ({
+      str: row.join(" "),
+      transform: [1, 0, 0, 1, x, y - index * 28],
+      width: Math.max(40, row.length * 30),
+      height: 20,
+    })),
+  );
+  const cards = extractCardsFromTextItems(items, "hoja-adicional-mixta.pdf", 1);
+  const names = cards.map((card) => card.layout?.name);
+  for (const [name] of forms) assert.ok(names.includes(name), `Falta ${name}`);
+});
+
+test("recupera diez Sabrositos dispuestos en dos columnas y cinco filas", () => {
+  const expected = [
+    [24, 38, 50, 21, 73], [28, 44, 56, 18, 62],
+    [3, 41, 55, 28, 51], [11, 40, 46, 2, 75],
+    [7, 42, 52, 22, 59], [28, 37, 74, 5, 49],
+    [19, 34, 74, 3, 57], [18, 31, 51, 26, 61],
+    [13, 40, 47, 4, 74], [18, 33, 62, 14, 67],
+  ];
+  const items: PdfTextItem[] = expected.flatMap((values, index) => {
+    const x = index % 2 === 0 ? 80 : 420;
+    const y = 760 - Math.floor(index / 2) * 150;
+    return [
+      { str: values.slice(0, 3).join(" "), transform: [1, 0, 0, 1, x, y], width: 150, height: 22 },
+      { str: values.slice(3).join(" "), transform: [1, 0, 0, 1, x, y - 48], width: 100, height: 22 },
+    ];
+  });
+  const allCards = extractCardsFromTextItems(items, "hoja-sabrosito.pdf", 1);
+  assert.deepEqual(allCards.map((card) => [card.layout?.type, card.grid]), expected.map((grid) => ["sabrosito-5", grid]));
 });
 
 test("conserva mini-cartones que comparten el identificador impreso", () => {

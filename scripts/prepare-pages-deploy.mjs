@@ -29,6 +29,7 @@ export default {
       "/manifest.webmanifest",
       "/pwa-icon.svg",
       "/sw.js",
+      "/tesseract/",
     ]);
 
     if ([...staticPaths].some((path) => path.endsWith("/") ? pathname.startsWith(path) : pathname === path)) {

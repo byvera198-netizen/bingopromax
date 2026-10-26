@@ -122,6 +122,14 @@ function cardFilterFor(card: BingoCard): Exclude<CardFilter, "all"> {
   if (card.grid.length === 25) return "5x5";
   const layoutType = String(card.layout?.type ?? "").toLowerCase();
   if (layoutType.includes("sabrosito")) return "sabrositos";
+  // Number sheets are imported as sparse custom layouts (their grid contains
+  // only the occupied cells), so they cannot be identified by grid length.
+  // Use the canonical layout name as the classification source and keep the
+  // numbered glyphs out of the generic additional-games filter.
+  const layoutName = String(card.layout?.name ?? "").trim().toLocaleLowerCase("es");
+  if (/^n[uú]mero\s+[1-9]\b/.test(layoutName) || /^forma\s+(?:[134579]|[+=])\b/.test(layoutName)) {
+    return "numeros";
+  }
   const additional = additionalPatternForCard(card);
   const category = additional?.category.toLocaleLowerCase("es") ?? "";
   if (category === "números" || category === "numeros" || additional?.name.toLocaleLowerCase("es").startsWith("número")) return "numeros";
@@ -518,6 +526,8 @@ export default function GameConsole() {
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const proMaxFileInputRef = useRef<HTMLInputElement>(null);
+  const temporaryCardsRef = useRef(new Map<string, BingoCard>());
+  const temporaryGameIdRef = useRef<string | null>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -543,7 +553,14 @@ export default function GameConsole() {
         return;
       }
       if (!response.ok) throw new Error(payload.error || "No se pudo abrir la partida.");
-      setState(payload);
+      if (temporaryGameIdRef.current !== payload.game.id) {
+        temporaryCardsRef.current.clear();
+        temporaryGameIdRef.current = payload.game.id;
+      }
+      const temporaryCards = [...temporaryCardsRef.current.values()].filter(
+        (card) => !payload.cards.some((saved) => saved.id === card.id),
+      );
+      setState({ ...payload, cards: [...payload.cards, ...temporaryCards] });
       setAccess(payload.access);
       if (!silent) {
         setGameDraft({
@@ -998,7 +1015,11 @@ export default function GameConsole() {
     if (!state) return;
     const status = card.status === "active" ? "void" : "active";
     try {
-      await api({ action: "updateCardStatus", gameId: state.game.id, cardId: card.id, status });
+      if (temporaryCardsRef.current.has(card.id)) {
+        temporaryCardsRef.current.set(card.id, { ...card, status });
+      } else {
+        await api({ action: "updateCardStatus", gameId: state.game.id, cardId: card.id, status });
+      }
       setState({
         ...state,
         cards: state.cards.map((item) => (item.id === card.id ? { ...item, status } : item)),
@@ -1012,7 +1033,7 @@ export default function GameConsole() {
   const deleteCard = async (card: BingoCard) => {
     if (!state || !window.confirm(`¿Eliminar definitivamente el cartón #${card.number} de esta partida?`)) return;
     try {
-      await api({ action: "deleteCard", gameId: state.game.id, cardId: card.id });
+      temporaryCardsRef.current.delete(card.id);
       setState({
         ...state,
         cards: state.cards.filter((item) => item.id !== card.id),
@@ -1062,7 +1083,11 @@ export default function GameConsole() {
         notify(`Cartón #${number} corregido. Revisa y guárdalo en la partida.`);
         return;
       }
-      await api({ action: "updateCard", gameId: state.game.id, card: updated });
+      if (temporaryCardsRef.current.has(updated.id)) {
+        temporaryCardsRef.current.set(updated.id, updated);
+      } else {
+        await api({ action: "updateCard", gameId: state.game.id, card: updated });
+      }
       setState({ ...state, cards: state.cards.map((card) => card.id === updated.id ? updated : card) });
       setCardDraft(null);
       notify(`Cartón #${number} actualizado como ${layout.name}.`);
@@ -1080,8 +1105,8 @@ export default function GameConsole() {
     }
     if (!window.confirm(`¿Eliminar definitivamente los ${voided.length} cartones anulados?`)) return;
     try {
-      await api({ action: "deleteVoidCards", gameId: state.game.id });
       const ids = new Set(voided.map((card) => card.id));
+      ids.forEach((id) => temporaryCardsRef.current.delete(id));
       setState({
         ...state,
         cards: state.cards.filter((card) => !ids.has(card.id)),
@@ -1197,8 +1222,8 @@ export default function GameConsole() {
       reviewStatus: "ready",
     };
     try {
-      await api({ action: "saveCards", gameId: state.game.id, cards: [card] });
       setState({ ...state, cards: [card, ...state.cards] });
+      temporaryCardsRef.current.set(card.id, card);
       setManualOpen(false);
       setManualNumber("");
       setManualSerial("");
@@ -1252,32 +1277,11 @@ export default function GameConsole() {
           warnings.push(`${file.name}: no se encontraron cartones nuevos para guardar.`);
           continue;
         }
-        const result = await api<{ accepted: number; duplicates: number }>({
-          action: "saveCards",
-          gameId: state.game.id,
-          cards: uniqueCards,
-        });
-        imported += result.accepted;
-        duplicateCount += result.duplicates;
-        const authorization = await authorizationHeaders();
-        const upload = await fetch("/api/files", {
-          method: "POST",
-          headers: {
-            "content-type": "application/pdf",
-            "x-file-name": encodeURIComponent(file.name),
-            "x-checksum": checksum,
-            "x-game-id": state.game.id,
-            "x-device-id": deviceId(),
-            "x-pages": String(parsed.pages),
-            "x-cards": String(result.accepted),
-            ...authorization,
-          },
-          body: file,
-        });
-        if (!upload.ok) {
-          const detail = (await upload.json()) as { error?: string };
-          warnings.push(`${file.name}: ${detail.error || "no se pudo conservar el archivo original."}`);
-        }
+        uniqueCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+        setState((current) => current
+          ? { ...current, cards: [...current.cards, ...uniqueCards] }
+          : current);
+        imported += uniqueCards.length;
       }
       await refresh();
       setImportWarnings(warnings);
@@ -1304,8 +1308,8 @@ export default function GameConsole() {
     let pages = 0;
     try {
       for (const file of files) {
-        if (file.size > 25 * 1024 * 1024) {
-          warnings.push(`${file.name}: excede el límite de 25 MB.`);
+        if (file.size > 50 * 1024 * 1024) {
+          warnings.push(`${file.name}: excede el límite de 50 MB.`);
           continue;
         }
         try {
@@ -1335,15 +1339,13 @@ export default function GameConsole() {
       const readyDrafts = drafts.filter((card) => card.reviewStatus !== "needs-review");
       const pendingDrafts = drafts.filter((card) => card.reviewStatus === "needs-review");
       if (readyDrafts.length) {
-        const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
-          action: "saveCards",
-          gameId: state.game.id,
-          cards: readyDrafts,
-        });
-        await refresh();
-        if (result.accepted) notify(`${result.accepted} cartón(es) guardados en la partida.`);
-        if (result.duplicates) warnings.push(`${result.duplicates} cartón(es) ya existían y fueron omitidos.`);
-        if (result.rejected) warnings.push(`${result.rejected} cartón(es) quedaron pendientes de revisión.`);
+        // Imported PDF cards are intentionally session-only. Keep them in the
+        // active game state without sending the PDF or card rows to D1/R2.
+        readyDrafts.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+        setState((current) => current
+          ? { ...current, cards: [...current.cards, ...readyDrafts] }
+          : current);
+        notify(`${readyDrafts.length} cartón(es) cargados temporalmente en la partida.`);
       }
       setImportWarnings(warnings);
       setImportDrafts(pendingDrafts);
@@ -1387,23 +1389,12 @@ export default function GameConsole() {
     if (!state || !proMaxImport) return;
     setProMaxImportBusy(true);
     setProMaxImportProgress({ completed: 0, total: proMaxImport.cards.length });
-    let accepted = 0;
-    let duplicates = 0;
-    let rejected = 0;
     try {
-      for (let offset = 0; offset < proMaxImport.cards.length; offset += PROMAX_IMPORT_CHUNK_SIZE) {
-        const chunk = proMaxImport.cards.slice(offset, offset + PROMAX_IMPORT_CHUNK_SIZE);
-        const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
-          action: "saveCards",
-          gameId: state.game.id,
-          cards: chunk,
-          source: "studio-package",
-        });
-        accepted += result.accepted;
-        duplicates += result.duplicates;
-        rejected += result.rejected;
-        setProMaxImportProgress({ completed: Math.min(offset + chunk.length, proMaxImport.cards.length), total: proMaxImport.cards.length });
-      }
+      setState((current) => current
+        ? { ...current, cards: [...current.cards, ...proMaxImport.cards] }
+        : current);
+      proMaxImport.cards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+      setProMaxImportProgress({ completed: proMaxImport.cards.length, total: proMaxImport.cards.length });
       let syncedPatterns = 0;
       if (syncProMaxPatterns && proMaxImport.patterns.length && access?.role === "admin") {
         const patternResult = await api<{ synced: number }>({
@@ -1414,17 +1405,13 @@ export default function GameConsole() {
         });
         syncedPatterns = patternResult.synced;
       }
-      await refresh();
       setProMaxImport(null);
       const messages = [...proMaxImport.warnings, ...proMaxImport.rejected];
-      if (duplicates) messages.unshift(`${duplicates} cartón(es) ya existían y fueron omitidos.`);
-      if (rejected) messages.unshift(`${rejected} cartón(es) fueron rechazados por la API.`);
       setImportWarnings(messages.slice(0, 12));
-      if (accepted) notify(`${accepted} cartón(es) de Studio importados correctamente.`);
+      if (proMaxImport.cards.length) notify(`${proMaxImport.cards.length} cartón(es) cargados temporalmente desde Studio.`);
       if (syncedPatterns) notify(`${syncedPatterns} patrón(es) de Studio sincronizados para la partida.`);
-      if (!accepted) notify("No se importaron cartones nuevos.", "warning");
     } catch (caught) {
-      setImportWarnings((current) => [`La importación se detuvo después de guardar ${accepted} cartón(es).`, ...current]);
+      setImportWarnings((current) => [`La importación temporal se detuvo: ${caught instanceof Error ? caught.message : "error desconocido"}`, ...current]);
       notify(caught instanceof Error ? caught.message : "No se pudo importar el paquete de Studio.", "error");
     } finally {
       setProMaxImportBusy(false);
@@ -1438,19 +1425,15 @@ export default function GameConsole() {
     // flagged. The API still validates every grid and rejects invalid cards.
     const readyCards = importDrafts.map((card) => ({ ...card, reviewStatus: "ready" as const }));
     try {
-      const result = await api<{ accepted: number; duplicates: number; rejected: number }>({
-        action: "saveCards",
-        gameId: state.game.id,
-        cards: readyCards,
-      });
-      await refresh();
+      setState((current) => current
+        ? { ...current, cards: [...current.cards, ...readyCards] }
+        : current);
+      readyCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
       setImportReviewOpen(false);
       setImportDrafts([]);
       const followUp: string[] = [];
-      if (result.duplicates) followUp.push(`${result.duplicates} cartón(es) ya existían y fueron omitidos.`);
-      if (result.rejected) followUp.push(`${result.rejected} cartón(es) quedaron pendientes de revisión.`);
       setImportWarnings((current) => [...current, ...followUp]);
-      if (result.accepted) notify(`${result.accepted} cartón(es) guardados en la partida.`);
+      if (readyCards.length) notify(`${readyCards.length} cartón(es) cargados temporalmente en la partida.`);
       if (followUp.length) notify(followUp[0], "warning");
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudieron guardar los cartones.", "error");
@@ -2121,7 +2104,7 @@ export default function GameConsole() {
                 <div className="section-actions">{access?.role === "admin" && <><button className="secondary-button" onClick={() => proMaxFileInputRef.current?.click()} type="button"><FileText size={17} /> Importar Studio</button><button className="primary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={17} /> Ingreso manual</button></>}</div>
               </div>
               <input
-                accept="application/pdf,.pdf"
+                accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png"
                 className="visually-hidden"
                 multiple
                 onChange={(event) => void processFiles(Array.from(event.target.files ?? []))}
@@ -2155,9 +2138,9 @@ export default function GameConsole() {
                 ) : (
                   <>
                     <span className="upload-icon"><UploadCloud size={29} /></span>
-                    <div><strong>Suelta aquí uno o varios archivos PDF</strong><p>Detectamos texto digital y usamos OCR cuando la página es una imagen.</p></div>
-                    <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar PDF</button>
-                    <small>PDF · múltiples páginas · hasta 4 o más cartones por hoja</small>
+                    <div><strong>Suelta aquí PDF o imágenes JPG/PNG</strong><p>Detectamos texto digital y usamos OCR cuando la página es una imagen.</p></div>
+                    <button className="secondary-button" onClick={() => fileInputRef.current?.click()} type="button">Seleccionar archivos</button>
+                    <small>PDF multipágina, JPG o PNG · hasta 50 MB por archivo</small>
                   </>
                 )}
               </section>

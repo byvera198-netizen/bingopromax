@@ -126,6 +126,160 @@ export interface CompactRectangle {
   score: number;
 }
 
+function sabrositoFallbackRectangles(width: number, height: number): CompactRectangle[] {
+  // CamScanner Sabrosito sheets have a stable 2×5 layout even when the
+  // printed borders are broken by a watermark. Keep the crop inside each
+  // ticket so OCR never sees the neighbouring ticket or the page header.
+  const left = width * 0.045;
+  const right = width * 0.535;
+  const cardWidth = width * 0.42;
+  const top = height * 0.15;
+  const cardHeight = height * 0.155;
+  const pitch = height * 0.165;
+  return Array.from({ length: 5 }, (_, row) => [
+    { x: left, y: top + row * pitch, width: cardWidth, height: cardHeight },
+    { x: right, y: top + row * pitch, width: cardWidth, height: cardHeight },
+  ]).flat().map((rectangle) => ({ ...rectangle, score: 70 }));
+}
+
+function additionalSheetRectangles(
+  width: number,
+  height: number,
+  hasDedicatedHeader = false,
+): CompactRectangle[] {
+  const xPositions = [0.045, 0.535];
+  // The supplied additional sheets use two common layouts: older pages put
+  // the cards directly below their game titles, while "HOJA DE ADICIONAL"
+  // pages have a taller masthead. These bands are the card body, not the
+  // title/receipt area that used to contaminate regional OCR.
+  const yPositions = hasDedicatedHeader ? [0.16, 0.47, 0.77] : [0.1, 0.42, 0.75];
+  return yPositions.flatMap((y) => xPositions.map((x) => ({
+    x: width * x,
+    y: height * y,
+    width: width * 0.42,
+    height: height * (hasDedicatedHeader ? 0.22 : 0.23),
+    score: 65,
+  })));
+}
+
+function numberPatternSheetRectangles(width: number, height: number): CompactRectangle[] {
+  // The supplied "HOJA DE NÚMEROS" is a two-by-two sheet of 5×5 grids.
+  // Unlike additional tickets, each numeric glyph occupies a subset of one
+  // full grid, so keep the four ticket regions separate from the page header.
+  return [0.262, 0.676].flatMap((y) => [0.045, 0.535].map((x) => ({
+    x: width * x,
+    y: height * y,
+    width: width * 0.42,
+    height: height * 0.275,
+    score: 70,
+  })));
+}
+
+export function numberPatternCellIndexes(id: 1 | 3 | 5 | 9) {
+  const cells: Record<1 | 3 | 5 | 9, number[]> = {
+    1: [2, 6, 7, 10, 17, 20, 21, 22, 23, 24],
+    3: [0, 1, 2, 3, 4, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    5: [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+    9: [0, 1, 2, 3, 4, 5, 9, 10, 11, 13, 14, 19, 20, 21, 22, 23, 24],
+  };
+  return cells[id];
+}
+
+export function isNumberPatternSheetHeading(text: string) {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  return /\bhoja\s+de\s+numer(?:o|os|0|05)\b/.test(normalized) || /hojadenumer/.test(compact);
+}
+
+function countGridValues(cards: BingoCard[]) {
+  return cards.reduce(
+    (total, card) => total + card.grid.filter((value) => value > 0).length,
+    0,
+  );
+}
+
+function hasCompletePageRead(cards: BingoCard[], observedNumbers: number) {
+  if (!cards.length) return false;
+  const namedCards = cards.filter((card) => card.layout?.type !== "classic-5x5");
+  // Sabrosito cards are also non-classic layouts, so don't let six partially
+  // detected Sabrositos satisfy the six-game additional-sheet threshold.
+  const sabrositos = namedCards.filter(
+    (card) => card.layout?.type === "sabrosito-5",
+  );
+  const additionalGames = namedCards.length - sabrositos.length;
+  // These supplier sheets have stable counts. A partial set must continue to
+  // the regional fallback instead of prematurely returning its first cards.
+  if (sabrositos.length >= 10) return true;
+  if (additionalGames >= 6 && sabrositos.length === 0) return true;
+  return countGridValues(cards) >= Math.max(12, observedNumbers * 0.77);
+}
+
+export function shouldReadSpecialSheetRegions({
+  forceFullPageOcr,
+  pageComplete,
+  classicRectangleCount,
+  compactRectangleCount,
+  explicitSpecialMarker = false,
+}: {
+  forceFullPageOcr: boolean;
+  pageComplete: boolean;
+  classicRectangleCount: number;
+  compactRectangleCount: number;
+  explicitSpecialMarker?: boolean;
+}) {
+  if (!forceFullPageOcr || (pageComplete && !explicitSpecialMarker)) return false;
+  if (classicRectangleCount >= 2 && !explicitSpecialMarker) return false;
+  // Image uploads often have too few high-confidence page-wide OCR tokens to
+  // reach the normal threshold. Inspect regional templates only when the
+  // page marker or compact-form geometry identifies a special sheet. Without
+  // this gate, every scanned 5×5 page paid for six unnecessary OCR crops.
+  const specialSheetGeometry =
+    compactRectangleCount >= 6 && compactRectangleCount <= 35;
+  return explicitSpecialMarker || specialSheetGeometry;
+}
+
+export function effectiveClassicGridCount(
+  classicRectangleCount: number,
+  compactRectangleCount: number,
+) {
+  // Many interrupted 5×5 scans do not satisfy the strict 6×6 line detector,
+  // but their dozens of repeated cell frames still identify a regular card
+  // sheet. Use that evidence to reject coincidental 3+2 Sabrosito signatures.
+  return classicRectangleCount >= 2 || compactRectangleCount > 35
+    ? Math.max(classicRectangleCount, 2)
+    : classicRectangleCount;
+}
+
+function removeMisclassifiedClassicCards(cards: BingoCard[]) {
+  const namedCards = cards.filter((card) => card.layout?.type !== "classic-5x5");
+  if (!namedCards.length) return cards;
+  return cards.filter((card) => {
+    if (card.layout?.type !== "classic-5x5") return true;
+    const values = new Set(card.grid.filter((value) => value > 0));
+    const overlapsNamedCard = namedCards.some((named) => {
+      const namedValues = new Set(named.grid.filter((value) => value > 0));
+      const overlap = [...values].filter((value) => namedValues.has(value)).length;
+      return overlap >= Math.min(5, Math.ceil(values.size * 0.55));
+    });
+    return !overlapsNamedCard;
+  });
+}
+
+export function removeSabrositoCardsFromClassicSheets(
+  cards: BingoCard[],
+  classicGridCount: number,
+) {
+  // A Sabrosito sheet contains compact 3+2-number tickets, while these scan
+  // pages contain several full B-I-N-G-O 5×5 grids. OCR can accidentally
+  // stitch partial rows inside those grids into a 3+2 signature; the sheet's
+  // repeated 5×5 geometry is stronger evidence than that coincidental shape.
+  if (classicGridCount < 2) return cards;
+  return cards.filter((card) => card.layout?.type !== "sabrosito-5");
+}
+
 function longestDarkRun(
   length: number,
   isDark: (index: number) => boolean,
@@ -583,6 +737,51 @@ export function hasAdditionalGameMarker(items: PdfTextItem[]) {
   // special-sheet OCR path; only an explicit sheet heading identifies a
   // Sabrosito/additional page.
   return /\bhoja\s+de\s+(?:adicional|numero(?:s)?)\b|\bhoja\s+de\s+sabrosit(?:o|os)\b/.test(text);
+}
+
+export function isSabrositoSheetHeading(text: string) {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return /\bhoja\s+de\s+sabrosit/.test(normalized) ||
+    /\b5\s+sabrositos?\s+de\s+30\b/.test(normalized);
+}
+
+export function isExplicitSpecialSheetHeading(text: string) {
+  const normalized = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  return /\bhoja\s+de\s+(?:adiciona(?:l|1)?|numeros?|sabrosit)/.test(normalized) ||
+    /hojade(?:adiciona(?:l|1)?|numeros?|sabrosit)/.test(compact) ||
+    /\bad[i1l][\s-]*\d\s*#?\d{4,}/.test(normalized);
+}
+
+export function shouldProbeSabrositoGeometryFallback({
+  explicitHeading,
+  classicRectangleCount,
+  compactRectangleCount,
+}: {
+  explicitHeading: boolean;
+  classicRectangleCount: number;
+  compactRectangleCount: number;
+}) {
+  if (classicRectangleCount >= 2) return false;
+  // A genuine ten-ticket sheet produces about ten compact frames. Ordinary
+  // 5×5 pages produce many more small cell/frame candidates, and should not
+  // be sampled as if they were two columns of Sabrositos.
+  return explicitHeading ||
+    (compactRectangleCount >= 8 && compactRectangleCount <= 16);
+}
+
+function expectedSpecialCardCount(items: PdfTextItem[]) {
+  const text = items.map((item) => item.str).join(" ").toLocaleLowerCase("es");
+  if (/hoja\s+de\s+sabrosit/.test(text)) return 10;
+  if (/hoja\s+de\s+adicional/.test(text)) return 6;
+  if (/hoja\s+de\s+numero/.test(text)) return 8;
+  return 0;
 }
 
 function groupIntoRows(numbers: PositionedNumber[]) {
@@ -1048,7 +1247,11 @@ const specialCardDefinitions: SpecialCardDefinition[] = [
   ...BUILTIN_PATTERNS
     .filter((pattern) =>
       pattern.category === "Números" ||
-      ["adicional-forma-mas", "adicional-forma-igual"].includes(pattern.id),
+      [
+        "adicional-forma-mas", "adicional-forma-igual",
+        "forma-adicional-1", "forma-adicional-3",
+        "forma-adicional-5", "forma-adicional-9",
+      ].includes(pattern.id),
     )
     .map((pattern) => {
       const rowLengths = Array.from({ length: 5 }, (_, row) =>
@@ -1063,6 +1266,89 @@ const specialCardDefinitions: SpecialCardDefinition[] = [
       } satisfies SpecialCardDefinition;
     }),
 ];
+
+function specialRowSignatureDistance(actual: number[], expected: number[]) {
+  const costs = Array.from({ length: actual.length + 1 }, () =>
+    Array<number>(expected.length + 1).fill(0),
+  );
+  for (let row = 1; row <= actual.length; row += 1) costs[row][0] = costs[row - 1][0] + actual[row - 1];
+  for (let column = 1; column <= expected.length; column += 1) costs[0][column] = costs[0][column - 1] + expected[column - 1];
+  for (let row = 1; row <= actual.length; row += 1) {
+    for (let column = 1; column <= expected.length; column += 1) {
+      costs[row][column] = Math.min(
+        costs[row - 1][column] + actual[row - 1],
+        costs[row][column - 1] + expected[column - 1],
+        costs[row - 1][column - 1] + Math.abs(actual[row - 1] - expected[column - 1]),
+      );
+    }
+  }
+  return costs[actual.length][expected.length];
+}
+
+function specialCellMatchScore(matrix: number[][], definition: SpecialCardDefinition) {
+  const free = new Set(definition.freeIndexes ?? []);
+  const expectedRows = Array.from({ length: definition.layout.rows }, (_, row) =>
+    definition.layout.cells
+      .map((cell, index) => ({ cell, index }))
+      .filter(({ cell, index }) => cell.row === row && !free.has(index))
+      .map(({ cell }) => cell.column),
+  ).filter((columns) => columns.length);
+  const observedRows = matrix
+    .map((row) => row.map((value, column) => ({ value, column })).filter(({ value }) => value > 0))
+    .filter((row) => row.length);
+  if (!observedRows.length || !expectedRows.length) return Number.NEGATIVE_INFINITY;
+
+  const rowDistance = specialRowSignatureDistance(
+    observedRows.map((row) => row.length),
+    definition.rowLengths,
+  );
+  if (rowDistance > 2) return Number.NEGATIVE_INFINITY;
+
+  let matched = 0;
+  let extras = 0;
+  const pairedRows = Math.min(observedRows.length, expectedRows.length);
+  for (let row = 0; row < pairedRows; row += 1) {
+    const available = [...observedRows[row]];
+    for (const expectedColumn of expectedRows[row]) {
+      const candidateIndex = available
+        .map((candidate, index) => ({ index, distance: Math.abs(candidate.column - expectedColumn) }))
+        .filter((candidate) => candidate.distance <= (definition.layout.columns < 5 ? 1 : 1))
+        .sort((a, b) => a.distance - b.distance)[0]?.index;
+      if (candidateIndex === undefined) {
+        continue;
+      } else {
+        matched += 1;
+        available.splice(candidateIndex, 1);
+      }
+    }
+    extras += available.length;
+  }
+  extras += observedRows.slice(pairedRows).reduce((sum, row) => sum + row.length, 0);
+  const observedCount = matrix.flat().filter((value) => value > 0).length;
+  return matched * 2 - rowDistance * 1.5 - Math.abs(definition.rowLengths.reduce((a, b) => a + b, 0) - observedCount) * 0.5 - extras;
+}
+
+/** Select the known additional-game layout from the occupied row/cell map. */
+export function specialLayoutNameForCellRows(matrix: number[][]) {
+  const observedRows = matrix.map((row) => row.filter((value) => value > 0)).filter((row) => row.length);
+  const observedCount = observedRows.reduce((sum, row) => sum + row.length, 0);
+  if (observedCount < 5) return null;
+  const candidates = specialCardDefinitions
+    .filter((definition) => definition.layout.type !== "sabrosito-5")
+    .map((definition) => ({
+      definition,
+      distance: specialRowSignatureDistance(
+        observedRows.map((row) => row.length),
+        definition.rowLengths,
+      ),
+      score: specialCellMatchScore(matrix, definition),
+    }))
+    .filter(({ distance, score }) => distance <= 2 && Number.isFinite(score))
+    .sort((a, b) => b.score - a.score || a.distance - b.distance);
+  const best = candidates[0];
+  if (!best || best.score < 5 || best.distance > 2) return null;
+  return best.definition.layout.name;
+}
 
 function flexibleRowSegments(numbers: PositionedNumber[]) {
   return groupIntoRows(numbers).flatMap((row, rowIndex) => {
@@ -1130,14 +1416,21 @@ function detectSpecialCardGrids(numbers: PositionedNumber[]) {
           .filter((segment) =>
             segment.values.length === expectedLength &&
             segment.y < previous.y - 12 &&
-            previous.y - segment.y < Math.max(55, previous.width * 1.5) &&
+            previous.y - segment.y < Math.max(
+              55,
+              Math.min(100, median(previous.values.map((value) => value.height)) * 3.2),
+            ) &&
             // The additional cards are not always centered row-by-row: the
             // wide middle row of Cruz/Más and the stepped Perrito/Martillo
             // rows can shift the row center considerably. Keep the match
             // within the same card band while avoiding rows from neighbors.
             Math.abs(segment.xCenter - first.xCenter) < Math.max(90, first.width * 1.2),
           )
-          .sort((a, b) => Math.abs((previous.y - a.y) - (previous.y - b.y)))[0];
+          // Choose the closest eligible row beneath the previous one. The
+          // former comparator compared candidates to each other rather than
+          // to the current row, so it could stitch adjacent Sabrositos into
+          // a false Yapa/numeric shape across card boundaries.
+          .sort((a, b) => b.y - a.y)[0];
         if (!next) break;
         rows.push(next);
         previous = next;
@@ -1188,6 +1481,19 @@ function detectSpecialCardGrids(numbers: PositionedNumber[]) {
   return selected.sort((a, b) => b.y - a.y || a.x - b.x);
 }
 
+export function specialCardsFromOcrBlocks(
+  blocks: OcrBlock[],
+  canvasHeight: number,
+  fileName: string,
+  page: number,
+) {
+  return cardsFromDetectedGrids(
+    detectSpecialCardGrids(positionedNumbersFromOcrBlocks(blocks, canvasHeight)),
+    fileName,
+    page,
+  );
+}
+
 export function extractCardsFromTextItems(
   items: PdfTextItem[],
   fileName: string,
@@ -1195,7 +1501,8 @@ export function extractCardsFromTextItems(
 ) {
   const tokens = tokensFromTextItems(items);
   const identifiers = identifiersFromTextItems(items);
-  return mergeDetectedCards(
+  const classicGridCount = detectPositionedGrids(tokens).length;
+  return removeSabrositoCardsFromClassicSheets(mergeDetectedCards(
     cardsFromTokens(tokens, fileName, page, identifiers),
     cardsFromDetectedGrids(
       detectSpecialCardGrids(tokens),
@@ -1203,7 +1510,7 @@ export function extractCardsFromTextItems(
       page,
       identifiers,
     ),
-  );
+  ), classicGridCount);
 }
 
 const bingoColumnRanges = [
@@ -1412,6 +1719,37 @@ function numberCandidatesForRow(
     }
   });
   return { candidates, rowHeight };
+}
+
+export function positionedNumbersFromOcrBlocks(blocks: OcrBlock[], canvasHeight: number) {
+  const symbols = flattenOcrSymbols(ocrWords(blocks));
+  const positioned: PositionedNumber[] = [];
+  for (const row of symbolRowGroups(symbols, canvasHeight)) {
+    const { candidates } = numberCandidatesForRow(row);
+    const usedSymbols = new Set<number>();
+    for (const candidate of candidates.sort((a, b) => b.confidence - a.confidence)) {
+      if (
+        candidate.confidence < 8 ||
+        candidate.symbolIndexes.some((index) => usedSymbols.has(index))
+      ) continue;
+      candidate.symbolIndexes.forEach((index) => usedSymbols.add(index));
+      const selected = row.filter((item) => candidate.symbolIndexes.includes(item.index));
+      if (!selected.length) continue;
+      positioned.push({
+        value: candidate.value,
+        x: candidate.xStart,
+        y: canvasHeight - median(selected.map(({ symbol }) =>
+          (symbol.bbox.y0 + symbol.bbox.y1) / 2,
+        )),
+        width: Math.max(candidate.xEnd - candidate.xStart, 5),
+        height: median(selected.map(({ symbol }) =>
+          symbol.bbox.y1 - symbol.bbox.y0,
+        )),
+        order: positioned.length,
+      });
+    }
+  }
+  return positioned;
 }
 
 function anchorsFromSymbolRows(
@@ -1824,6 +2162,13 @@ async function createOcrWorker() {
   const tesseract = await import("tesseract.js");
   const worker = (await tesseract.createWorker("eng", tesseract.OEM.LSTM_ONLY, {
     logger: () => undefined,
+    // Keep OCR self-contained in the deployed app. The library defaults to
+    // jsDelivr and tessdata.projectnaptha.com; when either request is blocked,
+    // createWorker never resolves and imports remain stuck on page 1 forever.
+    workerPath: "/tesseract/worker.min.js",
+    corePath: "/tesseract/tesseract-core-lstm.wasm.js",
+    langPath: "/tesseract",
+    workerBlobURL: false,
   })) as unknown as OcrWorker;
   await worker.setParameters({
     tessedit_char_whitelist: "0123456789",
@@ -2263,12 +2608,486 @@ async function recognizeCompactCards(
   return cardsFromDetectedGrids(detected, fileName, pageNumber);
 }
 
+async function recognizeSpecialSheetRegions(
+  source: HTMLCanvasElement,
+  rectangles: CompactRectangle[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+  minimumTokenHeight = 0.03,
+) {
+  const cards: BingoCard[] = [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  for (const [regionIndex, rectangle] of rectangles.entries()) {
+    const scale = Math.min(3, Math.max(1, 900 / rectangle.width));
+    const crop = makeCanvas(
+      Math.round(rectangle.width * scale),
+      Math.round(rectangle.height * scale),
+    );
+    if (!crop) continue;
+    crop.context.drawImage(
+      source,
+      rectangle.x,
+      rectangle.y,
+      rectangle.width,
+      rectangle.height,
+      0,
+      0,
+      crop.canvas.width,
+      crop.canvas.height,
+    );
+    const readRegion = async () => {
+      const result = await worker.recognize(
+        crop.canvas,
+        {},
+        { blocks: true, tsv: true, text: true },
+      );
+      const textTokens = result.data.tsv
+        ? tokensFromTsv(result.data.tsv, crop.canvas.height).filter(
+            (token) => token.height >= crop.canvas.height * minimumTokenHeight,
+          )
+        : [];
+      const symbolTokens = result.data.blocks?.length
+        ? positionedNumbersFromOcrBlocks(result.data.blocks, crop.canvas.height)
+        : [];
+      const tokens = [
+        ...textTokens,
+        ...symbolTokens.filter((candidate) =>
+          !textTokens.some((token) =>
+            token.value === candidate.value &&
+            Math.abs(token.x - candidate.x) < Math.max(8, token.width * 0.45) &&
+            Math.abs(token.y - candidate.y) < Math.max(8, token.height * 0.45),
+          ),
+        ),
+      ];
+      const grids = tokens.length >= 5
+        ? detectSpecialCardGrids(tokens).filter(
+            (grid) => grid.layout?.type !== "classic-5x5",
+          )
+        : [];
+      return { tokens, grids };
+    };
+    // Preserve the scan's original grayscale first. Hard thresholding can
+    // erase thin digits and turn (for example) a printed 41 into 31.
+    let { tokens, grids } = await readRegion();
+    if (!grids.length) {
+      binarizeNumbers(crop.canvas, crop.context, { luminance: 165, chroma: 72 });
+      const cleaned = await readRegion();
+      tokens = [...tokens, ...cleaned.tokens];
+      grids = cleaned.grids;
+    }
+    if (!grids.length) continue;
+    const detected = cardsFromDetectedGrids(grids, fileName, pageNumber);
+    detected.forEach((card, index) => {
+      const name = card.layout?.name ?? "forma";
+      const form = name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/gi, "-")
+        .replace(/^-|-$/g, "")
+        .toLowerCase();
+      cards.push({
+        ...card,
+        number: `${fileName.replace(/\.[^.]+$/i, "")}-p${pageNumber}-r${regionIndex + 1}-c${index + 1}-${form}`,
+      });
+    });
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return cards;
+}
+
+async function recognizeSpecialCardsByCell(
+  source: HTMLCanvasElement,
+  rectangles: CompactRectangle[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+) {
+  const detected: DetectedGrid[] = [];
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "8",
+    preserve_interword_spaces: "1",
+  });
+  for (const [regionIndex, rectangle] of rectangles.entries()) {
+    const cellWidth = rectangle.width / 5;
+    const cellHeight = rectangle.height / 5;
+    // Read one printed number at a time. Page-level OCR joins touching digits
+    // (e.g. 9, 22, 36, 50, 73 → "9122365073"), while a padded cell crop keeps
+    // the individual value legible even through box borders and watermarks.
+    const side = Math.max(24, Math.round(Math.min(cellWidth * 0.95, cellHeight * 1.3)));
+    const matrix: number[][] = [];
+    for (let row = 0; row < 5; row += 1) {
+      const values: number[] = [];
+      for (let column = 0; column < 5; column += 1) {
+        const centerX = rectangle.x + (column + 0.5) * cellWidth;
+        const centerY = rectangle.y + (row + 0.5) * cellHeight;
+        const crop = makeCanvas(220, 220);
+        if (!crop) {
+          values.push(0);
+          continue;
+        }
+        crop.context.drawImage(
+          source,
+          Math.max(0, Math.round(centerX - side / 2)),
+          Math.max(0, Math.round(centerY - side / 2)),
+          side,
+          side,
+          0,
+          0,
+          crop.canvas.width,
+          crop.canvas.height,
+        );
+        binarizeNumbers(crop.canvas, crop.context, { luminance: 130, chroma: 78 });
+        const result = await worker.recognize(
+          crop.canvas,
+          {},
+          { blocks: false, tsv: false, text: true },
+        );
+        const digits = (result.data.text.match(/\d+/g) ?? []).join("");
+        let value = 0;
+        if (digits.length >= 3 && digits[0] !== "9") {
+          const firstTwo = Number(digits.slice(0, 2));
+          if (firstTwo >= 1 && firstTwo <= 75) value = firstTwo;
+        }
+        if (!value) {
+          const matches = digits.match(/(?:[1-9]|[1-7]\d)/g) ?? [];
+          value = matches.map(Number).find((candidate) => candidate >= 1 && candidate <= 75) ?? 0;
+        }
+        values.push(value);
+      }
+      matrix.push(values);
+    }
+
+    const layoutName = specialLayoutNameForCellRows(matrix);
+    if (!layoutName) continue;
+    const definition = specialCardDefinitions.find((candidate) => candidate.layout.name === layoutName);
+    if (!definition) continue;
+
+    const observedRows = matrix
+      .map((row) => row.map((value, column) => ({ value, column })).filter(({ value }) => value > 0))
+      .filter((row) => row.length);
+    const expectedRows = [...new Set(definition.layout.cells.map((cell) => cell.row))].sort((a, b) => a - b);
+    const free = new Set(definition.freeIndexes ?? []);
+    const usedByRow = new Map<number, Set<number>>();
+    const grid = definition.layout.cells.map((cell, cellIndex) => {
+      if (free.has(cellIndex)) return 0;
+      const rowRank = expectedRows.indexOf(cell.row);
+      const row = observedRows[rowRank] ?? [];
+      const used = usedByRow.get(rowRank) ?? new Set<number>();
+      const available = row
+        .map((candidate, index) => ({ ...candidate, index, distance: Math.abs(candidate.column - cell.column) }))
+        .filter((candidate) => candidate.distance <= 1 && !used.has(candidate.index))
+        .sort((a, b) => a.distance - b.distance)[0];
+      if (!available) return 0;
+      used.add(available.index);
+      usedByRow.set(rowRank, used);
+      return available.value;
+    });
+    const values = grid.filter((value) => value > 0);
+    const duplicateValues = new Set(values).size !== values.length;
+    const expectedCount = definition.rowLengths.reduce((sum, count) => sum + count, 0);
+    const missingValues = values.length < expectedCount;
+    detected.push({
+      grid,
+      x: rectangle.x + rectangle.width / 2,
+      y: source.height - rectangle.y,
+      score: 24 + values.length,
+      rowIds: [`special-cell:${regionIndex}`],
+      layout: definition.layout,
+      reviewNotes: [
+        "Verifica los números de esta forma antes de confirmar la importación.",
+        ...(missingValues ? ["Faltan números que no se pudieron leer automáticamente."] : []),
+        ...(duplicateValues ? ["Se detectaron números repetidos; corrige las casillas antes de jugar."] : []),
+      ],
+    });
+    // Keep the per-card layout in the grid metadata; cardsFromDetectedGrids
+    // assigns a stable image/PDF identifier when no printed ID is found.
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return cardsFromDetectedGrids(detected, fileName, pageNumber);
+}
+
+const additionalSheetForms = [
+  "Sonrisa", "Mini O", "Perrito", "Cruz", "Más", "Martillo",
+] as const;
+
+function normalizeOcrLabel(text: string) {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function expectedFormFromLabel(text: string, definitions: SpecialCardDefinition[]) {
+  const label = normalizeOcrLabel(text);
+  const known = additionalSheetForms.find((name) =>
+    label.includes(normalizeOcrLabel(name)),
+  );
+  if (known) return definitions.find((definition) => definition.layout.name === known);
+  const numericLabel = label.match(/(?:forma(?:adicional)?|numero)?(?:adicional)?#?([134579])(?:\D|$)/);
+  if (!numericLabel) return undefined;
+  return definitions.find((definition) =>
+    normalizeOcrLabel(definition.layout.name).includes(`#${numericLabel[1]}`) ||
+    normalizeOcrLabel(definition.layout.name).endsWith(numericLabel[1]),
+  );
+}
+
+async function recognizeAnchoredSheetCards(
+  source: HTMLCanvasElement,
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+  kind: "additional" | "number",
+) {
+  const cards: BingoCard[] = [];
+  const normalizeRect = (x: number, y: number, width: number, height: number) => ({
+    x: source.width * x, y: source.height * y,
+    width: source.width * width, height: source.height * height,
+  });
+  const readText = async (rect: ReturnType<typeof normalizeRect>, whitelist: string) => {
+    const crop = makeCanvas(rect.width * 2, rect.height * 2);
+    if (!crop) return "";
+    crop.context.drawImage(source, rect.x, rect.y, rect.width, rect.height,
+      0, 0, crop.canvas.width, crop.canvas.height);
+    await worker.setParameters({
+      tessedit_char_whitelist: whitelist,
+      tessedit_pageseg_mode: "11",
+      preserve_interword_spaces: "1",
+    });
+    const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: false, text: true });
+    return result.data.text ?? "";
+  };
+  const readNumber = async (x: number, y: number, size: number) => {
+    const side = Math.min(size, source.width * 0.095, source.height * 0.055);
+    const recognize = async (
+      cropSide: number,
+      threshold: boolean,
+      psm: "8" | "10" | "13",
+      verticalOffset = 0,
+    ) => {
+      const crop = makeCanvas(cropSide * 2, cropSide * 2);
+      if (!crop) return 0;
+      crop.context.drawImage(source,
+        Math.max(0, source.width * x - cropSide / 2),
+        Math.max(0, source.height * (y + verticalOffset) - cropSide / 2),
+        cropSide, cropSide, 0, 0, crop.canvas.width, crop.canvas.height);
+      if (threshold) binarizeNumbers(crop.canvas, crop.context, { luminance: 165, chroma: 78 });
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: psm,
+        preserve_interword_spaces: "1",
+      });
+      const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: false, text: true });
+      const digits = (result.data.text.match(/\d+/g) ?? []).join("");
+      const value = Number(digits.length > 2 ? digits.slice(0, 2) : digits);
+      return value >= 1 && value <= 75 ? value : 0;
+    };
+    const first = await recognize(side, true, "10");
+    if (first) return first;
+    // Keep a single fallback for watermarks and interrupted strokes. PSM 13
+    // handles isolated digits while avoiding the extra serial OCR pass that
+    // made low-confidence number sheets exceed the import time budget.
+    const retrySide = Math.min(side * 1.16, source.width * 0.095, source.height * 0.055);
+    return recognize(retrySide, true, "13", 0.003);
+  };
+
+  const regions = kind === "additional"
+    ? [0.16, 0.46, 0.755].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.204)))
+    : [0.262, 0.676].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.275)));
+  for (const [index, rect] of regions.entries()) {
+    // These supplied sheets declare their games in a fixed order and position
+    // (six additional forms row-wise; numeric IDs 1,3,5,9 in reading order).
+    // Bind each region to that explicit catalog entry first; OCR of the tiny
+    // repeated title/ID near watermarks was the source of dropped/misnamed cards.
+    const numericIds = [1, 3, 5, 9];
+    const expectedName = kind === "additional"
+      ? additionalSheetForms[index]
+      : `Forma adicional #${numericIds[index]}`;
+    const catalogDefinition = specialCardDefinitions.find((candidate) =>
+      normalizeOcrLabel(candidate.layout.name) === normalizeOcrLabel(expectedName ?? ""),
+    );
+    const numberId = numericIds[index] as 1 | 3 | 5 | 9;
+    const numberCells = kind === "number" ? numberPatternCellIndexes(numberId) : undefined;
+    const definition: SpecialCardDefinition | undefined = numberCells
+      ? (() => {
+          const cells = numberCells.map((cell) => ({ row: Math.floor(cell / 5), column: cell % 5 }));
+          const rowLengths = Array.from({ length: 5 }, (_, row) => cells.filter((cell) => cell.row === row).length);
+          return { layout: additionalLayout(`Forma ${numericIds[index]}`, cells), rowLengths };
+        })()
+      : catalogDefinition ?? await (async () => {
+      const labelRect = kind === "additional"
+        ? { ...rect, y: rect.y - source.height * (index >= 4 ? 0.04 : 0.025), height: source.height * 0.052 }
+        : normalizeRect(
+            rect.x / source.width + 0.42 * 0.39,
+            rect.y / source.height + 0.275 * 0.34,
+            0.42 * 0.22,
+            0.275 * 0.32,
+          );
+      const text = await readText(labelRect,
+        kind === "additional"
+          ? "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ0123456789"
+          : "#FORMAadicionalADICIONAL0123456789");
+      return expectedFormFromLabel(text, specialCardDefinitions);
+    })();
+    if (!definition) continue;
+    const layout = definition.layout;
+    const matrix = Array.from({ length: 5 }, () => Array<number>(5).fill(0));
+    const free = new Set(definition.freeIndexes ?? []);
+    // The central print on number sheets is the form identifier, not a ball.
+    if (kind === "number") {
+      const centerIndex = layout.cells.findIndex((cell) => cell.row === 2 && cell.column === 2);
+      if (centerIndex >= 0) free.add(centerIndex);
+    }
+    const coordinates = kind === "additional" ? {
+      "Sonrisa": [[.30,.30],[.70,.30],[.10,.70],[.90,.70],[.30,.89],[.50,.89],[.69,.89]],
+      "Mini O": [[.29,.30],[.52,.30],[.72,.30],[.29,.51],[.72,.51],[.29,.70],[.52,.70],[.72,.70]],
+      "Perrito": [[.10,.29],[.30,.29],[.30,.53],[.68,.53],[.30,.72],[.52,.72],[.72,.72],[.30,.91],[.72,.91]],
+      "Cruz": [[.52,.10],[.10,.30],[.29,.30],[.52,.30],[.71,.30],[.90,.30],[.52,.61],[.52,.90]],
+      "Más": [[.5,.12],[.5,.32],[.10,.5],[.30,.5],[.70,.5],[.90,.5],[.5,.70],[.5,.90]],
+      "Martillo": [[.72,.10],[.52,.30],[.10,.5],[.30,.5],[.71,.5],[.10,.70],[.30,.70],[.90,.70]],
+    }[layout.name] ?? [] : layout.cells
+      .filter((_, cellIndex) => !free.has(cellIndex))
+      .map((cell) => [0.1 + cell.column * 0.2, 0.1 + cell.row * 0.2]);
+    const activeCells = layout.cells
+      .map((cell, cellIndex) => ({ ...cell, cellIndex }))
+      .filter(({ cellIndex }) => !free.has(cellIndex));
+    const size = Math.min(rect.width * (kind === "number" ? 0.14 : 0.16), rect.height * 0.23);
+    for (let cellIndex = 0; cellIndex < activeCells.length; cellIndex += 1) {
+      const [x, y] = coordinates[cellIndex] ?? [];
+      if (x === undefined || y === undefined) continue;
+      const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
+        rect.y / source.height + y * rect.height / source.height, size);
+      const cell = activeCells[cellIndex];
+      matrix[cell.row][cell.column] = value;
+    }
+    const grid = layout.cells.map((cell, cellIndex) =>
+      free.has(cellIndex) ? 0 : matrix[cell.row][cell.column] || -1,
+    );
+    const validCount = grid.filter((value) => value > 0).length;
+    if (validCount < Math.max(3, Math.ceil(activeCells.length * 0.5))) continue;
+    const playableValues = grid.filter((value) => value > 0);
+    const duplicateValues = new Set(playableValues).size !== playableValues.length;
+    const incomplete = validCount < activeCells.length;
+    const detected: DetectedGrid = {
+      grid, x: rect.x + rect.width / 2, y: source.height - rect.y,
+      score: 80 + validCount, rowIds: [`anchored:${kind}:${index}`],
+      layout,
+      reviewNotes: incomplete || duplicateValues ? [
+        "Verifica los números de esta forma antes de confirmar la importación.",
+        ...(incomplete ? ["Faltan números que no se pudieron leer automáticamente."] : []),
+        ...(duplicateValues ? ["Se detectaron números repetidos; corrige las casillas antes de jugar."] : []),
+      ] : [],
+    };
+    cards.push(...cardsFromDetectedGrids([detected], fileName, pageNumber));
+  }
+  await worker.setParameters({ tessedit_char_whitelist: "0123456789", tessedit_pageseg_mode: "11" });
+  return cards;
+}
+
+async function recognizeSabrositoCards(
+  source: HTMLCanvasElement,
+  rectangles: CompactRectangle[],
+  worker: OcrWorker,
+  fileName: string,
+  pageNumber: number,
+) {
+  const detected: DetectedGrid[] = [];
+  const ballPositions = [
+    [0.17, 0.28], [0.5, 0.28], [0.83, 0.28],
+    [0.17, 0.72], [0.83, 0.72],
+  ] as const;
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "10",
+    preserve_interword_spaces: "1",
+  });
+  for (const [cardIndex, rectangle] of rectangles.entries()) {
+    const side = Math.max(
+      24,
+      Math.round(Math.min(rectangle.width * 0.23, rectangle.height * 0.46)),
+    );
+    const values: number[] = [];
+    for (const [xRatio, yRatio] of ballPositions) {
+      const centerX = rectangle.x + rectangle.width * xRatio;
+      const centerY = rectangle.y + rectangle.height * yRatio;
+      const readBall = async (captureSide: number, threshold?: number) => {
+        const crop = makeCanvas(220, 220);
+        if (!crop) return undefined;
+        crop.context.drawImage(
+          source,
+          Math.max(0, Math.round(centerX - captureSide / 2)),
+          Math.max(0, Math.round(centerY - captureSide / 2)),
+          captureSide,
+          captureSide,
+          0,
+          0,
+          220,
+          220,
+        );
+        if (threshold !== undefined) {
+          binarizeNumbers(crop.canvas, crop.context, {
+            luminance: threshold,
+            chroma: 78,
+          });
+        }
+        const result = await worker.recognize(
+          crop.canvas,
+          {},
+          { blocks: false, tsv: false, text: true },
+        );
+        return (result.data.text.match(/\d{1,2}/g) ?? [])
+          .map(Number)
+          .find((candidate) => candidate >= 1 && candidate <= 75);
+      };
+      let value = await readBall(side);
+      if (value === undefined) {
+        value = await readBall(Math.round(side * 1.22), 175);
+      }
+      if (value === undefined) {
+        value = await readBall(Math.round(side * 1.22), 195);
+      }
+      if (value !== undefined) values.push(value);
+    }
+    if (values.length !== 5 || new Set(values).size !== 5) continue;
+    detected.push({
+      grid: values,
+      x: rectangle.x + rectangle.width / 2,
+      y: source.height - rectangle.y,
+      score: rectangle.score,
+      rowIds: [`sabrosito:${cardIndex}`],
+      layout: createCardLayout("sabrosito-5"),
+    });
+  }
+  await worker.setParameters({
+    tessedit_char_whitelist: "0123456789",
+    tessedit_pageseg_mode: "11",
+    preserve_interword_spaces: "1",
+  });
+  return cardsFromDetectedGrids(detected, fileName, pageNumber);
+}
+
 async function runOcrCanvas(
   canvas: HTMLCanvasElement,
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
-  options: { forceFullPageOcr?: boolean } = {},
+  options: {
+    forceFullPageOcr?: boolean;
+    sabrositoSheet?: boolean;
+    specialSheet?: boolean;
+    recognizeImageHeading?: boolean;
+  } = {},
 ) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return [];
@@ -2278,6 +3097,162 @@ async function runOcrCanvas(
     canvas.width,
     canvas.height,
   );
+  let fullPageTokens: PositionedNumber[] = [];
+  let pageWideCards: BingoCard[] = [];
+  let sabrositoSheet = Boolean(options.sabrositoSheet);
+  let specialSheet = Boolean(options.specialSheet);
+  let numberSheet = false;
+  // Special sheets (Sabrosito, Números and additional games) are sparse and
+  // often contain ten small forms. A full-page sparse OCR pass can recover all
+  // of their numbers in one job; probing every mini-cell first causes hundreds
+  // of serial OCR calls and makes the import appear frozen on page 1.
+  if (options.forceFullPageOcr) {
+    let ocrHeading = "";
+    // Classify a scanned page before running page-wide OCR. Explicitly titled
+    // forms have fixed, sparse regions, so a full-page OCR pass both wastes
+    // minutes and tends to merge unrelated values into false candidates.
+    if (options.recognizeImageHeading) {
+      // Include the first row's printed ticket IDs too; some scans have a
+      // damaged masthead but clear ``N°-1 #...`` labels immediately below it.
+      const header = makeCanvas(canvas.width, Math.max(1, Math.round(canvas.height * 0.28)));
+      if (header) {
+        header.context.drawImage(canvas, 0, 0, canvas.width, header.canvas.height,
+          0, 0, header.canvas.width, header.canvas.height);
+        await worker.setParameters({
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ÁÉÍÓÚÜÑáéíóúüñ",
+          tessedit_pageseg_mode: "6",
+          preserve_interword_spaces: "1",
+        });
+        const headingResult = await worker.recognize(header.canvas, {}, { blocks: false, tsv: false, text: true });
+        ocrHeading = headingResult.data.text ?? "";
+      }
+      sabrositoSheet ||= isSabrositoSheetHeading(ocrHeading);
+      specialSheet ||= isExplicitSpecialSheetHeading(ocrHeading);
+      numberSheet = isNumberPatternSheetHeading(ocrHeading);
+      if (numberSheet) {
+        return recognizeAnchoredSheetCards(canvas, worker, fileName, pageNumber, "number");
+      }
+      if (specialSheet && !sabrositoSheet) {
+        return recognizeAnchoredSheetCards(canvas, worker, fileName, pageNumber, "additional");
+      }
+      if (sabrositoSheet) {
+        const cards = await recognizeSabrositoCards(
+          canvas,
+          sabrositoFallbackRectangles(canvas.width, canvas.height),
+          worker,
+          fileName,
+          pageNumber,
+        );
+        if (cards.length) return cards;
+      }
+    }
+    const pageResult = await worker.recognize(
+      canvas,
+      {},
+      // TSV contains the positioned numbers needed to rebuild the forms.
+      // Blocks are considerably more expensive on scanned pages and are kept
+      // for the regional fallback below.
+      { blocks: false, tsv: true, text: true },
+    );
+    const pageTokens = pageResult.data.tsv
+      ? tokensFromTsv(pageResult.data.tsv, canvas.height)
+      : [];
+    ocrHeading ||= pageResult.data.text ?? "";
+    // Image imports start with a numeric whitelist so ball recognition stays
+    // precise. That makes a visible "HOJA DE ADICIONAL" heading impossible
+    // to recognize, however, so OCR just the top header band with letters
+    // enabled. Restricting this pass to the title area is much faster and less
+    // noisy than re-running OCR over every number on the full image.
+    if (options.recognizeImageHeading && !isExplicitSpecialSheetHeading(ocrHeading) &&
+      !isSabrositoSheetHeading(ocrHeading)) {
+      const header = makeCanvas(canvas.width, Math.max(1, Math.round(canvas.height * 0.2)));
+      if (header) {
+        header.context.drawImage(
+          canvas,
+          0,
+          0,
+          canvas.width,
+          header.canvas.height,
+          0,
+          0,
+          header.canvas.width,
+          header.canvas.height,
+        );
+      }
+      await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ÁÉÍÓÚÜÑáéíóúüñ",
+        tessedit_pageseg_mode: "6",
+        preserve_interword_spaces: "1",
+      });
+      if (header) {
+        const headingResult = await worker.recognize(
+          header.canvas,
+          {},
+          { blocks: false, tsv: false, text: true },
+        );
+        ocrHeading = headingResult.data.text ?? "";
+      }
+      await worker.setParameters({
+        tessedit_char_whitelist: "0123456789",
+        tessedit_pageseg_mode: "11",
+        preserve_interword_spaces: "1",
+      });
+    }
+    // Do not infer Sabrositos from generic page geometry alone. On 5×5 sheets
+    // with interrupted borders, the old fixed 2×5 fallback sampled five
+    // unrelated cells and presented them as valid Sabrosito tickets.
+    sabrositoSheet ||= isSabrositoSheetHeading(ocrHeading);
+    specialSheet ||= isExplicitSpecialSheetHeading(ocrHeading);
+    numberSheet = isNumberPatternSheetHeading(ocrHeading);
+    fullPageTokens = pageTokens;
+    // The sparse pass can already recover a few compact cards, but it does
+    // not by itself understand the row signatures of the six additional
+    // forms on a sheet.  Always run the shape detector before deciding that
+    // the page is complete; otherwise the first two grouped cards caused the
+    // remaining forms (and many Sabrositos) to be discarded prematurely.
+    const pageSpecialCards = pageTokens.length
+      ? cardsFromDetectedGrids(
+          detectSpecialCardGrids(pageTokens),
+          fileName,
+          pageNumber,
+        )
+      : [];
+    pageWideCards = removeSabrositoCardsFromClassicSheets(mergeDetectedCards(
+      pageResult.data.tsv
+        ? cardsFromTokens(pageTokens, fileName, pageNumber)
+        : [],
+      pageSpecialCards,
+    ), rectangles.length);
+    if (
+      hasCompletePageRead(pageWideCards, pageTokens.length) &&
+      rectangles.length >= 2
+    ) return removeSabrositoCardsFromClassicSheets(
+      pageWideCards,
+      rectangles.length,
+    );
+  }
+  // A scanned page with several regular 5×5 tickets is much faster to read
+  // as one sparse-text image than by OCR'ing every ticket and then every
+  // missing cell. Keep the regional path as a fallback for low-quality scans.
+  if (rectangles.length > 0 && !options.forceFullPageOcr) {
+    const pageResult = await worker.recognize(
+      canvas,
+      {},
+      { blocks: false, tsv: true, text: true },
+    );
+    const pageTokens = pageResult.data.tsv
+      ? tokensFromTsv(pageResult.data.tsv, canvas.height)
+      : [];
+    const pageCards = mergeDetectedCards(
+      pageResult.data.tsv
+        ? cardsFromTokens(pageTokens, fileName, pageNumber)
+        : [],
+      [],
+    );
+    if (pageCards.length > 0) {
+      return removeSabrositoCardsFromClassicSheets(pageCards, rectangles.length);
+    }
+  }
   let standardCards: BingoCard[] = [];
   if (rectangles.length) {
     standardCards = await recognizeDetectedGrids(
@@ -2288,35 +3263,103 @@ async function runOcrCanvas(
       pageNumber,
     );
   }
-  let compactRectangles = detectCompactRectangles(
-    pixels.data,
-    canvas.width,
-    canvas.height,
-  );
-  // Run the frame detector once more on a high-contrast copy. Gray diagonal
-  // watermarks can interrupt the original luminance image even though the
-  // black Sabrosito borders remain clearly recoverable after binarization.
-  if (!compactRectangles.length) {
-    const cleaned = makeCanvas(canvas.width, canvas.height);
-    if (cleaned) {
-      cleaned.context.drawImage(canvas, 0, 0);
-      binarizeNumbers(cleaned.canvas, cleaned.context, { luminance: 165, chroma: 72 });
-      const cleanedPixels = cleaned.context.getImageData(0, 0, cleaned.canvas.width, cleaned.canvas.height);
-      compactRectangles = detectCompactRectangles(
-        cleanedPixels.data,
-        cleaned.canvas.width,
-        cleaned.canvas.height,
-      );
+  // Compact-region OCR is intentionally limited to pages that need it. On a
+  // normal scanned 5×5 sheet, probing every possible compact frame can create
+  // dozens of extra OCR jobs before the page can advance. Special sheets are
+  // forced by their explicit heading; otherwise we only probe compact regions
+  // when the standard 5×5 detector did not recover a card.
+  let compactRectangles: CompactRectangle[] = [];
+  if (options.forceFullPageOcr || standardCards.length === 0) {
+    compactRectangles = detectCompactRectangles(
+      pixels.data,
+      canvas.width,
+      canvas.height,
+    );
+    // Run the frame detector once more on a high-contrast copy. Gray diagonal
+    // watermarks can interrupt the original luminance image even though the
+    // black Sabrosito borders remain clearly recoverable after binarization.
+    if (!compactRectangles.length) {
+      const cleaned = makeCanvas(canvas.width, canvas.height);
+      if (cleaned) {
+        cleaned.context.drawImage(canvas, 0, 0);
+        binarizeNumbers(cleaned.canvas, cleaned.context, { luminance: 165, chroma: 72 });
+        const cleanedPixels = cleaned.context.getImageData(0, 0, cleaned.canvas.width, cleaned.canvas.height);
+        compactRectangles = detectCompactRectangles(
+          cleanedPixels.data,
+          cleaned.canvas.width,
+          cleaned.canvas.height,
+        );
+      }
     }
   }
-  const compactCards = await recognizeCompactCards(
-    canvas,
-    compactRectangles,
-    worker,
-    fileName,
-    pageNumber,
+  const compactCards = options.forceFullPageOcr
+    ? []
+    : await recognizeCompactCards(
+        canvas,
+        compactRectangles,
+        worker,
+        fileName,
+        pageNumber,
+      );
+  let regionCards = removeSabrositoCardsFromClassicSheets(
+    mergeDetectedCards(standardCards, compactCards, pageWideCards),
+    effectiveClassicGridCount(rectangles.length, compactRectangles.length),
   );
-  const regionCards = mergeDetectedCards(standardCards, compactCards);
+  if (shouldReadSpecialSheetRegions({
+    forceFullPageOcr: Boolean(options.forceFullPageOcr),
+    pageComplete: hasCompletePageRead(regionCards, fullPageTokens.length),
+    classicRectangleCount: rectangles.length,
+    compactRectangleCount: compactRectangles.length,
+    explicitSpecialMarker: specialSheet,
+  })) {
+    // OCR each card-sized tile once. This page-geometry fallback handles
+    // missing headings, split borders and watermark interruptions without
+    // asking OCR to interpret the whole sheet as one 5×5 ticket.
+    const sabrositoCards = shouldProbeSabrositoGeometryFallback({
+      explicitHeading: sabrositoSheet,
+      classicRectangleCount: rectangles.length,
+      compactRectangleCount: compactRectangles.length,
+    })
+      ? await recognizeSabrositoCards(
+          canvas,
+          sabrositoFallbackRectangles(canvas.width, canvas.height),
+          worker,
+          fileName,
+          pageNumber,
+        )
+      : [];
+    const acceptedSabrositoCards = sabrositoSheet || sabrositoCards.length >= 8
+      ? sabrositoCards
+      : [];
+    const specialRectangles = numberSheet
+      ? numberPatternSheetRectangles(canvas.width, canvas.height)
+      : additionalSheetRectangles(canvas.width, canvas.height, specialSheet);
+    const additionalCards = numberSheet
+      ? []
+      : await recognizeSpecialSheetRegions(
+          canvas,
+          specialRectangles,
+          worker,
+          fileName,
+          pageNumber,
+          0.03,
+        );
+    const cellRecognizedCards = sabrositoSheet || (!numberSheet && additionalCards.length >= 6)
+      ? []
+      : await recognizeSpecialCardsByCell(
+          canvas,
+          specialRectangles,
+          worker,
+          fileName,
+          pageNumber,
+        );
+    regionCards = removeSabrositoCardsFromClassicSheets(
+      removeMisclassifiedClassicCards(
+        mergeDetectedCards(regionCards, acceptedSabrositoCards, additionalCards, cellRecognizedCards),
+      ),
+      effectiveClassicGridCount(rectangles.length, compactRectangles.length),
+    );
+  }
   // Region OCR is substantially faster than a second full-page OCR pass.
   // Only run the page-wide pass when a detected region was not recovered (or
   // when the page has no card regions, as with sparse additional figures).
@@ -2335,7 +3378,12 @@ async function runOcrCanvas(
   // regional result early hides the sparse forms that only the full-page OCR
   // pass can assemble.  The caller sets this flag when the PDF text layer
   // identifies a special sheet (and image imports always use the same path).
-  if (hasCompleteRegions && !options.forceFullPageOcr) return regionCards;
+  if (hasCompleteRegions && !options.forceFullPageOcr) {
+    return removeSabrositoCardsFromClassicSheets(
+      regionCards,
+      effectiveClassicGridCount(rectangles.length, compactRectangles.length),
+    );
+  }
 
   const result = await worker.recognize(
     canvas,
@@ -2360,15 +3408,20 @@ async function runOcrCanvas(
         pageNumber,
       )
     : [];
-  const detectedCards = mergeDetectedCards(
+  const detectedCards = removeSabrositoCardsFromClassicSheets(mergeDetectedCards(
     regionCards,
     specialCards,
     blockCards,
     tokenCards,
-  );
-  if (detectedCards.length) return detectedCards;
+  ), effectiveClassicGridCount(rectangles.length, compactRectangles.length));
+  if (detectedCards.length) {
+    return removeSabrositoCardsFromClassicSheets(
+      removeMisclassifiedClassicCards(detectedCards),
+      effectiveClassicGridCount(rectangles.length, compactRectangles.length),
+    );
+  }
   const fallbackText = result.data.text ?? "";
-  return cardsFromTokens(
+  return removeSabrositoCardsFromClassicSheets(cardsFromTokens(
     numberMatches(fallbackText).map((match, index) => ({
       value: Number(match[0]),
       x: index % 5,
@@ -2379,7 +3432,7 @@ async function runOcrCanvas(
     })),
     fileName,
     pageNumber,
-  );
+  ), effectiveClassicGridCount(rectangles.length, compactRectangles.length));
 }
 
 async function runOcr(
@@ -2387,12 +3440,17 @@ async function runOcr(
   worker: OcrWorker,
   fileName: string,
   pageNumber: number,
-  options: { forceFullPageOcr?: boolean } = {},
+  options: {
+    forceFullPageOcr?: boolean;
+    sabrositoSheet?: boolean;
+    specialSheet?: boolean;
+    recognizeImageHeading?: boolean;
+  } = {},
 ) {
   const baseViewport = pageProxy.getViewport({ scale: 1 });
   const scale = Math.max(
-    1.6,
-    Math.min(2.5, 2300 / Math.max(baseViewport.width, baseViewport.height)),
+    1.1,
+    Math.min(1.5, 1400 / Math.max(baseViewport.width, baseViewport.height)),
   );
   const viewport = pageProxy.getViewport({ scale });
   const target = makeCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
@@ -2419,12 +3477,16 @@ export async function parseBingoPdf(
     isEvalSupported: false,
   }).promise;
   const pageCount = pdf.numPages;
-  const cards: BingoCard[] = [];
-  const warnings: string[] = [];
-  let ocrWorker: OcrWorker | null = null;
+  const pageResults: Array<{ cards: BingoCard[]; warnings: string[] }> =
+    Array.from({ length: pageCount }, () => ({ cards: [], warnings: [] }));
+  // Three workers keep multi-page scans moving while keeping memory bounded.
+  // Pages are still merged in their original order below.
+  const workerCount = Math.min(3, pageCount);
+  const ocrWorkers: Array<OcrWorker | null> = Array(workerCount).fill(null);
 
   try {
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    const processPage = async (pageNumber: number, workerIndex: number) => {
+      const result = pageResults[pageNumber - 1];
       try {
       onProgress({
         page: pageNumber,
@@ -2448,6 +3510,15 @@ export async function parseBingoPdf(
       );
       const expectedIdentifiers = identifiersFromTextItems(items);
       let pageCards: BingoCard[] = extractCardsFromTextItems(items, file.name, pageNumber);
+      const specialMarker = hasAdditionalGameMarker(items);
+      const expectedSpecial = expectedSpecialCardCount(items);
+      const textNumberCount = items.reduce(
+        (total, item) => total + numberMatches(item.str).length,
+        0,
+      );
+      const underReadText =
+        textNumberCount >= 15 &&
+        countGridValues(pageCards) < Math.max(12, textNumberCount * 0.77);
 
       const tableMarkers = items
         .map((item) => item.str)
@@ -2457,7 +3528,8 @@ export async function parseBingoPdf(
         !pageCards.length ||
         expectedIdentifiers.length > pageCards.length ||
         tableMarkers > pageCards.length ||
-        hasAdditionalGameMarker(items)
+        (specialMarker && pageCards.length < expectedSpecial) ||
+        underReadText
       ) {
         onProgress({
           page: pageNumber,
@@ -2466,42 +3538,56 @@ export async function parseBingoPdf(
           percent: Math.round(((pageNumber - 0.5) / pageCount) * 100),
         });
         try {
-          ocrWorker ??= await createOcrWorker();
+          ocrWorkers[workerIndex] ??= await createOcrWorker();
           const ocrCards = await runOcr(
             page,
-            ocrWorker,
+            ocrWorkers[workerIndex] as OcrWorker,
             file.name,
             pageNumber,
             {
-              forceFullPageOcr: hasAdditionalGameMarker(items) || items.length === 0,
+              forceFullPageOcr: specialMarker || items.length === 0 || underReadText,
+              sabrositoSheet: isSabrositoSheetHeading(items.map((item) => item.str).join(" ")),
+              specialSheet: specialMarker,
+              recognizeImageHeading: true,
             },
           );
           // Keep classic 5×5 OCR cards as well: additional figures are often
           // printed on a 5×5-looking sheet and their identifying shape can be
           // lost if OCR output is filtered by layout type.
-          pageCards = mergeDetectedCards(pageCards, ocrCards);
+          pageCards = removeMisclassifiedClassicCards(
+            mergeDetectedCards(pageCards, ocrCards),
+          );
         } catch (error) {
-          warnings.push(
+          result.warnings.push(
             `Página ${pageNumber}: el OCR no pudo completarse (${error instanceof Error ? error.message : "error desconocido"}).`,
           );
         }
       }
 
       if (!pageCards.length) {
-        warnings.push(
+        result.warnings.push(
           `Página ${pageNumber}: no se encontró un cartón o juego adicional válido. Puedes corregirlo con “Ingreso manual”.`,
         );
       }
-      cards.push(...pageCards);
+      result.cards.push(...pageCards);
       page.cleanup();
       } catch (error) {
-        warnings.push(
+        result.warnings.push(
           `Página ${pageNumber}: no pudo procesarse (${error instanceof Error ? error.message : "error desconocido"}).`,
         );
       }
+    };
+    for (let start = 1; start <= pageCount; start += workerCount) {
+      const batch = Array.from(
+        { length: Math.min(workerCount, pageCount - start + 1) },
+        (_, offset) => start + offset,
+      );
+      await Promise.all(batch.map((pageNumber, offset) => processPage(pageNumber, offset)));
     }
   } finally {
-    await ocrWorker?.terminate().catch(() => undefined);
+    await Promise.all(
+      ocrWorkers.map((worker) => worker?.terminate().catch(() => undefined)),
+    );
     await pdf.destroy();
   }
 
@@ -2511,7 +3597,11 @@ export async function parseBingoPdf(
     stage: "Validando",
     percent: 100,
   });
-  return { cards, pages: pageCount, warnings };
+  return {
+    cards: pageResults.flatMap((result) => result.cards),
+    pages: pageCount,
+    warnings: pageResults.flatMap((result) => result.warnings),
+  };
 }
 
 export type BingoSourceKind = "pdf" | "image";
@@ -2551,6 +3641,7 @@ export async function parseBingoImage(
   try {
     const cards = await runOcrCanvas(target.canvas, worker, file.name, 1, {
       forceFullPageOcr: true,
+      recognizeImageHeading: true,
     });
     const warnings = cards.length
       ? []
