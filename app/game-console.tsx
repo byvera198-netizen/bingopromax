@@ -77,6 +77,16 @@ type Toast = { id: string; tone: "success" | "warning" | "error"; message: strin
 type PatternFilter = "all" | "cartones" | "numeros" | "adicionales";
 type CardFilter = "all" | "5x5" | "sabrositos" | "numeros" | "adicionales";
 type PageSelectionDraft = { id: string; file: File; kind: BingoSourceKind; pageCount: number; selectedPages: number[] };
+const ACCENT_THEMES = [
+  { id: "lime", label: "Lima neón", color: "#d7ff3f" },
+  { id: "cyan", label: "Cian eléctrico", color: "#35f2ff" },
+  { id: "pink", label: "Magenta láser", color: "#ff4fd8" },
+  { id: "violet", label: "Violeta neón", color: "#b46bff" },
+  { id: "blue", label: "Azul plasma", color: "#4d91ff" },
+  { id: "emerald", label: "Verde radioactivo", color: "#43ff91" },
+  { id: "celestial-gold", label: "Dorado celestial · 36 quilates", color: "#ffd34e" },
+] as const;
+type AccentTheme = typeof ACCENT_THEMES[number]["id"];
 
 const initialGrid: string[] = Array.from({ length: 25 }, (_, index) => (index === 12 ? "0" : ""));
 const BINGO = ["B", "I", "N", "G", "O"];
@@ -492,6 +502,11 @@ export default function GameConsole() {
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
   );
+  const [accentTheme, setAccentTheme] = useState<AccentTheme>(() => {
+    if (typeof window === "undefined") return "lime";
+    const saved = localStorage.getItem("bingo-accent-theme");
+    return ACCENT_THEMES.some((option) => option.id === saved) ? saved as AccentTheme : "lime";
+  });
   const [sound, setSound] = useState(() =>
     typeof window === "undefined" || localStorage.getItem("bingo-sound") !== "off",
   );
@@ -756,7 +771,9 @@ export default function GameConsole() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("bingo-theme", theme);
-  }, [theme]);
+    document.documentElement.dataset.accentTheme = accentTheme;
+    localStorage.setItem("bingo-accent-theme", accentTheme);
+  }, [theme, accentTheme]);
 
   useEffect(() => {
     localStorage.setItem("bingo-sound", sound ? "on" : "off");
@@ -2647,7 +2664,19 @@ export default function GameConsole() {
             <motion.button animate={{ opacity: 1 }} aria-label="Cerrar configuración" className="drawer-backdrop" exit={{ opacity: 0 }} initial={{ opacity: 0 }} onClick={() => setSettingsOpen(false)} type="button" />
             <motion.aside animate={{ x: 0 }} className="settings-drawer" exit={{ x: "100%" }} initial={{ x: "100%" }}>
               <header><div><span className="eyebrow">PREFERENCIAS</span><h2>Configuración</h2></div><button className="icon-button" onClick={() => setSettingsOpen(false)} type="button"><X size={19} /></button></header>
-              <section><span className="settings-label">APARIENCIA</span><div className="theme-picker"><button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button><button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button></div></section>
+              <section>
+                <span className="settings-label">APARIENCIA</span>
+                <div className="theme-picker"><button aria-pressed={theme === "dark"} className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")} type="button"><Moon size={18} /> Oscuro</button><button aria-pressed={theme === "light"} className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")} type="button"><Sun size={18} /> Claro</button></div>
+                <span className="settings-label accent-theme-label">COLOR NEÓN</span>
+                <div aria-label="Tema de color" className="accent-theme-picker">
+                  {ACCENT_THEMES.map((option) => (
+                    <button aria-pressed={accentTheme === option.id} className={`accent-theme-option ${accentTheme === option.id ? "active" : ""}`} key={option.id} onClick={() => setAccentTheme(option.id)} type="button">
+                      <i aria-hidden="true" style={{ backgroundColor: option.color, boxShadow: `0 0 12px ${option.color}88` }} />
+                      <span>{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
               <section><span className="settings-label">COMPORTAMIENTO</span><label className="setting-row"><span><Volume2 size={18} /></span><div><strong>Sonidos</strong><small>Bolillas y anuncio de ganador</small></div><input checked={sound} onChange={(event) => setSound(event.target.checked)} type="checkbox" /></label><label className="setting-row"><span><Pause size={18} /></span><div><strong>Pausa automática</strong><small>Detener al detectar un bingo</small></div><input checked={game.autoPause} onChange={(event) => void updateAutoPause(event.target.checked)} type="checkbox" /></label></section>
               <section className="system-status"><span className="settings-label">ESTADO DEL SISTEMA</span><div><ShieldCheck size={20} /><p><strong>Todo operativo</strong><small>Datos persistentes y validación en tiempo real.</small></p></div></section>
               <section><span className="settings-label">CUENTA</span><div className="account-summary"><UserRound size={18} /><div><strong>{authUser?.email || "Modo demo"}</strong><small>{state.access.role === "admin" ? "Administrador" : demoMode ? "Demostración" : "Usuario aprobado"}</small></div></div><button className="secondary-button account-signout" onClick={() => demoMode ? (setDemoMode(false), setState(null), setAccess(null)) : void supabase.auth.signOut()} type="button">Cerrar sesión</button></section>
