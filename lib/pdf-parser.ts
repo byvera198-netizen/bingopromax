@@ -2868,7 +2868,12 @@ async function recognizeAnchoredSheetCards(
     const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: false, text: true });
     return result.data.text ?? "";
   };
-  const readNumber = async (x: number, y: number, size: number) => {
+  const readNumber = async (
+    x: number,
+    y: number,
+    size: number,
+    options: { allowedRange?: [number, number]; preferGrayscale?: boolean } = {},
+  ) => {
     const side = Math.min(size, source.width * 0.095, source.height * 0.055);
     const recognize = async (
       cropSide: number,
@@ -2891,15 +2896,21 @@ async function recognizeAnchoredSheetCards(
       const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: false, text: true });
       const digits = (result.data.text.match(/\d+/g) ?? []).join("");
       const value = Number(digits.length > 2 ? digits.slice(0, 2) : digits);
-      return value >= 1 && value <= 75 ? value : 0;
+      const [minimum, maximum] = options.allowedRange ?? [1, 75];
+      return value >= minimum && value <= maximum ? value : 0;
     };
-    const first = await recognize(side, true, "10");
+    // Keep the original scan texture for digit reading: binarization can turn
+    // a 6 into a 5 on watermarked sheets. Number-form cards also have strict
+    // B-I-N-G-O column ranges, which let us retry only genuinely suspicious
+    // readings instead of adding another OCR pass to every cell.
+    const first = await recognize(side, Boolean(!options.preferGrayscale), "10");
     if (first) return first;
     // Keep a single fallback for watermarks and interrupted strokes. PSM 13
     // handles isolated digits while avoiding the extra serial OCR pass that
     // made low-confidence number sheets exceed the import time budget.
     const retrySide = Math.min(side * 1.16, source.width * 0.095, source.height * 0.055);
-    return recognize(retrySide, true, "13", 0.003);
+    const grayscaleRetry = await recognize(retrySide, false, "10", 0.003);
+    return grayscaleRetry || recognize(retrySide, true, "13", 0.003);
   };
 
   const regions = kind === "additional"
@@ -2951,9 +2962,9 @@ async function recognizeAnchoredSheetCards(
     }
     const coordinates = kind === "additional" ? {
       "Sonrisa": [[.30,.30],[.70,.30],[.10,.70],[.90,.70],[.30,.89],[.50,.89],[.69,.89]],
-      "Mini O": [[.29,.30],[.52,.30],[.72,.30],[.29,.51],[.72,.51],[.29,.70],[.52,.70],[.72,.70]],
+      "Mini O": [[.29,.30],[.52,.30],[.72,.30],[.29,.51],[.72,.51],[.29,.70],[.52,.70],[.713,.70]],
       "Perrito": [[.10,.29],[.30,.29],[.30,.53],[.68,.53],[.30,.72],[.52,.72],[.72,.72],[.30,.91],[.72,.91]],
-      "Cruz": [[.52,.10],[.10,.30],[.29,.30],[.52,.30],[.71,.30],[.90,.30],[.52,.61],[.52,.90]],
+      "Cruz": [[.52,.10],[.10,.30],[.29,.30],[.52,.30],[.71,.30],[.90,.30],[.52,.71],[.52,.90]],
       "Más": [[.5,.12],[.5,.32],[.10,.5],[.30,.5],[.70,.5],[.90,.5],[.5,.70],[.5,.90]],
       "Martillo": [[.72,.10],[.52,.30],[.10,.5],[.30,.5],[.71,.5],[.10,.70],[.30,.70],[.90,.70]],
     }[layout.name] ?? [] : layout.cells
@@ -2966,9 +2977,12 @@ async function recognizeAnchoredSheetCards(
     for (let cellIndex = 0; cellIndex < activeCells.length; cellIndex += 1) {
       const [x, y] = coordinates[cellIndex] ?? [];
       if (x === undefined || y === undefined) continue;
-      const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
-        rect.y / source.height + y * rect.height / source.height, size);
       const cell = activeCells[cellIndex];
+      const bingoColumnRanges: [number, number][] = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
+      const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
+        rect.y / source.height + y * rect.height / source.height, size, kind === "number"
+          ? { allowedRange: bingoColumnRanges[cell.column], preferGrayscale: true }
+          : {});
       matrix[cell.row][cell.column] = value;
     }
     const grid = layout.cells.map((cell, cellIndex) =>
