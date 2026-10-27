@@ -789,15 +789,14 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
     cells: range(0, 24),
     variants: [range(0, 24)],
   },
-  // Figuras adicionales identificadas en la hoja de números del proveedor
-  // (página 15: numeraciones centrales #1, #3, #5 y #9). Son patrones
-  // sobre cartones 5×5; no cambian la estructura ni la validación del cartón.
+  // Formas numéricas identificadas en las hojas de números (#1, #3, #5 y #9).
+  // Son patrones seleccionables para cartones clásicos 5×5, no juegos adicionales.
   {
     id: "forma-adicional-1",
     name: "Forma adicional #1",
     description: "Figura especial asociada a la numeración #1.",
     color: "#ff4fd8",
-    category: "Juegos adicionales",
+    category: "Números",
     difficulty: "Alta",
     cells: [2, 6, 7, 10, 12, 17, 20, 21, 22, 23, 24],
     variants: [[2, 6, 7, 10, 12, 17, 20, 21, 22, 23, 24]],
@@ -807,7 +806,7 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
     name: "Forma adicional #3",
     description: "Figura especial asociada a la numeración #3.",
     color: "#62d5ff",
-    category: "Juegos adicionales",
+    category: "Números",
     difficulty: "Alta",
     cells: [0, 1, 2, 3, 4, 9, 10, 11, 14, 19, 20, 21, 22, 23, 24],
     variants: [[0, 1, 2, 3, 4, 9, 10, 11, 14, 19, 20, 21, 22, 23, 24]],
@@ -817,7 +816,7 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
     name: "Forma adicional #5",
     description: "Figura especial asociada a la numeración #5.",
     color: "#d7ff3f",
-    category: "Juegos adicionales",
+    category: "Números",
     difficulty: "Alta",
     cells: [0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 17, 20, 21, 22, 23, 24],
     variants: [[0, 1, 2, 3, 4, 5, 10, 11, 13, 14, 17, 20, 21, 22, 23, 24]],
@@ -827,7 +826,7 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
     name: "Forma adicional #9",
     description: "Figura especial asociada a la numeración #9.",
     color: "#ffc857",
-    category: "Juegos adicionales",
+    category: "Números",
     difficulty: "Alta",
     cells: [0, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24],
     variants: [[0, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24]],

@@ -56,6 +56,7 @@ import {
   cardLayoutFor,
   createCardLayout,
   formatDuration,
+  isClassicCard,
   patternsForCard,
   validateBingoCard,
   winningPatternsForCard,
@@ -76,7 +77,7 @@ import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
 type View = "dashboard" | "cards" | "patterns" | "reports" | "memberships";
 type Toast = { id: string; tone: "success" | "warning" | "error"; message: string };
-type PatternFilter = "all" | "cartones" | "numeros" | "adicionales";
+type PatternFilter = "all" | "cartones" | "numeros" | "adicionales" | "sabrositos";
 type CardFilter = "all" | "5x5" | "sabrositos" | "numeros" | "adicionales";
 type PageSelectionDraft = { id: string; file: File; kind: BingoSourceKind; pageCount: number; selectedPages: number[] };
 const ACCENT_THEMES = [
@@ -164,20 +165,20 @@ function resizeCardGrid(grid: number[], size: number, type: CardType) {
 }
 
 function cardFilterFor(card: BingoCard): Exclude<CardFilter, "all"> {
-  if (card.grid.length === 25) return "5x5";
-  const layoutType = String(card.layout?.type ?? "").toLowerCase();
+  const layout = cardLayoutFor(card);
+  const layoutType = String(layout.type ?? "").toLowerCase();
   if (layoutType.includes("sabrosito")) return "sabrositos";
+  const additional = additionalPatternForCard(card);
+  if (additional) return "adicionales";
+  if (isClassicCard(card)) return "5x5";
   // Number sheets are imported as sparse custom layouts (their grid contains
   // only the occupied cells), so they cannot be identified by grid length.
   // Use the canonical layout name as the classification source and keep the
   // numbered glyphs out of the generic additional-games filter.
-  const layoutName = String(card.layout?.name ?? "").trim().toLocaleLowerCase("es");
-  if (/^n[uú]mero\s+[1-9]\b/.test(layoutName) || /^forma\s+(?:[134579]|[+=])\b/.test(layoutName)) {
+  const layoutName = String(layout.name ?? "").trim().toLocaleLowerCase("es");
+  if (/^n[uú]mero\s+[1-9]\b/.test(layoutName) || /^forma\s+adicional\s*#?\s*(?:[134579]|[+=])\b/.test(layoutName)) {
     return "numeros";
   }
-  const additional = additionalPatternForCard(card);
-  const category = additional?.category.toLocaleLowerCase("es") ?? "";
-  if (category === "números" || category === "numeros" || additional?.name.toLocaleLowerCase("es").startsWith("número")) return "numeros";
   return "adicionales";
 }
 
@@ -880,7 +881,7 @@ export default function GameConsole() {
     () => sortPatternsNaturally([
       ...BUILTIN_PATTERNS,
       ...(state?.customPatterns ?? []),
-      ...(state?.cards.some((card) => card.grid.length === 5)
+      ...(state?.cards.some((card) => cardLayoutFor(card).type === "sabrosito-5")
         ? [COMPACT_CARD_PATTERN]
         : []),
     ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id))),
@@ -888,8 +889,9 @@ export default function GameConsole() {
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
     const category = pattern.category.toLocaleLowerCase("es");
+    if (pattern.id === COMPACT_CARD_PATTERN.id) return "sabrositos";
     if (category === "números" || category === "numeros") return "numeros";
-    if (category === "juegos adicionales" || pattern.id === COMPACT_CARD_PATTERN.id) return "adicionales";
+    if (category === "juegos adicionales") return "adicionales";
     return "cartones";
   }, []);
   const filteredPatterns = useMemo(
@@ -2418,6 +2420,7 @@ export default function GameConsole() {
                   ["cartones", "Cartones"],
                   ["numeros", "Números"],
                   ["adicionales", "Adicionales"],
+                  ["sabrositos", "Sabrositos"],
                 ] as Array<[PatternFilter, string]>).map(([value, label]) => {
                   const count = value === "all" ? availablePatterns.length : availablePatterns.filter((pattern) => patternBucket(pattern) === value).length;
                   return <button aria-pressed={patternFilter === value} className={patternFilter === value ? "active" : ""} key={value} onClick={() => { setPatternFilter(value); setPatternLimit(60); }} type="button">{label} <b>{count}</b></button>;

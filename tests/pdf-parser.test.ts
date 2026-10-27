@@ -450,16 +450,18 @@ test("incluye las formas adicionales numeradas de la hoja de números", () => {
       "adicional-forma-9",
       "adicional-forma-mas",
       "adicional-forma-igual",
-      "forma-adicional-1",
-      "forma-adicional-3",
-      "forma-adicional-5",
-      "forma-adicional-9",
     ],
   );
   additional.forEach((pattern) => {
     assert.equal(pattern.cells.length, pattern.variants[0].length);
     assert.ok(pattern.cells.every((cell) => cell >= 0 && cell < 25));
   });
+  const numericForms = BUILTIN_PATTERNS.filter((pattern) => pattern.category === "Números");
+  assert.deepEqual(
+    numericForms.filter((pattern) => pattern.id.startsWith("forma-adicional-")).map((pattern) => pattern.id),
+    ["forma-adicional-1", "forma-adicional-3", "forma-adicional-5", "forma-adicional-9"],
+    "las formas numéricas #1, #3, #5 y #9 pertenecen al filtro Números, no a Adicionales",
+  );
 });
 
 test("incluye el catálogo de letras y números sin patrones repetidos", () => {
