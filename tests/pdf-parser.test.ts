@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BUILTIN_PATTERNS,
+  COMPACT_CARD_PATTERN,
   additionalPatternForCard,
   cardProgress,
   cardLayoutFor,
@@ -554,6 +555,14 @@ test("un cartón Sabrosito gana al completar sus cinco números", () => {
     progress: 0.8,
   });
   assert.equal(patternForCard(card, activePattern).id, "sabrosito-completo");
+});
+
+test("Sabrosito está en el catálogo por defecto y solo valida su propio cartón cuando está habilitado", () => {
+  const card = { grid: [27, 45, 61, 12, 56] } as BingoCard;
+  assert.equal(COMPACT_CARD_PATTERN.category, "Sabrositos");
+  assert.deepEqual(patternsForCard(card, [BUILTIN_PATTERNS[0]]), []);
+  assert.deepEqual(patternsForCard(card, [COMPACT_CARD_PATTERN]).map((pattern) => pattern.id), ["sabrosito-completo"]);
+  assert.deepEqual(patternsForCard({ grid: baseGrid } as BingoCard, [COMPACT_CARD_PATTERN]), []);
 });
 
 test("un cartón 5×5 admite letras/números seleccionados y excluye juegos adicionales", () => {

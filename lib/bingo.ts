@@ -838,7 +838,7 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
   name: "Sabrosito completo",
   description: "Los cinco números del cartón Sabrosito.",
   color: "#d7ff3f",
-  category: "Especial",
+  category: "Sabrositos",
   difficulty: "Media",
   cells: [0, 1, 2, 3, 4],
   variants: [[0, 1, 2, 3, 4]],
@@ -898,6 +898,12 @@ export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
+  const layout = cardLayoutFor(card);
+  if (layout.type === "sabrosito-5") {
+    return activePatterns.some((pattern) => pattern.id === COMPACT_CARD_PATTERN.id)
+      ? [COMPACT_CARD_PATTERN]
+      : [];
+  }
   const additional = additionalPatternForCard(card, [
     ...BUILTIN_PATTERNS,
     ...activePatterns.filter((pattern) => !BUILTIN_PATTERNS.some((builtin) => builtin.id === pattern.id)),
@@ -916,7 +922,8 @@ export function patternsForCard(
         // Additional game sheets and Sabrositos never run on a traditional
         // ticket. Letter and number figures remain selectable 5×5 wins.
         return pattern.id !== COMPACT_CARD_PATTERN.id &&
-          category !== "juegos adicionales";
+          category !== "juegos adicionales" &&
+          category !== "sabrositos";
       })
     : [completionPatternFor(card)];
 }

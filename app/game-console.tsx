@@ -881,15 +881,13 @@ export default function GameConsole() {
     () => sortPatternsNaturally([
       ...BUILTIN_PATTERNS,
       ...(state?.customPatterns ?? []),
-      ...(state?.cards.some((card) => cardLayoutFor(card).type === "sabrosito-5")
-        ? [COMPACT_CARD_PATTERN]
-        : []),
+      COMPACT_CARD_PATTERN,
     ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id))),
     [state?.cards, state?.customPatterns, state?.deletedPatternIds],
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
     const category = pattern.category.toLocaleLowerCase("es");
-    if (pattern.id === COMPACT_CARD_PATTERN.id) return "sabrositos";
+    if (pattern.id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "sabrositos";
     if (category === "números" || category === "numeros") return "numeros";
     if (category === "juegos adicionales") return "adicionales";
     return "cartones";
