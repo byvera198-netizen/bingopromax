@@ -10,6 +10,8 @@ import {
   deduplicateBingoCards,
   validateBingoCard,
   isWinningCard,
+  normalizeBingoPattern,
+  normalizePatternCategory,
   patternForCard,
   patternsForCard,
   winningPatternsForCard,
@@ -618,6 +620,36 @@ test("conserva los patrones de adicionales sincronizados desde Studio y los aís
   avion.cells.forEach((cell, index) => { grid[cell] = index + 1; });
   assert.deepEqual(patternsForCard({ grid } as BingoCard, [studioAvion]).map((pattern) => pattern.id), ["studio-avion"]);
   assert.equal(patternsForCard({ grid: baseGrid } as BingoCard, [studioAvion]).length, 0);
+});
+
+test("clasifica los patrones numéricos 1, 3, 5, 7 y 9 aunque estén guardados como personalizados", () => {
+  for (const digit of [1, 3, 5, 7, 9]) {
+    const builtin = BUILTIN_PATTERNS.find((pattern) => pattern.id === `numero-${digit}`);
+    assert.ok(builtin);
+    const savedCustom = {
+      ...builtin,
+      id: `custom-${digit}`,
+      name: String(digit),
+      category: "Personalizado",
+      custom: true,
+    };
+    assert.equal(normalizePatternCategory(savedCustom), "Números");
+    assert.equal(normalizeBingoPattern(savedCustom).category, "Números");
+    assert.ok(patternsForCard({ grid: baseGrid } as BingoCard, [savedCustom])
+      .some((pattern) => pattern.id === savedCustom.id));
+  }
+});
+
+test("un adicional personalizado se clasifica como adicional y nunca juega en cartón 5×5", () => {
+  const builtin = BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-espada");
+  assert.ok(builtin);
+  const savedCustom = { ...builtin, id: "custom-espada", category: "Personalizado", custom: true };
+  assert.equal(normalizePatternCategory(savedCustom), "Juegos adicionales");
+  assert.equal(patternsForCard({ grid: baseGrid } as BingoCard, [savedCustom]).length, 0);
+
+  const grid = Array(25).fill(0);
+  builtin.cells.forEach((cell, index) => { grid[cell] = index + 1; });
+  assert.deepEqual(patternsForCard({ grid } as BingoCard, [savedCustom]).map((pattern) => pattern.id), [savedCustom.id]);
 });
 
 test("separa dos cuadrículas escaneadas por sus líneas", () => {

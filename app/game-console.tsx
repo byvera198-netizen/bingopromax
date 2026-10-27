@@ -58,6 +58,8 @@ import {
   createCardLayout,
   formatDuration,
   isClassicCard,
+  normalizeBingoPattern,
+  normalizePatternCategory,
   patternsForCard,
   validateBingoCard,
   winningPatternsForCard,
@@ -890,7 +892,8 @@ export default function GameConsole() {
   const availablePatterns = useMemo(
     () => {
       const unique = new Map<string, BingoPattern>();
-      for (const pattern of [...BUILTIN_PATTERNS, ...(state?.customPatterns ?? []), COMPACT_CARD_PATTERN]) {
+      for (const sourcePattern of [...BUILTIN_PATTERNS, ...(state?.customPatterns ?? []), COMPACT_CARD_PATTERN]) {
+        const pattern = normalizeBingoPattern(sourcePattern);
         if (
           RETIRED_BUILTIN_PATTERN_IDS.has(pattern.id) ||
           pattern.name.startsWith("Forma adicional #") ||
@@ -904,7 +907,7 @@ export default function GameConsole() {
     [state?.customPatterns, state?.deletedPatternIds],
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
-    const category = pattern.category.toLocaleLowerCase("es");
+    const category = normalizePatternCategory(pattern).toLocaleLowerCase("es");
     if (pattern.id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "sabrositos";
     if (category === "números" || category === "numeros") return "numeros";
     if (category === "juegos adicionales") return "adicionales";

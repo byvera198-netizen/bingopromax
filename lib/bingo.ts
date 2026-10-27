@@ -863,6 +863,52 @@ export const COMPACT_CARD_PATTERN: BingoPattern = {
   variants: [[0, 1, 2, 3, 4]],
 };
 
+const normalizedPatternText = (value: string) => value
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLocaleLowerCase("es")
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+
+const patternCellsKey = (cells: number[]) => [...cells].sort((a, b) => a - b).join(",");
+
+/** Canonical category for imported/legacy custom patterns without rewriting their saved data. */
+export function normalizePatternCategory(pattern: BingoPattern) {
+  const category = normalizedPatternText(pattern.category);
+  const name = normalizedPatternText(pattern.name);
+  if (pattern.id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "Sabrositos";
+  if (category === "juegos adicionales" || category === "adicionales" || category === "additional games") {
+    return "Juegos adicionales";
+  }
+
+  const numericName = /^(?:numero )?([1-9])$/.exec(name);
+  const numericById = /^numero-([1-9])$/.exec(pattern.id);
+  const numericGlyph = BUILTIN_PATTERNS.some((builtin) =>
+    builtin.category === "Números" && /^numero-[1-9]$/.test(builtin.id) &&
+    patternCellsKey(builtin.cells) === patternCellsKey(pattern.cells),
+  );
+  if (numericName || numericById || numericGlyph || category === "numeros" || category === "numbers") {
+    return "Números";
+  }
+
+  const additionalName = BUILTIN_PATTERNS.some((builtin) =>
+    builtin.category === "Juegos adicionales" &&
+    normalizedPatternText(builtin.name) === name,
+  );
+  const additionalGlyph = BUILTIN_PATTERNS.some((builtin) =>
+    builtin.category === "Juegos adicionales" &&
+    patternCellsKey(builtin.cells) === patternCellsKey(pattern.cells),
+  );
+  if (additionalName || additionalGlyph || category.includes("adicional")) return "Juegos adicionales";
+  if (category === "letras" || category === "letters") return "Letras";
+  return pattern.category;
+}
+
+export function normalizeBingoPattern(pattern: BingoPattern): BingoPattern {
+  const category = normalizePatternCategory(pattern);
+  return category === pattern.category ? pattern : { ...pattern, category };
+}
+
 /**
  * Returns the named additional game represented by the occupied cells of a
  * traditional 5×5 card. Scanned sheets frequently omit or corrupt the game
@@ -882,9 +928,9 @@ export function additionalPatternForCard(
     .filter((index) => index >= 0);
   return candidates.find(
     (pattern) =>
-      pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "juegos adicionales" &&
+      normalizePatternCategory(pattern) === "Juegos adicionales" &&
       pattern.cells.length === occupied.length &&
-      pattern.cells.every((cell, index) => cell === occupied[index]),
+      patternCellsKey(pattern.cells) === patternCellsKey(occupied),
   ) ?? null;
 }
 
@@ -908,36 +954,41 @@ function completionPatternFor(card: BingoCard): BingoPattern {
 }
 
 export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
-  const additional = additionalPatternForCard(card);
-  if (additional) return additional;
-  return isClassicCard(card) ? activePattern : completionPatternFor(card);
+  const normalizedActive = normalizeBingoPattern(activePattern);
+  const additional = additionalPatternForCard(card, [
+    ...BUILTIN_PATTERNS,
+    normalizedActive,
+  ]);
+  if (additional) return normalizeBingoPattern(additional);
+  return isClassicCard(card) ? normalizedActive : completionPatternFor(card);
 }
 
 export function patternsForCard(
   card: BingoCard,
   activePatterns: BingoPattern[],
 ) {
+  const normalizedActivePatterns = activePatterns.map(normalizeBingoPattern);
   const layout = cardLayoutFor(card);
   if (layout.type === "sabrosito-5") {
-    return activePatterns.some((pattern) => pattern.id === COMPACT_CARD_PATTERN.id)
+    return normalizedActivePatterns.some((pattern) => pattern.id === COMPACT_CARD_PATTERN.id)
       ? [COMPACT_CARD_PATTERN]
       : [];
   }
   const additional = additionalPatternForCard(card, [
     ...BUILTIN_PATTERNS,
-    ...activePatterns.filter((pattern) => !BUILTIN_PATTERNS.some((builtin) => builtin.id === pattern.id)),
+    ...normalizedActivePatterns.filter((pattern) => !BUILTIN_PATTERNS.some((builtin) => builtin.id === pattern.id)),
   ]);
   if (additional) {
-    return activePatterns.filter((pattern) =>
+    return normalizedActivePatterns.filter((pattern) =>
       pattern.id === additional.id ||
-      (pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "juegos adicionales" &&
+      (normalizePatternCategory(pattern) === "Juegos adicionales" &&
         pattern.cells.length === additional.cells.length &&
-        pattern.cells.every((cell, index) => cell === additional.cells[index])),
+        patternCellsKey(pattern.cells) === patternCellsKey(additional.cells)),
     );
   }
   return isClassicCard(card)
-    ? activePatterns.filter((pattern) => {
-        const category = pattern.category.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    ? normalizedActivePatterns.filter((pattern) => {
+        const category = normalizePatternCategory(pattern).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         // Additional game sheets and Sabrositos never run on a traditional
         // ticket. Letter and number figures remain selectable 5×5 wins.
         return pattern.id !== COMPACT_CARD_PATTERN.id &&

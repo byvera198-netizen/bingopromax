@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import {
   cardContentSignature,
   cardLayoutFor,
+  normalizeBingoPattern,
   validateBingoCard,
   type BingoCard,
   type BingoPattern,
@@ -440,7 +441,7 @@ export async function GET(request: Request) {
       })),
       customPatterns: (patternRows.results ?? []).map((row) => {
         const cells = JSON.parse(String(row.cells_json));
-        return {
+        return normalizeBingoPattern({
           id: String(row.id),
           name: String(row.name),
           description: String(row.description),
@@ -450,7 +451,7 @@ export async function GET(request: Request) {
           cells,
           variants: [cells],
           custom: true,
-        };
+        });
       }),
       disabledPatternIds: (gamePatternRows.results ?? [])
         .filter((row) => !Boolean(row.enabled) && !Boolean(row.deleted))
@@ -801,7 +802,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "setPattern") {
-      const pattern = body.pattern as BingoPattern;
+      const pattern = normalizeBingoPattern(body.pattern as BingoPattern);
       if (!gameId || !pattern?.id || !Array.isArray(pattern.cells)) {
         return Response.json({ error: "Patrón inválido." }, { status: 400 });
       }
@@ -833,7 +834,7 @@ export async function POST(request: Request) {
         if (!sourceId || !name || !cells.length) return [];
         const safeId = sourceId.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
         if (!safeId) return [];
-        return [{
+        const pattern = normalizeBingoPattern({
           id: `studio-${safeId}`,
           name: name.slice(0, 120),
           description: String(source.description ?? "Patrón importado desde Bingo ProMax Studio").trim().slice(0, 500),
@@ -843,8 +844,10 @@ export async function POST(request: Request) {
           category: String(source.group ?? "Studio").trim().slice(0, 80) || "Studio",
           difficulty: cells.length > 12 ? "Alta" : cells.length > 7 ? "Media" : "Fácil",
           cells,
-          active: source.active === true,
-        }];
+          variants: [cells],
+          custom: true,
+        });
+        return [{ ...pattern, active: source.active === true }];
       });
 
       const uniquePatterns = Array.from(new Map(normalized.map((pattern) => [pattern.id, pattern])).values());
@@ -891,7 +894,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "savePattern") {
-      const pattern = body.pattern as BingoPattern;
+      const pattern = normalizeBingoPattern(body.pattern as BingoPattern);
       if (!gameId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
         return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
       }
@@ -921,7 +924,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "updatePattern") {
-      const pattern = body.pattern as BingoPattern;
+      const pattern = normalizeBingoPattern(body.pattern as BingoPattern);
       if (!gameId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
         return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
       }
@@ -934,13 +937,14 @@ export async function POST(request: Request) {
       }
       await db
         .prepare(
-          `UPDATE patterns SET name = ?, description = ?, color = ?, difficulty = ?, cells_json = ?
+          `UPDATE patterns SET name = ?, description = ?, color = ?, category = ?, difficulty = ?, cells_json = ?
            WHERE id = ?`,
         )
         .bind(
           pattern.name,
           pattern.description,
           pattern.color,
+          pattern.category,
           pattern.difficulty,
           JSON.stringify(pattern.cells),
           pattern.id,
@@ -951,7 +955,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "replacePattern") {
-      const pattern = body.pattern as BingoPattern;
+      const pattern = normalizeBingoPattern(body.pattern as BingoPattern);
       const replacesPatternId = String(body.replacesPatternId ?? "").trim();
       if (!gameId || !replacesPatternId || !pattern?.id || !pattern.name || !Array.isArray(pattern.cells) || !pattern.cells.length) {
         return Response.json({ error: "Completa el nombre y selecciona casillas." }, { status: 400 });
