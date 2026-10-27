@@ -2877,6 +2877,52 @@ function expectedFormFromLabel(text: string, definitions: SpecialCardDefinition[
   );
 }
 
+/**
+ * A printed masthead identifies the six games and their fixed reading order.
+ * Prefer that explicit page-level evidence over a noisy per-card OCR caption,
+ * which can mistake a watermark or a neighboring word for another game name.
+ */
+export function additionalFormNameForRegion(
+  labelText: string,
+  formOrder: readonly string[] | null,
+  regionIndex: number,
+) {
+  return formOrder?.[regionIndex] ?? expectedFormFromLabel(labelText, specialCardDefinitions)?.layout.name;
+}
+
+export interface PositionedOcrNumber {
+  value: number;
+  x: number;
+  y: number;
+  confidence: number;
+}
+
+/** Assigns cropped-page OCR words to known sparse-form cells, one-to-one. */
+export function assignOcrNumbersToCardCells(
+  candidates: PositionedOcrNumber[],
+  positions: Array<[number, number]>,
+) {
+  const matches = candidates.flatMap((candidate, tokenIndex) => {
+    if (!Number.isInteger(candidate.value) || candidate.value < 1 || candidate.value > 75 || candidate.confidence < 20) return [];
+    return positions.map(([x, y], cellIndex) => ({
+      tokenIndex,
+      cellIndex,
+      distance: Math.hypot((candidate.x - x) / 0.2, (candidate.y - y) / 0.2),
+      confidence: candidate.confidence,
+    })).filter((match) => match.distance <= 0.58);
+  }).sort((left, right) => left.distance - right.distance || right.confidence - left.confidence);
+  const values = Array<number>(positions.length).fill(0);
+  const usedTokens = new Set<number>();
+  const usedCells = new Set<number>();
+  for (const match of matches) {
+    if (usedTokens.has(match.tokenIndex) || usedCells.has(match.cellIndex)) continue;
+    values[match.cellIndex] = candidates[match.tokenIndex].value;
+    usedTokens.add(match.tokenIndex);
+    usedCells.add(match.cellIndex);
+  }
+  return values;
+}
+
 async function recognizeAnchoredSheetCards(
   source: HTMLCanvasElement,
   worker: OcrWorker,
@@ -2948,6 +2994,43 @@ async function recognizeAnchoredSheetCards(
     return grayscaleRetry || recognize(retrySide, true, "13", 0.003);
   };
 
+  const readTicketNumbers = async (
+    rect: ReturnType<typeof normalizeRect>,
+    positions: Array<[number, number]>,
+  ) => {
+    const scale = 2;
+    const crop = makeCanvas(rect.width * scale, rect.height * scale);
+    if (!crop) return Array<number>(positions.length).fill(0);
+    crop.context.drawImage(source, rect.x, rect.y, rect.width, rect.height,
+      0, 0, crop.canvas.width, crop.canvas.height);
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789",
+      tessedit_pageseg_mode: "11",
+      preserve_interword_spaces: "1",
+    });
+    const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: true, text: false });
+    const candidates: PositionedOcrNumber[] = [];
+    for (const line of (result.data.tsv ?? "").split(/\r?\n/).slice(1)) {
+      const columns = line.split("\t");
+      if (columns.length < 12) continue;
+      const text = columns.slice(11).join("\t").trim();
+      const value = /^\d{1,2}$/.test(text) ? Number(text) : 0;
+      const confidence = Number(columns[10]);
+      const left = Number(columns[6]);
+      const top = Number(columns[7]);
+      const width = Number(columns[8]);
+      const height = Number(columns[9]);
+      if (!value || ![confidence, left, top, width, height].every(Number.isFinite)) continue;
+      candidates.push({
+        value,
+        x: (left + width / 2) / crop.canvas.width,
+        y: (top + height / 2) / crop.canvas.height,
+        confidence,
+      });
+    }
+    return assignOcrNumbersToCardCells(candidates, positions);
+  };
+
   const regions = kind === "additional"
     ? [0.16, 0.46, 0.755].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.204)))
     : [0.262, 0.676].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.275)));
@@ -2959,16 +3042,25 @@ async function recognizeAnchoredSheetCards(
     const numericIds = [1, 3, 5, 9];
     let regionDefinition: SpecialCardDefinition | undefined;
     if (kind === "additional") {
-      const labelRect = {
-        ...rect,
-        y: rect.y - source.height * (index >= 4 ? 0.04 : 0.025),
-        height: source.height * 0.052,
-      };
-      const labelText = await readText(
-        labelRect,
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ0123456789",
+      const orderedName = additionalFormNameForRegion("", additionalFormOrder, index);
+      regionDefinition = specialCardDefinitions.find((candidate) =>
+        normalizeOcrLabel(candidate.layout.name) === normalizeOcrLabel(orderedName ?? ""),
       );
-      regionDefinition = expectedFormFromLabel(labelText, specialCardDefinitions);
+      if (!regionDefinition) {
+        const labelRect = {
+          ...rect,
+          y: rect.y - source.height * (index >= 4 ? 0.04 : 0.025),
+          height: source.height * 0.052,
+        };
+        const labelText = await readText(
+          labelRect,
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ0123456789",
+        );
+        const labelName = additionalFormNameForRegion(labelText, null, index);
+        regionDefinition = specialCardDefinitions.find((candidate) =>
+          normalizeOcrLabel(candidate.layout.name) === normalizeOcrLabel(labelName ?? ""),
+        );
+      }
     }
     const expectedName = kind === "additional"
       ? regionDefinition?.layout.name ?? additionalFormOrder?.[index]
@@ -3008,6 +3100,9 @@ async function recognizeAnchoredSheetCards(
       const centerIndex = layout.cells.findIndex((cell) => cell.row === 2 && cell.column === 2);
       if (centerIndex >= 0) free.add(centerIndex);
     }
+    const activeCells = layout.cells
+      .map((cell, cellIndex) => ({ ...cell, cellIndex }))
+      .filter(({ cellIndex }) => !free.has(cellIndex));
     const coordinates = kind === "additional" ? {
       "Sonrisa": [[.30,.30],[.70,.30],[.10,.70],[.90,.70],[.30,.89],[.50,.89],[.69,.89]],
       "Mini O": [[.29,.30],[.52,.30],[.72,.30],[.29,.51],[.72,.51],[.29,.70],[.52,.70],[.713,.70]],
@@ -3018,9 +3113,10 @@ async function recognizeAnchoredSheetCards(
     }[layout.name] ?? [] : layout.cells
       .filter((_, cellIndex) => !free.has(cellIndex))
       .map((cell) => specialCellRelativePosition(cell.row, cell.column, layout.rows, layout.columns));
-    const activeCells = layout.cells
-      .map((cell, cellIndex) => ({ ...cell, cellIndex }))
-      .filter(({ cellIndex }) => !free.has(cellIndex));
+    const cellPositions: Array<[number, number]> = activeCells.map((_, index) =>
+      (coordinates[index] as [number, number] | undefined) ?? [0, 0],
+    );
+    const batchedValues = await readTicketNumbers(rect, cellPositions);
     // Number sheets print very large digits inside a full 5×5 grid. A narrow
     // crop cuts off the round strokes on 5/6/8/9 (e.g. 50 -> 00, 69 -> 09),
     // especially after CamScanner compression. Include most of the cell while
@@ -3028,9 +3124,16 @@ async function recognizeAnchoredSheetCards(
     // upper bound so neighbouring cells cannot leak into the OCR crop.
     const size = Math.min(rect.width * (kind === "number" ? 0.18 : 0.16), rect.height * 0.23);
     for (let cellIndex = 0; cellIndex < activeCells.length; cellIndex += 1) {
-      const [x, y] = coordinates[cellIndex] ?? [];
+      const [x, y] = cellPositions[cellIndex] ?? [];
       if (x === undefined || y === undefined) continue;
       const cell = activeCells[cellIndex];
+      const batchedValue = batchedValues[cellIndex];
+      const minValue = cell.column * 15 + 1;
+      const maxValue = (cell.column + 1) * 15;
+      if (batchedValue > 0 && (kind !== "number" || (batchedValue >= minValue && batchedValue <= maxValue))) {
+        matrix[cell.row][cell.column] = batchedValue;
+        continue;
+      }
       const bingoColumnRanges: [number, number][] = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
       const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
         rect.y / source.height + y * rect.height / source.height, size, kind === "number"

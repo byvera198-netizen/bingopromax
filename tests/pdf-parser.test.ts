@@ -26,6 +26,8 @@ import {
   effectiveClassicGridCount,
   hasAdditionalGameMarker,
   additionalFormOrderForHeading,
+  additionalFormNameForRegion,
+  assignOcrNumbersToCardCells,
   specialCellRelativePosition,
   isExplicitSpecialSheetHeading,
   isNumberPatternSheetHeading,
@@ -199,6 +201,25 @@ test("distingue las dos listas de formas en hojas de juegos adicionales", () => 
     ["Sonrisa", "Mini O", "Perrito", "Cruz", "Más", "Martillo"],
   );
   assert.equal(additionalFormOrderForHeading("HOJA DE ADICIONAL"), null);
+});
+
+test("prioriza la lista explícita del encabezado sobre un rótulo OCR contradictorio", () => {
+  const supplierOrder = additionalFormOrderForHeading(
+    "HOJA DE ADICIONAL 1 AVION 1 FLECHA 1 ESPADA 1 PESA 1 ROMBO 1 BOMBA",
+  );
+  assert.deepEqual(supplierOrder, ["Avión", "Flecha", "Espada", "Pesa", "Rombo", "Bomba"]);
+  assert.equal(additionalFormNameForRegion("SONRISA", supplierOrder, 0), "Avión");
+  assert.equal(additionalFormNameForRegion("LLENA LA FLECHA", null, 1), "Flecha");
+});
+
+test("asigna números OCR por posición de celda e ignora texto de cabecera", () => {
+  const values = assignOcrNumbersToCardCells([
+    { value: 37, x: 0.50, y: 0.10, confidence: 91 },
+    { value: 5, x: 0.10, y: 0.30, confidence: 87 },
+    { value: 629, x: 0.50, y: 0.50, confidence: 94 },
+    { value: 55, x: 0.70, y: 0.30, confidence: 85 },
+  ], [[0.50, 0.10], [0.10, 0.30], [0.70, 0.30]]);
+  assert.deepEqual(values, [37, 5, 55]);
 });
 
 test("centra las formas adicionales de 3 filas como Pesa dentro de su región", () => {
