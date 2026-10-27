@@ -189,8 +189,8 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 :root[data-theme="light"] .number-board button:not(.called) { color: color-mix(in srgb, var(--lime), #111 24%); }
 .history-panel { min-height: 309px; }
 .draw-history { display: grid; grid-template-columns: repeat(6, 1fr); gap: 7px; padding: 17px 18px 11px; }
-.draw-history span { aspect-ratio: 1; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: 10px; }
-.draw-history span.latest { border-color: var(--lime); background: var(--lime); color: #12150b; font-weight: 750; }
+.draw-history span { aspect-ratio: 1; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-2); color: var(--text); font-family: var(--font-geist-mono); font-size: clamp(16px, 1.7vw, 22px); font-weight: 800; letter-spacing: -.08em; }
+.draw-history span.latest { border-color: var(--lime); background: var(--lime); color: var(--accent-ink); font-size: clamp(18px, 1.9vw, 24px); font-weight: 900; }
 .game-progress { padding: 6px 18px 16px; }
 .game-progress > span, .nearby-row > div > span, .ticket-progress > span { display: block; height: 4px; overflow: hidden; border-radius: 99px; background: var(--surface-3); }
 .game-progress i, .nearby-row i, .ticket-progress i { display: block; height: 100%; border-radius: inherit; background: var(--lime); }
