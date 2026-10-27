@@ -2979,7 +2979,12 @@ async function recognizeAnchoredSheetCards(
     const activeCells = layout.cells
       .map((cell, cellIndex) => ({ ...cell, cellIndex }))
       .filter(({ cellIndex }) => !free.has(cellIndex));
-    const size = Math.min(rect.width * (kind === "number" ? 0.14 : 0.16), rect.height * 0.23);
+    // Number sheets print very large digits inside a full 5×5 grid. A narrow
+    // crop cuts off the round strokes on 5/6/8/9 (e.g. 50 -> 00, 69 -> 09),
+    // especially after CamScanner compression. Include most of the cell while
+    // staying inside the row/column borders; readNumber applies a page-based
+    // upper bound so neighbouring cells cannot leak into the OCR crop.
+    const size = Math.min(rect.width * (kind === "number" ? 0.18 : 0.16), rect.height * 0.23);
     for (let cellIndex = 0; cellIndex < activeCells.length; cellIndex += 1) {
       const [x, y] = coordinates[cellIndex] ?? [];
       if (x === undefined || y === undefined) continue;
