@@ -103,6 +103,38 @@ function sortPatternsNaturally(patterns: BingoPattern[]) {
     || left.id.localeCompare(right.id, "es", { numeric: true, sensitivity: "base" }),
   );
 }
+
+function temporaryCardsStorageKey(email: string, gameId: string) {
+  return `bingopromax:temporary-cards:v1:${email.trim().toLowerCase()}:${gameId}`;
+}
+
+function readTemporaryCards(storageKey: string): BingoCard[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(storageKey) ?? "null");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((value): BingoCard[] => {
+      if (!value || typeof value !== "object") return [];
+      const card = value as Partial<BingoCard>;
+      if (
+        typeof card.id !== "string" || !card.id ||
+        typeof card.number !== "string" ||
+        !Array.isArray(card.grid) || card.grid.length < 5 ||
+        !card.grid.every((cell) => Number.isInteger(cell) && cell >= 0 && cell <= 90)
+      ) return [];
+      return [{
+        ...card,
+        serial: card.serial ?? "",
+        sourceFile: card.sourceFile ?? "Importación temporal",
+        sourcePage: card.sourcePage ?? 0,
+        status: card.status === "void" ? "void" : "active",
+        layout: cardLayoutFor(card as BingoCard),
+      } as BingoCard];
+    });
+  } catch {
+    return [];
+  }
+}
+
 const CARD_TYPE_OPTIONS: Array<{ value: CardType; label: string }> = [
   { value: "classic-5x5", label: "Tradicional 5×5" },
   { value: "linea-5", label: "Línea de 5 números" },
@@ -549,6 +581,8 @@ export default function GameConsole() {
   const proMaxFileInputRef = useRef<HTMLInputElement>(null);
   const temporaryCardsRef = useRef(new Map<string, BingoCard>());
   const temporaryGameIdRef = useRef<string | null>(null);
+  const temporaryOwnerEmailRef = useRef<string | null>(null);
+  const temporaryStorageKeyRef = useRef<string | null>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -574,13 +608,37 @@ export default function GameConsole() {
         return;
       }
       if (!response.ok) throw new Error(payload.error || "No se pudo abrir la partida.");
-      if (temporaryGameIdRef.current !== payload.game.id) {
+      const ownerEmail = (payload.access?.email ?? "").trim().toLowerCase();
+      const storageKey = temporaryCardsStorageKey(ownerEmail, payload.game.id);
+      const identityChanged =
+        temporaryGameIdRef.current !== payload.game.id ||
+        temporaryOwnerEmailRef.current !== ownerEmail;
+      if (identityChanged) {
+        if (
+          temporaryStorageKeyRef.current &&
+          temporaryOwnerEmailRef.current === ownerEmail &&
+          temporaryGameIdRef.current !== payload.game.id
+        ) {
+          localStorage.removeItem(temporaryStorageKeyRef.current);
+        }
         temporaryCardsRef.current.clear();
         temporaryGameIdRef.current = payload.game.id;
+        temporaryOwnerEmailRef.current = ownerEmail;
+        temporaryStorageKeyRef.current = storageKey;
+        if (payload.game.status !== "finished") {
+          for (const card of readTemporaryCards(storageKey)) temporaryCardsRef.current.set(card.id, card);
+        } else {
+          localStorage.removeItem(storageKey);
+        }
+      } else if (payload.game.status === "finished") {
+        temporaryCardsRef.current.clear();
+        localStorage.removeItem(storageKey);
       }
-      const temporaryCards = [...temporaryCardsRef.current.values()].filter(
-        (card) => !payload.cards.some((saved) => saved.id === card.id),
-      );
+      const temporaryCards = deduplicateBingoCards(
+        [...temporaryCardsRef.current.values()].filter((card) => !payload.cards.some((saved) => saved.id === card.id)),
+        payload.cards,
+      ).cards;
+      temporaryCardsRef.current = new Map(temporaryCards.map((card) => [card.id, card]));
       setState({ ...payload, cards: [...payload.cards, ...temporaryCards] });
       setAccess(payload.access);
       if (!silent) {
@@ -597,6 +655,29 @@ export default function GameConsole() {
       if (!silent) setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!state) return;
+    const storageKey = temporaryCardsStorageKey(state.access?.email ?? "", state.game.id);
+    const temporaryIds = new Set(temporaryCardsRef.current.keys());
+    const visibleTemporaryCards = state.cards.filter((card) => temporaryIds.has(card.id));
+    if (state.game.status === "finished") {
+      localStorage.removeItem(storageKey);
+      temporaryCardsRef.current.clear();
+      if (visibleTemporaryCards.length) {
+        setState((current) => current
+          ? { ...current, cards: current.cards.filter((card) => !temporaryIds.has(card.id)) }
+          : current);
+      }
+      return;
+    }
+    try {
+      if (visibleTemporaryCards.length) localStorage.setItem(storageKey, JSON.stringify(visibleTemporaryCards));
+      else localStorage.removeItem(storageKey);
+    } catch {
+      // Local cache is best-effort; the PDFs themselves are never stored.
+    }
+  }, [state]);
 
   const submitAuth = async () => {
     if (!authEmail.trim() && authMode !== "update") {
