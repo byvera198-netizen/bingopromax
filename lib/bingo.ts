@@ -557,7 +557,7 @@ const additionalGamePatterns: BingoPattern[] = ([
   name,
   description: `Todos los números impresos del juego ${name}.`,
   color: "#d7ff3f",
-  category: "Juegos adicionales",
+  category: id === "forma-mas" || id === "forma-igual" ? "Números" : "Juegos adicionales",
   difficulty: "Especial",
   cells,
   variants: [cells],
@@ -587,6 +587,7 @@ const letterGlyphs: Array<[string, readonly string[]]> = [
   ["E", ["#####", "#....", "####.", "#....", "#####"]],
   ["F", ["#####", "#....", "####.", "#....", "#...."]],
   ["G", [".####", "#....", "#.###", "#...#", ".###."]],
+  ["H", ["#...#", "#...#", "#####", "#...#", "#...#"]],
   ["I", ["#####", "..#..", "..#..", "..#..", "#####"]],
   ["J", ["..###", "...#.", "...#.", "#..#.", ".##.."]],
   ["K", ["#...#", "#..#.", "###..", "#..#.", "#...#"]],
@@ -598,9 +599,11 @@ const letterGlyphs: Array<[string, readonly string[]]> = [
   ["Q", [".###.", "#...#", "#...#", "#.###", ".####"]],
   ["R", ["####.", "#...#", "####.", "#..#.", "#...#"]],
   ["S", [".####", "#....", ".###.", "....#", "####."]],
+  ["T", ["#####", "..#..", "..#..", "..#..", "..#.."]],
   ["U", ["#...#", "#...#", "#...#", "#...#", ".###."]],
   ["V", ["#...#", "#...#", "#...#", ".#.#.", "..#.."]],
   ["W", ["#...#", "#...#", "#.#.#", "##.##", "#...#"]],
+  ["X", ["#...#", ".#.#.", "..#..", ".#.#.", "#...#"]],
   ["Y", ["#...#", ".#.#.", "..#..", "..#..", "..#.."]],
   ["Z", ["#####", "...#.", "..#..", ".#...", "#####"]],
 ];
@@ -646,7 +649,7 @@ const glyphPatterns: BingoPattern[] = [
   }),
 ];
 
-export const BUILTIN_PATTERNS: BingoPattern[] = [
+const candidateBuiltinPatterns: BingoPattern[] = [
   {
     id: "linea-horizontal",
     name: "Línea horizontal",
@@ -781,7 +784,7 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
   },
   {
     id: "blackout",
-    name: "Cartón completo",
+    name: "Cartón lleno",
     description: "Todos los números del cartón.",
     color: "#ff8f70",
     category: "Especial",
@@ -832,6 +835,22 @@ export const BUILTIN_PATTERNS: BingoPattern[] = [
     variants: [[0, 4, 5, 9, 10, 14, 15, 19, 20, 21, 22, 23, 24]],
   },
 ];
+
+// Keep only the catalog the owner selected: Cartón lleno, A–Z, 1–9 and
+// the exact additional-game forms provided in the reference sheets. The
+// historical generic line/diagonal/figure presets and "Forma adicional #n"
+// presets must not leak into the default catalog.
+export const BUILTIN_PATTERNS: BingoPattern[] = candidateBuiltinPatterns.filter((pattern) =>
+  pattern.id === "blackout" ||
+  (pattern.category === "Juegos adicionales" &&
+    pattern.id.startsWith("adicional-") &&
+    !["adicional-forma-3", "adicional-forma-4", "adicional-forma-5", "adicional-forma-7", "adicional-forma-9"].includes(pattern.id)) ||
+  ["adicional-forma-mas", "adicional-forma-igual"].includes(pattern.id) ||
+  (pattern.category === "Letras" && pattern.description.startsWith("Figura con forma de la letra ")) ||
+  (pattern.category === "Números" && /^numero-[1-9]$/.test(pattern.id)),
+);
+
+export const DEFAULT_PATTERN = BUILTIN_PATTERNS.find((pattern) => pattern.id === "blackout")!;
 
 export const COMPACT_CARD_PATTERN: BingoPattern = {
   id: "sabrosito-completo",
@@ -933,7 +952,7 @@ export function getActivePattern(game: Game, customPatterns: BingoPattern[]) {
     (pattern) => pattern.id === game.activePatternId,
   );
   if (found) return found;
-  const cells = game.activePatternCells.length ? game.activePatternCells : rows[2];
+  const cells = game.activePatternCells.length ? game.activePatternCells : DEFAULT_PATTERN.cells;
   return {
     id: game.activePatternId,
     name: game.activePatternName,

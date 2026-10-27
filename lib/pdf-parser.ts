@@ -1257,11 +1257,7 @@ const specialCardDefinitions: SpecialCardDefinition[] = [
   ...BUILTIN_PATTERNS
     .filter((pattern) =>
       pattern.category === "Números" ||
-      [
-        "adicional-forma-mas", "adicional-forma-igual",
-        "forma-adicional-1", "forma-adicional-3",
-        "forma-adicional-5", "forma-adicional-9",
-      ].includes(pattern.id),
+      ["adicional-forma-mas", "adicional-forma-igual"].includes(pattern.id),
     )
     .map((pattern) => {
       const rowLengths = Array.from({ length: 5 }, (_, row) =>

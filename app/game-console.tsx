@@ -49,6 +49,7 @@ import type { Session, User } from "@supabase/supabase-js";
 import {
   BUILTIN_PATTERNS,
   COMPACT_CARD_PATTERN,
+  DEFAULT_PATTERN,
   additionalPatternForCard,
   cardContentSignature,
   deduplicateBingoCards,
@@ -97,6 +98,12 @@ const ADMIN_EMAIL = "byvera198@gmail.com";
 const ADMIN_EMAILS = ["byvera198@gmail.com", "bveraalvear@gmail.com"];
 const ADMIN_WHATSAPP = "593985280991";
 const PROMAX_IMPORT_CHUNK_SIZE = 500;
+const RETIRED_BUILTIN_PATTERN_IDS = new Set([
+  "linea-horizontal", "linea-vertical", "diagonal-principal", "diagonal-secundaria",
+  "dos-diagonales", "cuatro-esquinas", "marco", "diamante", "cruz", "piramide",
+  "forma-adicional-1", "forma-adicional-3", "forma-adicional-5", "forma-adicional-9",
+  "adicional-forma-3", "adicional-forma-4", "adicional-forma-5", "adicional-forma-7", "adicional-forma-9",
+]);
 
 function sortPatternsNaturally(patterns: BingoPattern[]) {
   return [...patterns].sort((left, right) =>
@@ -176,7 +183,10 @@ function cardFilterFor(card: BingoCard): Exclude<CardFilter, "all"> {
   // Use the canonical layout name as the classification source and keep the
   // numbered glyphs out of the generic additional-games filter.
   const layoutName = String(layout.name ?? "").trim().toLocaleLowerCase("es");
-  if (/^n[uú]mero\s+[1-9]\b/.test(layoutName) || /^forma\s+adicional\s*#?\s*(?:[134579]|[+=])\b/.test(layoutName)) {
+  if (
+    /^n[uú]mero\s+[1-9]\b/.test(layoutName) ||
+    (card.grid.length !== 5 && /^forma\s+(?:(?:adicional\s*#?\s*)?[1359]|[+=])(?:\b|$)/.test(layoutName))
+  ) {
     return "numeros";
   }
   return "adicionales";
@@ -212,7 +222,7 @@ function deviceId() {
 
 function createDemoState(): AppState {
   const now = new Date().toISOString();
-  const pattern = BUILTIN_PATTERNS[0];
+  const pattern = DEFAULT_PATTERN;
   return {
     game: { id: "demo", name: "Partida demo", date: now.slice(0, 10), prize: "Demostración", status: "ready", notes: "", activePatternId: pattern.id, activePatternName: pattern.name, activePatternCells: pattern.cells, autoPause: true, startedAt: null, createdAt: now, updatedAt: now },
     cards: [], draws: [], winners: [], customPatterns: [], disabledPatternIds: [], deletedPatternIds: [], files: [],
@@ -389,7 +399,7 @@ function nearestPatternForCard(
     progressOptions.sort(
       (a, b) => b.progress.progress - a.progress.progress,
     )[0] ?? {
-      pattern: applicablePatterns[0] ?? BUILTIN_PATTERNS[0],
+      pattern: applicablePatterns[0] ?? DEFAULT_PATTERN,
       progress: { completed: 0, total: 0, progress: 0 },
     }
   );
@@ -878,12 +888,20 @@ export default function GameConsole() {
   const game = state?.game;
   const called = useMemo(() => new Set(state?.draws.map((draw) => draw.number) ?? []), [state?.draws]);
   const availablePatterns = useMemo(
-    () => sortPatternsNaturally([
-      ...BUILTIN_PATTERNS,
-      ...(state?.customPatterns ?? []),
-      COMPACT_CARD_PATTERN,
-    ].filter((pattern) => !(state?.deletedPatternIds ?? []).includes(pattern.id))),
-    [state?.cards, state?.customPatterns, state?.deletedPatternIds],
+    () => {
+      const unique = new Map<string, BingoPattern>();
+      for (const pattern of [...BUILTIN_PATTERNS, ...(state?.customPatterns ?? []), COMPACT_CARD_PATTERN]) {
+        if (
+          RETIRED_BUILTIN_PATTERN_IDS.has(pattern.id) ||
+          pattern.name.startsWith("Forma adicional #") ||
+          (state?.deletedPatternIds ?? []).includes(pattern.id) ||
+          unique.has(pattern.id)
+        ) continue;
+        unique.set(pattern.id, pattern);
+      }
+      return sortPatternsNaturally([...unique.values()]);
+    },
+    [state?.customPatterns, state?.deletedPatternIds],
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
     const category = pattern.category.toLocaleLowerCase("es");

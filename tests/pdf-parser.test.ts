@@ -367,10 +367,14 @@ test("un cartón ganador permanece elegible para un patrón distinto", () => {
     sourcePage: 0,
     status: "active",
   };
-  const horizontal = BUILTIN_PATTERNS.find((pattern) => pattern.id === "linea-horizontal");
-  const vertical = BUILTIN_PATTERNS.find((pattern) => pattern.id === "linea-vertical");
-  assert.ok(horizontal);
-  assert.ok(vertical);
+  const horizontal = {
+    id: "test-linea-horizontal", name: "Línea de prueba", description: "", color: "#fff",
+    category: "Prueba", difficulty: "Fácil", cells: [0, 1, 2, 3, 4], variants: [[0, 1, 2, 3, 4]],
+  };
+  const vertical = {
+    id: "test-linea-vertical", name: "Columna de prueba", description: "", color: "#fff",
+    category: "Prueba", difficulty: "Fácil", cells: [0, 5, 10, 15, 20], variants: [[0, 5, 10, 15, 20]],
+  };
 
   const called = new Set([1, 16, 31, 46, 61]);
   assert.equal(isWinningCard(card, called, horizontal), true);
@@ -391,14 +395,14 @@ test("todos los patrones se evalúan simultáneamente sin repetir victorias", ()
     sourcePage: 0,
     status: "active",
   };
-  const horizontal = BUILTIN_PATTERNS.find(
-    (pattern) => pattern.id === "linea-horizontal",
-  );
-  const vertical = BUILTIN_PATTERNS.find(
-    (pattern) => pattern.id === "linea-vertical",
-  );
-  assert.ok(horizontal);
-  assert.ok(vertical);
+  const horizontal = {
+    id: "test-linea-horizontal", name: "Línea de prueba", description: "", color: "#fff",
+    category: "Prueba", difficulty: "Fácil", cells: [0, 1, 2, 3, 4], variants: [[0, 1, 2, 3, 4]],
+  };
+  const vertical = {
+    id: "test-linea-vertical", name: "Columna de prueba", description: "", color: "#fff",
+    category: "Prueba", difficulty: "Fácil", cells: [0, 5, 10, 15, 20], variants: [[0, 5, 10, 15, 20]],
+  };
 
   const called = new Set([1, 16, 31, 46, 61, 2, 3, 4, 5]);
   const firstPass = winningPatternsForCard(
@@ -410,20 +414,20 @@ test("todos los patrones se evalúan simultáneamente sin repetir victorias", ()
     card,
     called,
     [horizontal, vertical],
-    new Set(["linea-horizontal"]),
+    new Set(["test-linea-horizontal"]),
   );
 
   assert.deepEqual(
     firstPass.map((pattern) => pattern.id),
-    ["linea-horizontal", "linea-vertical"],
+    ["test-linea-horizontal", "test-linea-vertical"],
   );
   assert.deepEqual(
     secondPass.map((pattern) => pattern.id),
-    ["linea-vertical"],
+    ["test-linea-vertical"],
   );
 });
 
-test("incluye las formas adicionales numeradas de la hoja de números", () => {
+test("incluye las formas adicionales de las hojas de referencia", () => {
   const additional = BUILTIN_PATTERNS.filter(
     (pattern) => pattern.category === "Juegos adicionales",
   );
@@ -444,25 +448,12 @@ test("incluye las formas adicionales numeradas de la hoja de números", () => {
       "adicional-mas",
       "adicional-martillo",
       "adicional-forma-1",
-      "adicional-forma-3",
-      "adicional-forma-4",
-      "adicional-forma-5",
-      "adicional-forma-7",
-      "adicional-forma-9",
-      "adicional-forma-mas",
-      "adicional-forma-igual",
     ],
   );
   additional.forEach((pattern) => {
     assert.equal(pattern.cells.length, pattern.variants[0].length);
     assert.ok(pattern.cells.every((cell) => cell >= 0 && cell < 25));
   });
-  const numericForms = BUILTIN_PATTERNS.filter((pattern) => pattern.category === "Números");
-  assert.deepEqual(
-    numericForms.filter((pattern) => pattern.id.startsWith("forma-adicional-")).map((pattern) => pattern.id),
-    ["forma-adicional-1", "forma-adicional-3", "forma-adicional-5", "forma-adicional-9"],
-    "las formas numéricas #1, #3, #5 y #9 pertenecen al filtro Números, no a Adicionales",
-  );
 });
 
 test("incluye el catálogo de letras y números sin patrones repetidos", () => {
@@ -571,7 +562,26 @@ test("un cartón 5×5 admite letras/números seleccionados y excluye juegos adic
   assert.equal(ids.has("adicional-avion"), false);
   assert.equal(ids.has("letra-a"), true);
   assert.equal(ids.has("numero-1"), true);
-  assert.equal(ids.has("linea-horizontal"), true);
+  assert.equal(ids.has("blackout"), true);
+});
+
+test("el catálogo oficial solo contiene las formas de las imágenes de referencia", () => {
+  const ids = new Set(BUILTIN_PATTERNS.map((pattern) => pattern.id));
+  for (const id of [
+    "linea-horizontal", "linea-vertical", "diagonal-principal", "diagonal-secundaria",
+    "dos-diagonales", "cuatro-esquinas", "marco", "diamante", "cruz", "piramide",
+    "forma-adicional-1", "forma-adicional-3", "forma-adicional-5", "forma-adicional-9",
+  ]) assert.equal(ids.has(id), false, `${id} no forma parte del catálogo predeterminado`);
+  assert.deepEqual(
+    BUILTIN_PATTERNS.filter((pattern) => pattern.category === "Letras").map((pattern) => pattern.name).sort(),
+    Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ", (letter) => `Letra ${letter}`).sort(),
+  );
+  assert.deepEqual(
+    BUILTIN_PATTERNS.filter((pattern) => pattern.category === "Números").map((pattern) => pattern.name).sort(),
+    [...Array.from({ length: 9 }, (_, index) => `Número ${index + 1}`), "Forma +", "Forma ="].sort(),
+  );
+  assert.equal(BUILTIN_PATTERNS.some((pattern) => pattern.name.startsWith("Forma adicional #")), false);
+  assert.equal(BUILTIN_PATTERNS.find((pattern) => pattern.id === "blackout")?.name, "Cartón lleno");
 });
 
 test("un juego adicional solo se valida en la forma de hoja que le corresponde", () => {

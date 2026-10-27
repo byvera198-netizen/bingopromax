@@ -103,8 +103,8 @@ const schemaStatements = [
     prize TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'ready',
     notes TEXT NOT NULL DEFAULT '',
-    active_pattern_id TEXT NOT NULL DEFAULT 'linea-horizontal',
-    active_pattern_name TEXT NOT NULL DEFAULT 'Línea horizontal',
+    active_pattern_id TEXT NOT NULL DEFAULT 'blackout',
+    active_pattern_name TEXT NOT NULL DEFAULT 'Cartón lleno',
     active_pattern_cells TEXT NOT NULL DEFAULT '[]',
     auto_pause INTEGER NOT NULL DEFAULT 1,
     started_at TEXT,
@@ -275,9 +275,9 @@ async function getOrCreateGame(db: D1, ownerEmail: string) {
         `INSERT INTO games (
           id, owner_email, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
           active_pattern_cells, auto_pause, started_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, '', 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, '', 'ready', '', 'blackout', 'Cartón lleno', ?, 1, NULL, ?, ?)`,
       )
-      .bind(id, ownerEmail, "Noche de Bingo", date, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
+      .bind(id, ownerEmail, "Noche de Bingo", date, JSON.stringify(Array.from({ length: 25 }, (_, index) => index)), createdAt, createdAt)
       .run();
     game = await db.prepare("SELECT * FROM games WHERE id = ?").bind(id).first<Record<string, unknown>>();
   }
@@ -1292,9 +1292,9 @@ export async function POST(request: Request) {
           `INSERT INTO games (
             id, owner_email, name, date, prize, status, notes, active_pattern_id, active_pattern_name,
             active_pattern_cells, auto_pause, started_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, 'ready', '', 'linea-horizontal', 'Línea horizontal', ?, 1, NULL, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, 'ready', '', 'blackout', 'Cartón lleno', ?, 1, NULL, ?, ?)`,
         )
-        .bind(id, actor, name, date, prize, JSON.stringify([10, 11, 12, 13, 14]), createdAt, createdAt)
+        .bind(id, actor, name, date, prize, JSON.stringify(Array.from({ length: 25 }, (_, index) => index)), createdAt, createdAt)
         .run();
       const defaultRows = savedPatternDefaults.results ?? [];
       const copyStatements = defaultRows.flatMap((row) => {
