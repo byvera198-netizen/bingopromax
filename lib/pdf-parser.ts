@@ -2826,7 +2826,10 @@ async function recognizeSpecialCardsByCell(
   return cardsFromDetectedGrids(detected, fileName, pageNumber);
 }
 
-const additionalSheetForms = [
+const supplierAdditionalSheetForms = [
+  "Avión", "Flecha", "Espada", "Pesa", "Rombo", "Bomba",
+] as const;
+const geometricAdditionalSheetForms = [
   "Sonrisa", "Mini O", "Perrito", "Cruz", "Más", "Martillo",
 ] as const;
 
@@ -2835,9 +2838,34 @@ function normalizeOcrLabel(text: string) {
     .toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+/** Distinguishes the two six-card additional-sheet families from their masthead list. */
+export function additionalFormOrderForHeading(text: string): readonly string[] | null {
+  const label = normalizeOcrLabel(text);
+  const countMatches = (forms: readonly string[]) => forms.filter((form) =>
+    label.includes(normalizeOcrLabel(form)),
+  ).length;
+  const supplierMatches = countMatches(supplierAdditionalSheetForms);
+  const geometricMatches = countMatches(geometricAdditionalSheetForms);
+  if (supplierMatches >= 2 && supplierMatches > geometricMatches) return supplierAdditionalSheetForms;
+  if (geometricMatches >= 2 && geometricMatches > supplierMatches) return geometricAdditionalSheetForms;
+  return null;
+}
+
+export function specialCellRelativePosition(
+  row: number,
+  column: number,
+  rows: number,
+  columns: number,
+): [number, number] {
+  return [
+    Number((0.1 + (column + (5 - columns) / 2) * 0.2).toFixed(4)),
+    Number((0.1 + (row + (5 - rows) / 2) * 0.2).toFixed(4)),
+  ];
+}
+
 function expectedFormFromLabel(text: string, definitions: SpecialCardDefinition[]) {
   const label = normalizeOcrLabel(text);
-  const known = additionalSheetForms.find((name) =>
+  const known = [...supplierAdditionalSheetForms, ...geometricAdditionalSheetForms].find((name) =>
     label.includes(normalizeOcrLabel(name)),
   );
   if (known) return definitions.find((definition) => definition.layout.name === known);
@@ -2855,6 +2883,7 @@ async function recognizeAnchoredSheetCards(
   fileName: string,
   pageNumber: number,
   kind: "additional" | "number",
+  additionalFormOrder: readonly string[] | null = null,
 ) {
   const cards: BingoCard[] = [];
   const normalizeRect = (x: number, y: number, width: number, height: number) => ({
@@ -2923,13 +2952,26 @@ async function recognizeAnchoredSheetCards(
     ? [0.16, 0.46, 0.755].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.204)))
     : [0.262, 0.676].flatMap((y) => [0.045, 0.535].map((x) => normalizeRect(x, y, 0.42, 0.275)));
   for (const [index, rect] of regions.entries()) {
-    // These supplied sheets declare their games in a fixed order and position
-    // (six additional forms row-wise; numeric IDs 1,3,5,9 in reading order).
-    // Bind each region to that explicit catalog entry first; OCR of the tiny
-    // repeated title/ID near watermarks was the source of dropped/misnamed cards.
+    // Numeric cards use a fixed order. Additional forms can come from two
+    // different six-game sheets, so read each card's caption before falling
+    // back to the game list in the masthead. Never assume every sheet starts
+    // with Sonrisa: that mislabeled Avión as Sonrisa in supplier sheets.
     const numericIds = [1, 3, 5, 9];
+    let regionDefinition: SpecialCardDefinition | undefined;
+    if (kind === "additional") {
+      const labelRect = {
+        ...rect,
+        y: rect.y - source.height * (index >= 4 ? 0.04 : 0.025),
+        height: source.height * 0.052,
+      };
+      const labelText = await readText(
+        labelRect,
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ0123456789",
+      );
+      regionDefinition = expectedFormFromLabel(labelText, specialCardDefinitions);
+    }
     const expectedName = kind === "additional"
-      ? additionalSheetForms[index]
+      ? regionDefinition?.layout.name ?? additionalFormOrder?.[index]
       : `Forma adicional #${numericIds[index]}`;
     const catalogDefinition = specialCardDefinitions.find((candidate) =>
       normalizeOcrLabel(candidate.layout.name) === normalizeOcrLabel(expectedName ?? ""),
@@ -2942,7 +2984,7 @@ async function recognizeAnchoredSheetCards(
           const rowLengths = Array.from({ length: 5 }, (_, row) => cells.filter((cell) => cell.row === row).length);
           return { layout: additionalLayout(`Forma ${numericIds[index]}`, cells), rowLengths };
         })()
-      : catalogDefinition ?? await (async () => {
+      : regionDefinition ?? catalogDefinition ?? await (async () => {
       const labelRect = kind === "additional"
         ? { ...rect, y: rect.y - source.height * (index >= 4 ? 0.04 : 0.025), height: source.height * 0.052 }
         : normalizeRect(
@@ -2975,7 +3017,7 @@ async function recognizeAnchoredSheetCards(
       "Martillo": [[.72,.10],[.52,.30],[.10,.5],[.30,.5],[.71,.5],[.10,.70],[.30,.70],[.90,.70]],
     }[layout.name] ?? [] : layout.cells
       .filter((_, cellIndex) => !free.has(cellIndex))
-      .map((cell) => [0.1 + cell.column * 0.2, 0.1 + cell.row * 0.2]);
+      .map((cell) => specialCellRelativePosition(cell.row, cell.column, layout.rows, layout.columns));
     const activeCells = layout.cells
       .map((cell, cellIndex) => ({ ...cell, cellIndex }))
       .filter(({ cellIndex }) => !free.has(cellIndex));
@@ -3158,7 +3200,14 @@ async function runOcrCanvas(
         return recognizeAnchoredSheetCards(canvas, worker, fileName, pageNumber, "number");
       }
       if (specialSheet && !sabrositoSheet) {
-        return recognizeAnchoredSheetCards(canvas, worker, fileName, pageNumber, "additional");
+        return recognizeAnchoredSheetCards(
+          canvas,
+          worker,
+          fileName,
+          pageNumber,
+          "additional",
+          additionalFormOrderForHeading(ocrHeading),
+        );
       }
       if (sabrositoSheet) {
         const cards = await recognizeSabrositoCards(

@@ -24,6 +24,8 @@ import {
   extractCardsFromTextItems,
   effectiveClassicGridCount,
   hasAdditionalGameMarker,
+  additionalFormOrderForHeading,
+  specialCellRelativePosition,
   isExplicitSpecialSheetHeading,
   isNumberPatternSheetHeading,
   isSabrositoSheetHeading,
@@ -161,6 +163,24 @@ test("detecta encabezados OCR de juegos adicionales sin leer promociones comunes
   assert.equal(isExplicitSpecialSheetHeading("HOJADEADICIONA"), true);
   assert.equal(isExplicitSpecialSheetHeading("ADL1 #015263"), true);
   assert.equal(isExplicitSpecialSheetHeading("2 H. SABROSITO"), false);
+});
+
+test("distingue las dos listas de formas en hojas de juegos adicionales", () => {
+  assert.deepEqual(
+    additionalFormOrderForHeading("HOJA DE ADICIONAL 1 AVION 1 FLECHA 1 ESPADA 1 PESA 1 ROMBO 1 BOMBA"),
+    ["Avión", "Flecha", "Espada", "Pesa", "Rombo", "Bomba"],
+  );
+  assert.deepEqual(
+    additionalFormOrderForHeading("HOJA DE ADICIONAL 1 SONRISA 1 MINI O 1 PERRITO 1 CRUZ 1 MAS 1 MARTILLO"),
+    ["Sonrisa", "Mini O", "Perrito", "Cruz", "Más", "Martillo"],
+  );
+  assert.equal(additionalFormOrderForHeading("HOJA DE ADICIONAL"), null);
+});
+
+test("centra las formas adicionales de 3 filas como Pesa dentro de su región", () => {
+  assert.deepEqual(specialCellRelativePosition(0, 1, 3, 5), [0.3, 0.3]);
+  assert.deepEqual(specialCellRelativePosition(1, 2, 3, 5), [0.5, 0.5]);
+  assert.deepEqual(specialCellRelativePosition(2, 3, 3, 5), [0.7, 0.7]);
 });
 
 test("reconoce el encabezado de páginas escaneadas con formas numéricas", () => {
