@@ -90,6 +90,7 @@ type OcrWorker = {
       text: string;
       tsv: string | null;
       blocks: OcrBlock[] | null;
+      confidence?: number;
     };
   }>;
   terminate: () => Promise<unknown>;
@@ -2897,8 +2898,33 @@ export interface PositionedOcrNumber {
   confidence: number;
 }
 
+export interface AssignedOcrCell {
+  value: number;
+  confidence: number;
+  uncertain?: boolean;
+}
+
+export function reconcileOcrReadings(readings: AssignedOcrCell[]) {
+  const valid = readings.filter(({ value }) => value > 0);
+  if (!valid.length) return { value: 0, confidence: 0, uncertain: false };
+  const votes = new Map<number, AssignedOcrCell[]>();
+  valid.forEach((reading) => votes.set(reading.value, [...(votes.get(reading.value) ?? []), reading]));
+  const ranked = [...votes.entries()].sort((left, right) =>
+    right[1].length - left[1].length ||
+    Math.max(...right[1].map(({ confidence }) => confidence)) - Math.max(...left[1].map(({ confidence }) => confidence)),
+  );
+  const [value, agreeing] = ranked[0];
+  const strongestConflict = ranked.slice(1).flatMap(([, group]) => group)
+    .some(({ confidence }) => confidence >= 45);
+  return {
+    value,
+    confidence: Math.max(...agreeing.map(({ confidence }) => confidence)),
+    uncertain: agreeing.length < 2 || strongestConflict,
+  };
+}
+
 /** Assigns cropped-page OCR words to known sparse-form cells, one-to-one. */
-export function assignOcrNumbersToCardCells(
+export function assignOcrNumbersToCardCellsWithConfidence(
   candidates: PositionedOcrNumber[],
   positions: Array<[number, number]>,
 ) {
@@ -2917,16 +2943,26 @@ export function assignOcrNumbersToCardCells(
       confidence: candidate.confidence,
     })).filter((match) => match.distance <= 0.58);
   }).sort((left, right) => left.distance - right.distance || right.confidence - left.confidence);
-  const values = Array<number>(positions.length).fill(0);
+  const values: AssignedOcrCell[] = Array.from({ length: positions.length }, () => ({ value: 0, confidence: 0 }));
   const usedTokens = new Set<number>();
   const usedCells = new Set<number>();
   for (const match of matches) {
     if (usedTokens.has(match.tokenIndex) || usedCells.has(match.cellIndex)) continue;
-    values[match.cellIndex] = candidates[match.tokenIndex].value;
+    values[match.cellIndex] = {
+      value: candidates[match.tokenIndex].value,
+      confidence: match.confidence,
+    };
     usedTokens.add(match.tokenIndex);
     usedCells.add(match.cellIndex);
   }
   return values;
+}
+
+export function assignOcrNumbersToCardCells(
+  candidates: PositionedOcrNumber[],
+  positions: Array<[number, number]>,
+) {
+  return assignOcrNumbersToCardCellsWithConfidence(candidates, positions).map(({ value }) => value);
 }
 
 async function recognizeAnchoredSheetCards(
@@ -2962,14 +2998,15 @@ async function recognizeAnchoredSheetCards(
     options: { allowedRange?: [number, number]; preferGrayscale?: boolean } = {},
   ) => {
     const side = Math.min(size, source.width * 0.095, source.height * 0.055);
+    const [minimum, maximum] = options.allowedRange ?? [1, 75];
     const recognize = async (
       cropSide: number,
       threshold: boolean,
       psm: "8" | "10" | "13",
       verticalOffset = 0,
-    ) => {
+    ): Promise<AssignedOcrCell> => {
       const crop = makeCanvas(cropSide * 2, cropSide * 2);
-      if (!crop) return 0;
+      if (!crop) return { value: 0, confidence: 0 };
       crop.context.drawImage(source,
         Math.max(0, source.width * x - cropSide / 2),
         Math.max(0, source.height * (y + verticalOffset) - cropSide / 2),
@@ -2983,21 +3020,31 @@ async function recognizeAnchoredSheetCards(
       const result = await worker.recognize(crop.canvas, {}, { blocks: false, tsv: false, text: true });
       const digits = (result.data.text.match(/\d+/g) ?? []).join("");
       const value = Number(digits.length > 2 ? digits.slice(0, 2) : digits);
-      const [minimum, maximum] = options.allowedRange ?? [1, 75];
-      return value >= minimum && value <= maximum ? value : 0;
+      return value >= minimum && value <= maximum
+        ? { value, confidence: result.data.confidence ?? 0 }
+        : { value: 0, confidence: result.data.confidence ?? 0 };
     };
     // Keep the original scan texture for digit reading: binarization can turn
     // a 6 into a 5 on watermarked sheets. Number-form cards also have strict
     // B-I-N-G-O column ranges, which let us retry only genuinely suspicious
     // readings instead of adding another OCR pass to every cell.
     const first = await recognize(side, Boolean(!options.preferGrayscale), "10");
-    if (first) return first;
-    // Keep a single fallback for watermarks and interrupted strokes. PSM 13
-    // handles isolated digits while avoiding the extra serial OCR pass that
-    // made low-confidence number sheets exceed the import time budget.
+    if (first.value && first.confidence >= 85) return first;
+    // Retry only weak or unreadable cells. Readings that agree across render
+    // modes can be accepted; conflicting plausible digits remain reviewable.
     const retrySide = Math.min(side * 1.16, source.width * 0.095, source.height * 0.055);
     const grayscaleRetry = await recognize(retrySide, false, "10", 0.003);
-    return grayscaleRetry || recognize(retrySide, true, "13", 0.003);
+    if (first.value && first.value === grayscaleRetry.value) {
+      return { value: first.value, confidence: Math.max(first.confidence, grayscaleRetry.confidence) };
+    }
+    if (grayscaleRetry.value && grayscaleRetry.confidence >= 75) {
+      return {
+        ...grayscaleRetry,
+        uncertain: Boolean(first.value && first.confidence >= 45 && first.value !== grayscaleRetry.value),
+      };
+    }
+    const thresholdRetry = await recognize(retrySide, true, "13", 0.003);
+    return reconcileOcrReadings([first, grayscaleRetry, thresholdRetry]);
   };
 
   const readTicketNumbers = async (
@@ -3006,7 +3053,7 @@ async function recognizeAnchoredSheetCards(
   ) => {
     const scale = 2;
     const crop = makeCanvas(rect.width * scale, rect.height * scale);
-    if (!crop) return Array<number>(positions.length).fill(0);
+    if (!crop) return Array.from({ length: positions.length }, () => ({ value: 0, confidence: 0 }));
     crop.context.drawImage(source, rect.x, rect.y, rect.width, rect.height,
       0, 0, crop.canvas.width, crop.canvas.height);
     await worker.setParameters({
@@ -3034,7 +3081,7 @@ async function recognizeAnchoredSheetCards(
         confidence,
       });
     }
-    return assignOcrNumbersToCardCells(candidates, positions);
+    return assignOcrNumbersToCardCellsWithConfidence(candidates, positions);
   };
 
   const regions = kind === "additional"
@@ -3123,6 +3170,7 @@ async function recognizeAnchoredSheetCards(
       (coordinates[index] as [number, number] | undefined) ?? [-1, -1],
     );
     const batchedValues = await readTicketNumbers(rect, cellPositions);
+    const uncertainCells = new Set<number>();
     // Number sheets print very large digits inside a full 5×5 grid. A narrow
     // crop cuts off the round strokes on 5/6/8/9 (e.g. 50 -> 00, 69 -> 09),
     // especially after CamScanner compression. Include most of the cell while
@@ -3136,16 +3184,50 @@ async function recognizeAnchoredSheetCards(
       const batchedValue = batchedValues[cellIndex];
       const minValue = cell.column * 15 + 1;
       const maxValue = (cell.column + 1) * 15;
-      if (batchedValue > 0 && (kind !== "number" || (batchedValue >= minValue && batchedValue <= maxValue))) {
-        matrix[cell.row][cell.column] = batchedValue;
+      if (batchedValue.value > 0 && batchedValue.confidence >= 50 && (kind !== "number" || (batchedValue.value >= minValue && batchedValue.value <= maxValue))) {
+        matrix[cell.row][cell.column] = batchedValue.value;
         continue;
       }
       const bingoColumnRanges: [number, number][] = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
-      const value = await readNumber(rect.x / source.width + x * rect.width / source.width,
+      const reading = await readNumber(rect.x / source.width + x * rect.width / source.width,
         rect.y / source.height + y * rect.height / source.height, size, kind === "number"
           ? { allowedRange: bingoColumnRanges[cell.column] }
           : {});
-      matrix[cell.row][cell.column] = value;
+      matrix[cell.row][cell.column] = reading.value;
+      if (reading.value && (reading.confidence < 50 || reading.uncertain)) uncertainCells.add(cellIndex);
+    }
+    const initiallyRepeated = new Map<number, number[]>();
+    activeCells.forEach((cell, cellIndex) => {
+      const value = matrix[cell.row][cell.column];
+      if (value > 0) initiallyRepeated.set(value, [...(initiallyRepeated.get(value) ?? []), cellIndex]);
+    });
+    for (const indexes of initiallyRepeated.values()) {
+      if (indexes.length < 2) continue;
+      for (const cellIndex of indexes.slice(1)) {
+        const cell = activeCells[cellIndex];
+        const [x, y] = cellPositions[cellIndex];
+        const bingoColumnRanges: [number, number][] = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
+        const retry = await readNumber(
+          rect.x / source.width + x * rect.width / source.width,
+          rect.y / source.height + y * rect.height / source.height,
+          size,
+          kind === "number"
+            ? { allowedRange: bingoColumnRanges[cell.column], preferGrayscale: true }
+            : { preferGrayscale: true },
+        );
+        const usedElsewhere = activeCells.some((other, otherIndex) =>
+          otherIndex !== cellIndex && matrix[other.row][other.column] === retry.value,
+        );
+        const minValue = cell.column * 15 + 1;
+        const maxValue = (cell.column + 1) * 15;
+        const inColumnRange = kind !== "number" || (retry.value >= minValue && retry.value <= maxValue);
+        if (retry.value && retry.value !== matrix[cell.row][cell.column] && !usedElsewhere && inColumnRange && retry.confidence >= 65 && !retry.uncertain) {
+          matrix[cell.row][cell.column] = retry.value;
+          uncertainCells.delete(cellIndex);
+        } else if (retry.uncertain || (retry.value && retry.confidence < 50)) {
+          uncertainCells.add(cellIndex);
+        }
+      }
     }
     const grid = layout.cells.map((cell, cellIndex) =>
       free.has(cellIndex) ? 0 : matrix[cell.row][cell.column] || -1,
@@ -3155,14 +3237,16 @@ async function recognizeAnchoredSheetCards(
     const playableValues = grid.filter((value) => value > 0);
     const duplicateValues = new Set(playableValues).size !== playableValues.length;
     const incomplete = validCount < activeCells.length;
+    const uncertain = uncertainCells.size > 0;
     const detected: DetectedGrid = {
       grid, x: rect.x + rect.width / 2, y: source.height - rect.y,
       score: 80 + validCount, rowIds: [`anchored:${kind}:${index}`],
       layout,
-      reviewNotes: incomplete || duplicateValues ? [
+      reviewNotes: incomplete || duplicateValues || uncertain ? [
         "Verifica los números de esta forma antes de confirmar la importación.",
         ...(incomplete ? ["Faltan números que no se pudieron leer automáticamente."] : []),
         ...(duplicateValues ? ["Se detectaron números repetidos; corrige las casillas antes de jugar."] : []),
+        ...(uncertain ? ["Hay números con baja confianza; confirma esas casillas antes de jugar."] : []),
       ] : [],
     };
     cards.push(...cardsFromDetectedGrids([detected], fileName, pageNumber));

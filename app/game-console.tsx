@@ -76,7 +76,7 @@ import {
   type Membership,
   type Winner,
 } from "@/lib/bingo";
-import { getBingoSourcePageCount, identifyBingoSource, parseBingoFile, parseBingoPdf, type BingoSourceKind, type PdfParseProgress } from "@/lib/pdf-parser";
+import type { BingoSourceKind, PdfParseProgress } from "@/lib/pdf-parser";
 import { parseProMaxPackage, type ProMaxImportResult } from "@/lib/promax-package";
 import { authorizationHeaders, supabase } from "@/lib/supabase-client";
 
@@ -521,6 +521,19 @@ function EmptyState({
   );
 }
 
+function GameDuration({ startedAt }: { startedAt?: string | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+  const elapsed = startedAt
+    ? Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 1000))
+    : 0;
+  return <>{formatDuration(elapsed)}</>;
+}
+
 export default function GameConsole() {
   const [state, setState] = useState<AppState | null>(null);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -547,7 +560,6 @@ export default function GameConsole() {
   const [search, setSearch] = useState("");
   const [cardFilter, setCardFilter] = useState<CardFilter>("all");
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [nowTick, setNowTick] = useState(0);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
   );
@@ -878,11 +890,6 @@ export default function GameConsole() {
   }, [sound]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     const sync = window.setInterval(() => {
       if (authUser && document.visibilityState === "visible" && !processingFiles) void refresh(true);
     }, 4000);
@@ -969,9 +976,6 @@ export default function GameConsole() {
     [called, gamePatterns, state?.cards, state?.winners],
   );
   const lastDraw = state?.draws[state.draws.length - 1];
-  const elapsed = game?.startedAt
-    ? Math.max(0, Math.floor((nowTick - new Date(game.startedAt).getTime()) / 1000))
-    : 0;
 
   const playTone = useCallback(
     (winner = false) => {
@@ -1434,6 +1438,7 @@ export default function GameConsole() {
     let duplicateCount = 0;
     try {
       for (const file of files) {
+        const { parseBingoPdf } = await import("@/lib/pdf-parser");
         const parsed = await parseBingoPdf(file, (progress) =>
           setPdfProgress({ ...progress, file: file.name }),
         );
@@ -1485,6 +1490,7 @@ export default function GameConsole() {
           continue;
         }
         try {
+          const { getBingoSourcePageCount, identifyBingoSource } = await import("@/lib/pdf-parser");
           const kind = await identifyBingoSource(file);
           const pageCount = await getBingoSourcePageCount(file);
           selections.push({
@@ -1529,6 +1535,7 @@ export default function GameConsole() {
     let duplicateCount = 0;
     try {
       for (const entry of filesToProcess) {
+        const { parseBingoFile } = await import("@/lib/pdf-parser");
         const parsed = await parseBingoFile(
           entry.file,
           (progress) => setPdfProgress({ ...progress, file: entry.file.name }),
@@ -2116,7 +2123,7 @@ export default function GameConsole() {
             </div>
           </div>
           <div className="top-actions">
-            <div className="game-clock"><Clock3 size={18} /><div><span>TIEMPO DE JUEGO</span><strong>{formatDuration(elapsed)}</strong></div></div>
+            <div className="game-clock"><Clock3 size={18} /><div><span>TIEMPO DE JUEGO</span><strong><GameDuration startedAt={game?.startedAt} /></strong></div></div>
             <button className="icon-button" onClick={() => setSound(!sound)} title={sound ? "Silenciar" : "Activar sonido"} type="button">
               {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
             </button>
@@ -2558,7 +2565,7 @@ export default function GameConsole() {
                     <div><dt>Fecha</dt><dd>{new Date(`${game.date}T12:00:00`).toLocaleDateString("es-EC", { dateStyle: "long" })}</dd></div>
                     <div><dt>Premio</dt><dd>{game.prize || "No especificado"}</dd></div>
                     <div><dt>Patrones activos</dt><dd>{gamePatterns.length}</dd></div>
-                    <div><dt>Duración</dt><dd>{formatDuration(elapsed)}</dd></div>
+                    <div><dt>Duración</dt><dd><GameDuration startedAt={game?.startedAt} /></dd></div>
                     <div><dt>Cartones activos</dt><dd>{state.cards.filter((card) => card.status === "active").length}</dd></div>
                     <div><dt>PDF importados</dt><dd>{state.files.length}</dd></div>
                   </dl>

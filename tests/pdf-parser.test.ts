@@ -28,6 +28,8 @@ import {
   additionalFormOrderForHeading,
   additionalFormNameForRegion,
   assignOcrNumbersToCardCells,
+  assignOcrNumbersToCardCellsWithConfidence,
+  reconcileOcrReadings,
   specialCellRelativePosition,
   isExplicitSpecialSheetHeading,
   isNumberPatternSheetHeading,
@@ -220,6 +222,22 @@ test("asigna números OCR por posición de celda e ignora texto de cabecera", ()
     { value: 55, x: 0.70, y: 0.30, confidence: 85 },
   ], [[0.50, 0.10], [0.10, 0.30], [0.70, 0.30]]);
   assert.deepEqual(values, [37, 5, 55]);
+});
+
+test("conserva confianza OCR y exige acuerdo si la lectura aislada es débil", () => {
+  const assigned = assignOcrNumbersToCardCellsWithConfidence([
+    { value: 37, x: 0.5, y: 0.1, confidence: 42 },
+  ], [[0.5, 0.1]]);
+  assert.deepEqual(assigned, [{ value: 37, confidence: 42 }]);
+  assert.deepEqual(reconcileOcrReadings([
+    { value: 37, confidence: 40 },
+    { value: 37, confidence: 58 },
+  ]), { value: 37, confidence: 58, uncertain: false });
+  assert.deepEqual(reconcileOcrReadings([
+    { value: 37, confidence: 66 },
+    { value: 31, confidence: 52 },
+    { value: 37, confidence: 48 },
+  ]), { value: 37, confidence: 66, uncertain: true });
 });
 
 test("centra las formas adicionales de 3 filas como Pesa dentro de su región", () => {
