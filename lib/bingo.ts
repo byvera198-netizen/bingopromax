@@ -57,7 +57,18 @@ export interface BingoPattern {
   difficulty: string;
   cells: number[];
   variants: number[][];
+  /** Game-local destinations for numeric glyph patterns. */
+  playOn?: PatternPlayTarget[];
   custom?: boolean;
+}
+
+export type PatternPlayTarget = "numbers" | "classic-5x5";
+
+export function defaultPatternPlayTargets(pattern: BingoPattern): PatternPlayTarget[] {
+  return normalizePatternCategory(pattern).toLocaleLowerCase("es") === "números" ||
+    normalizePatternCategory(pattern).toLocaleLowerCase("es") === "numeros"
+    ? ["numbers", "classic-5x5"]
+    : [];
 }
 
 export interface Draw {
@@ -133,6 +144,7 @@ export interface AppState {
   customPatterns: BingoPattern[];
   disabledPatternIds: string[];
   deletedPatternIds: string[];
+  patternTargets?: Record<string, PatternPlayTarget[]>;
   files: ImportedFile[];
   access: AccessState;
   memberships?: Membership[];
@@ -962,7 +974,39 @@ export function patternForCard(card: BingoCard, activePattern: BingoPattern) {
     normalizedActive,
   ]);
   if (additional) return normalizeBingoPattern(additional);
+  const numberTicket = isNumberPatternCard(card);
+  if (numberTicket) {
+    const targets = activePattern.playOn ?? defaultPatternPlayTargets(activePattern);
+    if (!targets.includes("numbers") || !numberPatternMatchesTicket(activePattern, card)) {
+      return { ...completionPatternFor(card), variants: [[]] };
+    }
+    const layout = cardLayoutFor(card);
+    const indexByCell = new Map(layout.cells.map((cell, index) => [cell.row * 5 + cell.column, index]));
+    const variants = (activePattern.variants.length ? activePattern.variants : [activePattern.cells])
+      .map((variant) => variant.map((cell) => indexByCell.get(cell)).filter((cell): cell is number => cell !== undefined));
+    return { ...activePattern, variants: variants.length ? variants : [card.grid.map((_, index) => index)] };
+  }
+  if (normalizePatternCategory(activePattern) === "Números" || normalizePatternCategory(activePattern) === "Numeros") {
+    const targets = activePattern.playOn ?? defaultPatternPlayTargets(activePattern);
+    if (!targets.includes("classic-5x5")) return { ...completionPatternFor(card), variants: [[]] };
+  }
   return isClassicCard(card) ? normalizedActive : completionPatternFor(card);
+}
+
+export function isNumberPatternCard(card: BingoCard) {
+  if (isClassicCard(card)) return false;
+  return /^(?:forma|n[uú]mero)\s*[1-9]$/i.test(cardLayoutFor(card).name.trim());
+}
+
+function numberPatternMatchesTicket(pattern: BingoPattern, card: BingoCard) {
+  const layout = cardLayoutFor(card);
+  const identity = pattern.id.match(/(?:numero|n[uú]mero)[-_ ]?([1-9])$/i)?.[1] ??
+    pattern.name.match(/(?:n[uú]mero|forma)\s*([1-9])$/i)?.[1];
+  const ticketIdentity = layout.name.match(/(?:forma|n[uú]mero)\s*([1-9])$/i)?.[1];
+  if (identity && ticketIdentity) return identity === ticketIdentity;
+  const ticketCells = new Set(layout.cells.map((cell) => cell.row * 5 + cell.column));
+  const variants = pattern.variants.length ? pattern.variants : [pattern.cells];
+  return variants.some((variant) => variant.length === ticketCells.size && variant.every((cell) => ticketCells.has(cell)));
 }
 
 export function patternsForCard(
@@ -988,14 +1032,25 @@ export function patternsForCard(
         patternCellsKey(pattern.cells) === patternCellsKey(additional.cells)),
     );
   }
+  if (isNumberPatternCard(card)) {
+    return normalizedActivePatterns.filter((pattern) =>
+      normalizePatternCategory(pattern) === "Números" || normalizePatternCategory(pattern) === "Numeros",
+    ).filter((pattern) => {
+      const targets = pattern.playOn ?? defaultPatternPlayTargets(pattern);
+      return targets.includes("numbers") && numberPatternMatchesTicket(pattern, card);
+    }).map((pattern) => patternForCard(card, pattern));
+  }
   return isClassicCard(card)
     ? normalizedActivePatterns.filter((pattern) => {
         const category = normalizePatternCategory(pattern).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         // Additional game sheets and Sabrositos never run on a traditional
         // ticket. Letter and number figures remain selectable 5×5 wins.
+        const numeric = category === "numeros" || category === "números";
+        const targets = pattern.playOn ?? defaultPatternPlayTargets(pattern);
         return pattern.id !== COMPACT_CARD_PATTERN.id &&
           category !== "juegos adicionales" &&
-          category !== "sabrositos";
+          category !== "sabrositos" &&
+          (!numeric || targets.includes("classic-5x5"));
       })
     : [completionPatternFor(card)];
 }

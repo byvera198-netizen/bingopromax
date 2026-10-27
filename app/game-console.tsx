@@ -61,9 +61,11 @@ import {
   normalizeBingoPattern,
   normalizePatternCategory,
   patternsForCard,
+  defaultPatternPlayTargets,
   validateBingoCard,
   winningPatternsForCard,
   type AppState,
+  type PatternPlayTarget,
   type AccessState,
   type BingoCard,
   type CardLayout,
@@ -227,7 +229,7 @@ function createDemoState(): AppState {
   const pattern = DEFAULT_PATTERN;
   return {
     game: { id: "demo", name: "Partida demo", date: now.slice(0, 10), prize: "Demostración", status: "ready", notes: "", activePatternId: pattern.id, activePatternName: pattern.name, activePatternCells: pattern.cells, autoPause: true, startedAt: null, createdAt: now, updatedAt: now },
-    cards: [], draws: [], winners: [], customPatterns: [], disabledPatternIds: [], deletedPatternIds: [], files: [],
+    cards: [], draws: [], winners: [], customPatterns: [], disabledPatternIds: [], deletedPatternIds: [], patternTargets: {}, files: [],
     access: { allowed: true, role: "member", email: "demo@bingocontrol.local", reason: "Modo demostración: máximo 20 bolillas." }, memberships: [],
   };
 }
@@ -893,7 +895,8 @@ export default function GameConsole() {
     () => {
       const unique = new Map<string, BingoPattern>();
       for (const sourcePattern of [...BUILTIN_PATTERNS, ...(state?.customPatterns ?? []), COMPACT_CARD_PATTERN]) {
-        const pattern = normalizeBingoPattern(sourcePattern);
+        const normalized = normalizeBingoPattern(sourcePattern);
+        const pattern = { ...normalized, playOn: state?.patternTargets?.[normalized.id] ?? defaultPatternPlayTargets(normalized) };
         if (
           RETIRED_BUILTIN_PATTERN_IDS.has(pattern.id) ||
           pattern.name.startsWith("Forma adicional #") ||
@@ -904,20 +907,31 @@ export default function GameConsole() {
       }
       return sortPatternsNaturally([...unique.values()]);
     },
-    [state?.customPatterns, state?.deletedPatternIds],
+    [state?.customPatterns, state?.deletedPatternIds, state?.patternTargets],
   );
   const patternBucket = useCallback((pattern: BingoPattern): Exclude<PatternFilter, "all"> => {
     const category = normalizePatternCategory(pattern).toLocaleLowerCase("es");
     if (pattern.id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "sabrositos";
-    if (category === "números" || category === "numeros") return "numeros";
+    if (category === "números" || category === "numeros") return pattern.playOn?.includes("numbers") ? "numeros" : "cartones";
     if (category === "juegos adicionales") return "adicionales";
     return "cartones";
   }, []);
+  const patternMatchesFilter = useCallback((pattern: BingoPattern, filter: Exclude<PatternFilter, "all">) => {
+    const category = normalizePatternCategory(pattern).toLocaleLowerCase("es");
+    if (category === "números" || category === "numeros") {
+      return filter === "numeros"
+        ? Boolean(pattern.playOn?.includes("numbers"))
+        : filter === "cartones"
+          ? Boolean(pattern.playOn?.includes("classic-5x5"))
+          : false;
+    }
+    return patternBucket(pattern) === filter;
+  }, [patternBucket]);
   const filteredPatterns = useMemo(
     () => patternFilter === "all"
       ? availablePatterns
-      : availablePatterns.filter((pattern) => patternBucket(pattern) === patternFilter),
-    [availablePatterns, patternBucket, patternFilter],
+      : availablePatterns.filter((pattern) => patternMatchesFilter(pattern, patternFilter)),
+    [availablePatterns, patternMatchesFilter, patternFilter],
   );
   const allPatterns = useMemo(
     () => sortPatternsNaturally(availablePatterns.filter(
@@ -1292,6 +1306,22 @@ export default function GameConsole() {
       );
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "No se pudo actualizar el patrón.", "error");
+    }
+  };
+
+  const setPatternTarget = async (pattern: BingoPattern, target: PatternPlayTarget, checked: boolean) => {
+    if (!state) return;
+    const current = pattern.playOn ?? defaultPatternPlayTargets(pattern);
+    const targets = checked ? [...new Set([...current, target])] : current.filter((item) => item !== target);
+    try {
+      await api({ action: "setPatternTargets", gameId: state.game.id, patternId: pattern.id, targets });
+      setState((currentState) => currentState ? {
+        ...currentState,
+        patternTargets: { ...currentState.patternTargets, [pattern.id]: targets },
+      } : currentState);
+      notify(`Destino de “${pattern.name}” actualizado.`, "success");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "No se pudo actualizar dónde se juega el patrón.", "error");
     }
   };
 
@@ -2441,7 +2471,7 @@ export default function GameConsole() {
                   ["adicionales", "Adicionales"],
                   ["sabrositos", "Sabrositos"],
                 ] as Array<[PatternFilter, string]>).map(([value, label]) => {
-                  const count = value === "all" ? availablePatterns.length : availablePatterns.filter((pattern) => patternBucket(pattern) === value).length;
+                  const count = value === "all" ? availablePatterns.length : availablePatterns.filter((pattern) => patternMatchesFilter(pattern, value)).length;
                   return <button aria-pressed={patternFilter === value} className={patternFilter === value ? "active" : ""} key={value} onClick={() => { setPatternFilter(value); setPatternLimit(60); }} type="button">{label} <b>{count}</b></button>;
                 })}
               </div>
@@ -2473,6 +2503,11 @@ export default function GameConsole() {
                         <button className="icon-button" onClick={() => openPatternEditor(pattern)} title="Editar patrón en esta partida" type="button"><SquarePen size={15} /></button>
                         <button className="icon-button danger-button" onClick={() => void deletePattern(pattern)} title="Eliminar patrón de esta partida" type="button"><Trash2 size={15} /></button>
                       </div>
+                      {(normalizePatternCategory(pattern) === "Números" || normalizePatternCategory(pattern) === "Numeros") && <fieldset className="pattern-targets">
+                        <legend>Jugar este patrón en</legend>
+                        <label><input checked={pattern.playOn?.includes("numbers") ?? true} onChange={(event) => void setPatternTarget(pattern, "numbers", event.target.checked)} type="checkbox" /> Hojas de números</label>
+                        <label><input checked={pattern.playOn?.includes("classic-5x5") ?? true} onChange={(event) => void setPatternTarget(pattern, "classic-5x5", event.target.checked)} type="checkbox" /> Cartones 5×5</label>
+                      </fieldset>}
                       <footer><span>{pattern.category}</span><span>{pattern.difficulty}</span></footer>
                   </article>
                   );

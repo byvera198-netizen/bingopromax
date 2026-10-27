@@ -150,6 +150,7 @@ const schemaStatements = [
     enabled INTEGER NOT NULL DEFAULT 1,
     custom INTEGER NOT NULL DEFAULT 0,
     deleted INTEGER NOT NULL DEFAULT 0,
+    targets_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     UNIQUE(game_id, pattern_id)
   )`,
@@ -221,6 +222,7 @@ async function ensureSchema(db: D1) {
     "ALTER TABLE cards ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE member_messages ADD COLUMN read_at TEXT",
     "ALTER TABLE game_patterns ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE game_patterns ADD COLUMN targets_json TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE memberships ADD COLUMN receipt_number TEXT",
     "ALTER TABLE memberships ADD COLUMN contact_channel TEXT NOT NULL DEFAULT 'email'",
     "ALTER TABLE memberships ADD COLUMN activation_code TEXT",
@@ -388,7 +390,7 @@ export async function GET(request: Request) {
          WHERE gp.game_id = ? AND gp.custom = 1
          ORDER BY p.created_at DESC`,
       ).bind(game.id).all<Record<string, unknown>>(),
-      db.prepare("SELECT pattern_id, enabled, deleted FROM game_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
+      db.prepare("SELECT pattern_id, enabled, deleted, targets_json FROM game_patterns WHERE game_id = ?").bind(game.id).all<Record<string, unknown>>(),
     ]);
 
     const membershipRows = access.role === "admin"
@@ -459,6 +461,12 @@ export async function GET(request: Request) {
       deletedPatternIds: (gamePatternRows.results ?? [])
         .filter((row) => Boolean(row.deleted))
         .map((row) => String(row.pattern_id)),
+      patternTargets: Object.fromEntries((gamePatternRows.results ?? []).flatMap((row) => {
+        try {
+          const targets = JSON.parse(String(row.targets_json ?? "[]"));
+          return Array.isArray(targets) ? [[String(row.pattern_id), targets.filter((target) => target === "numbers" || target === "classic-5x5")]] : [];
+        } catch { return []; }
+      })),
       files: [],
       access,
       memberships: (membershipRows.results ?? []).map(mapMembership),
@@ -1023,6 +1031,20 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
+    if (action === "setPatternTargets") {
+      if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
+      const patternId = String(body.patternId ?? "");
+      const targets = [...new Set(Array.isArray(body.targets) ? body.targets.filter((target): target is string => target === "numbers" || target === "classic-5x5") : [])];
+      if (!patternId) return Response.json({ error: "Patrón no encontrado." }, { status: 400 });
+      await db.prepare(
+        `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, targets_json, created_at)
+         VALUES (?, ?, 1, 0, 0, ?, ?)
+         ON CONFLICT(game_id, pattern_id) DO UPDATE SET targets_json = excluded.targets_json`,
+      ).bind(gameId, patternId, JSON.stringify(targets), now()).run();
+      await audit(db, gameId, "SET_PATTERN_TARGETS", `${patternId}: ${targets.join(",")}`, actor);
+      return Response.json({ ok: true, targets });
+    }
+
     if (action === "deletePattern") {
       if (!gameId) return Response.json({ error: "Partida no encontrada." }, { status: 400 });
       const patternId = String(body.patternId ?? "");
@@ -1272,7 +1294,7 @@ export async function POST(request: Request) {
       const sourceGameId = oldGames.results?.[0]?.id;
       const savedPatternDefaults = sourceGameId
         ? await db.prepare(
-            `SELECT gp.pattern_id, gp.enabled, gp.custom, gp.deleted,
+            `SELECT gp.pattern_id, gp.enabled, gp.custom, gp.deleted, gp.targets_json,
                     p.name, p.description, p.color, p.category, p.difficulty, p.cells_json, p.created_at AS pattern_created_at
              FROM game_patterns gp LEFT JOIN patterns p ON p.id = gp.pattern_id
              WHERE gp.game_id = ?`,
@@ -1321,9 +1343,9 @@ export async function POST(request: Request) {
           ));
         }
         statements.push(db.prepare(
-          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        ).bind(id, patternId, Boolean(row.enabled) ? 1 : 0, custom ? 1 : 0, Boolean(row.deleted) ? 1 : 0, createdAt));
+          `INSERT INTO game_patterns (game_id, pattern_id, enabled, custom, deleted, targets_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(id, patternId, Boolean(row.enabled) ? 1 : 0, custom ? 1 : 0, Boolean(row.deleted) ? 1 : 0, String(row.targets_json ?? "[]"), createdAt));
         return statements;
       });
       for (let offset = 0; offset < copyStatements.length; offset += 40) {

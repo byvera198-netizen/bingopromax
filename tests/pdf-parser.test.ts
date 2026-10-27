@@ -16,6 +16,7 @@ import {
   patternsForCard,
   winningPatternsForCard,
   type BingoCard,
+  type PatternPlayTarget,
 } from "../lib/bingo";
 import {
   detectCompactRectangles,
@@ -75,6 +76,29 @@ test("no clasifica una tabla completa 5×5 como juego adicional", () => {
     Array.from({ length: 5 }, (_, column) => row * 5 + column + 1),
   );
   assert.equal(specialLayoutNameForCellRows(classic), null);
+});
+
+test("los patrones numéricos se pueden dirigir por separado a hojas numéricas y cartones 5×5", () => {
+  const numberPattern = BUILTIN_PATTERNS.find((pattern) => pattern.id === "numero-1")!;
+  const numberCells = numberPattern.cells;
+  const numberCard: BingoCard = {
+    id: "number-1", number: "Forma 1", grid: numberCells.map((_, index) => index + 1),
+    sourceFile: "numbers.pdf", sourcePage: 1, status: "active",
+    layout: { type: "custom", name: "Forma 1", rows: 5, columns: 5,
+      cells: numberCells.map((index) => ({ row: Math.floor(index / 5), column: index % 5 })) },
+  };
+  const classicCard = { id: "classic", number: "C-1", grid: baseGrid, sourceFile: "cards.pdf", sourcePage: 1, status: "active" } as BingoCard;
+  const onlyNumbers = { ...numberPattern, playOn: ["numbers"] as PatternPlayTarget[] };
+  const onlyClassic = { ...numberPattern, playOn: ["classic-5x5"] as PatternPlayTarget[] };
+  const both = { ...numberPattern, playOn: ["numbers", "classic-5x5"] as PatternPlayTarget[] };
+
+  assert.deepEqual(patternsForCard(numberCard, [onlyNumbers]).map((pattern) => pattern.id), [numberPattern.id]);
+  assert.deepEqual(patternsForCard(classicCard, [onlyNumbers]), []);
+  assert.deepEqual(patternsForCard(numberCard, [onlyClassic]), []);
+  assert.deepEqual(patternsForCard(classicCard, [onlyClassic]).map((pattern) => pattern.id), [numberPattern.id]);
+  assert.deepEqual(patternsForCard(numberCard, [both]).map((pattern) => pattern.id), [numberPattern.id]);
+  assert.deepEqual(patternsForCard(classicCard, [both]).map((pattern) => pattern.id), [numberPattern.id]);
+  assert.deepEqual(patternsForCard(numberCard, [BUILTIN_PATTERNS.find((pattern) => pattern.id === "adicional-avion")!]), []);
 });
 
 test("usa geometría para activar OCR regional en hojas especiales con OCR escaso", () => {

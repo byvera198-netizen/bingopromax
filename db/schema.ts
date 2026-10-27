@@ -65,6 +65,7 @@ export const gamePatterns = sqliteTable(
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     custom: integer("custom", { mode: "boolean" }).notNull().default(false),
     deleted: integer("deleted", { mode: "boolean" }).notNull().default(false),
+    targetsJson: text("targets_json").notNull().default("[]"),
     createdAt: text("created_at").notNull(),
   },
   (table) => [
