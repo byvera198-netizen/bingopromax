@@ -2903,7 +2903,13 @@ export function assignOcrNumbersToCardCells(
   positions: Array<[number, number]>,
 ) {
   const matches = candidates.flatMap((candidate, tokenIndex) => {
-    if (!Number.isInteger(candidate.value) || candidate.value < 1 || candidate.value > 75 || candidate.confidence < 20) return [];
+    if (
+      !Number.isInteger(candidate.value) ||
+      candidate.value < 1 ||
+      candidate.value > 75 ||
+      !Number.isFinite(candidate.confidence) ||
+      candidate.confidence < 20
+    ) return [];
     return positions.map(([x, y], cellIndex) => ({
       tokenIndex,
       cellIndex,
@@ -3114,7 +3120,7 @@ async function recognizeAnchoredSheetCards(
       .filter((_, cellIndex) => !free.has(cellIndex))
       .map((cell) => specialCellRelativePosition(cell.row, cell.column, layout.rows, layout.columns));
     const cellPositions: Array<[number, number]> = activeCells.map((_, index) =>
-      (coordinates[index] as [number, number] | undefined) ?? [0, 0],
+      (coordinates[index] as [number, number] | undefined) ?? [-1, -1],
     );
     const batchedValues = await readTicketNumbers(rect, cellPositions);
     // Number sheets print very large digits inside a full 5×5 grid. A narrow
@@ -3125,7 +3131,7 @@ async function recognizeAnchoredSheetCards(
     const size = Math.min(rect.width * (kind === "number" ? 0.18 : 0.16), rect.height * 0.23);
     for (let cellIndex = 0; cellIndex < activeCells.length; cellIndex += 1) {
       const [x, y] = cellPositions[cellIndex] ?? [];
-      if (x === undefined || y === undefined) continue;
+      if (x === undefined || y === undefined || x < 0 || y < 0) continue;
       const cell = activeCells[cellIndex];
       const batchedValue = batchedValues[cellIndex];
       const minValue = cell.column * 15 + 1;
