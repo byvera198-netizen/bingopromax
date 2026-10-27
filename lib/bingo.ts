@@ -874,20 +874,22 @@ const patternCellsKey = (cells: number[]) => [...cells].sort((a, b) => a - b).jo
 
 /** Canonical category for imported/legacy custom patterns without rewriting their saved data. */
 export function normalizePatternCategory(pattern: BingoPattern) {
-  const category = normalizedPatternText(pattern.category);
-  const name = normalizedPatternText(pattern.name);
-  if (pattern.id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "Sabrositos";
+  const category = normalizedPatternText(String(pattern?.category ?? ""));
+  const name = normalizedPatternText(String(pattern?.name ?? ""));
+  const id = String(pattern?.id ?? "");
+  const cells = Array.isArray(pattern?.cells) ? pattern.cells : [];
+  if (id === COMPACT_CARD_PATTERN.id || category === "sabrositos") return "Sabrositos";
   if (category === "juegos adicionales" || category === "adicionales" || category === "additional games") {
     return "Juegos adicionales";
   }
 
   const numericName = /^(?:numero )?([1-9])$/.exec(name);
-  const numericById = /^numero-([1-9])$/.exec(pattern.id);
+  const numericById = /^numero-([1-9])$/.exec(id);
   const numericGlyph = BUILTIN_PATTERNS.some((builtin) =>
     builtin.category === "Números" && /^numero-[1-9]$/.test(builtin.id) &&
-    patternCellsKey(builtin.cells) === patternCellsKey(pattern.cells),
+    patternCellsKey(builtin.cells) === patternCellsKey(cells),
   );
-  if (numericName || numericById || numericGlyph || category === "numeros" || category === "numbers") {
+  if (numericName || numericById || numericGlyph || category.startsWith("numero") || category === "numbers") {
     return "Números";
   }
 
@@ -897,16 +899,16 @@ export function normalizePatternCategory(pattern: BingoPattern) {
   );
   const additionalGlyph = BUILTIN_PATTERNS.some((builtin) =>
     builtin.category === "Juegos adicionales" &&
-    patternCellsKey(builtin.cells) === patternCellsKey(pattern.cells),
+    patternCellsKey(builtin.cells) === patternCellsKey(cells),
   );
-  if (additionalName || additionalGlyph || category.includes("adicional")) return "Juegos adicionales";
+  if (additionalName || additionalGlyph || category.includes("adicional") || category.includes("additional")) return "Juegos adicionales";
   if (category === "letras" || category === "letters") return "Letras";
   return pattern.category;
 }
 
 export function normalizeBingoPattern(pattern: BingoPattern): BingoPattern {
   const category = normalizePatternCategory(pattern);
-  return category === pattern.category ? pattern : { ...pattern, category };
+  return category === pattern?.category ? pattern : { ...pattern, category };
 }
 
 /**
