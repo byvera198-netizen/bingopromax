@@ -413,6 +413,7 @@ function CardPreview({
   card,
   called,
   patterns,
+  precomputedNearest,
   wins = [],
   onToggleStatus,
   onDelete,
@@ -424,6 +425,7 @@ function CardPreview({
   card: BingoCard;
   called: Set<number>;
   patterns: BingoPattern[];
+  precomputedNearest?: ReturnType<typeof nearestPatternForCard>;
   wins?: Winner[];
   onToggleStatus?: (card: BingoCard) => void;
   onDelete?: (card: BingoCard) => void;
@@ -433,7 +435,7 @@ function CardPreview({
   showPending?: boolean;
 }) {
   const wonPatternIds = new Set(wins.map((winner) => winner.patternId));
-  const nearest = nearestPatternForCard(card, called, patterns, wins);
+  const nearest = precomputedNearest ?? nearestPatternForCard(card, called, patterns, wins);
   return (
     <article className={`ticket ${card.status === "void" ? "ticket-void" : ""}`}>
       <header>
@@ -559,7 +561,7 @@ export default function GameConsole() {
   const [winnerModal, setWinnerModal] = useState<Winner[]>([]);
   const [search, setSearch] = useState("");
   const [cardFilter, setCardFilter] = useState<CardFilter>("all");
-  const [cardsLimit, setCardsLimit] = useState(60);
+  const [cardsLimit, setCardsLimit] = useState(12);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
@@ -605,6 +607,7 @@ export default function GameConsole() {
   const [membershipPhone, setMembershipPhone] = useState("");
   const [membershipChannel, setMembershipChannel] = useState<"email" | "whatsapp">("email");
   const [cardLayers, setCardLayers] = useState({ called: true, pattern: true, pending: true });
+  const [temporaryCardsRevision, setTemporaryCardsRevision] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const proMaxFileInputRef = useRef<HTMLInputElement>(null);
   const temporaryCardsRef = useRef(new Map<string, BingoCard>());
@@ -612,11 +615,15 @@ export default function GameConsole() {
   const temporaryOwnerEmailRef = useRef<string | null>(null);
   const temporaryStorageKeyRef = useRef<string | null>(null);
   const refreshInFlightRef = useRef(false);
+  const lastServerSnapshotRef = useRef<string | null>(null);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
     setToasts((current) => [...current, { id, message, tone }]);
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 4200);
+  }, []);
+  const markTemporaryCardsChanged = useCallback(() => {
+    setTemporaryCardsRevision((revision) => revision + 1);
   }, []);
 
   const refresh = useCallback(async (silent = false) => {
@@ -634,11 +641,14 @@ export default function GameConsole() {
       });
       const payload = (await response.json()) as AppState & { error?: string; access?: AccessState };
       if (response.status === 403 && payload.access) {
+        lastServerSnapshotRef.current = null;
         setAccess(payload.access);
         setState(null);
         return;
       }
       if (!response.ok) throw new Error(payload.error || "No se pudo abrir la partida.");
+      const serverSnapshot = JSON.stringify(payload);
+      if (lastServerSnapshotRef.current === serverSnapshot) return;
       const ownerEmail = (payload.access?.email ?? "").trim().toLowerCase();
       const storageKey = temporaryCardsStorageKey(ownerEmail, payload.game.id);
       const identityChanged =
@@ -665,13 +675,15 @@ export default function GameConsole() {
         temporaryCardsRef.current.clear();
         localStorage.removeItem(storageKey);
       }
+      const savedCardIds = new Set(payload.cards.map((card) => card.id));
       const temporaryCards = deduplicateBingoCards(
-        [...temporaryCardsRef.current.values()].filter((card) => !payload.cards.some((saved) => saved.id === card.id)),
+        [...temporaryCardsRef.current.values()].filter((card) => !savedCardIds.has(card.id)),
         payload.cards,
       ).cards;
       temporaryCardsRef.current = new Map(temporaryCards.map((card) => [card.id, card]));
       setState({ ...payload, cards: [...payload.cards, ...temporaryCards] });
       setAccess(payload.access);
+      lastServerSnapshotRef.current = serverSnapshot;
       if (!silent) {
         setGameDraft({
           name: payload.game.name,
@@ -688,28 +700,30 @@ export default function GameConsole() {
     }
   }, []);
 
+  const temporaryStateGameId = state?.game.id;
+  const temporaryStateGameStatus = state?.game.status;
+  const temporaryStateOwnerEmail = state?.access?.email;
+
   useEffect(() => {
-    if (!state) return;
-    const storageKey = temporaryCardsStorageKey(state.access?.email ?? "", state.game.id);
+    if (!temporaryStateGameId) return;
+    const storageKey = temporaryCardsStorageKey(temporaryStateOwnerEmail ?? "", temporaryStateGameId);
     const temporaryIds = new Set(temporaryCardsRef.current.keys());
-    const visibleTemporaryCards = state.cards.filter((card) => temporaryIds.has(card.id));
-    if (state.game.status === "finished") {
+    if (temporaryStateGameStatus === "finished") {
       localStorage.removeItem(storageKey);
       temporaryCardsRef.current.clear();
-      if (visibleTemporaryCards.length) {
-        setState((current) => current
-          ? { ...current, cards: current.cards.filter((card) => !temporaryIds.has(card.id)) }
-          : current);
-      }
+      if (temporaryIds.size) setState((current) => current
+        ? { ...current, cards: current.cards.filter((card) => !temporaryIds.has(card.id)) }
+        : current);
       return;
     }
     try {
-      if (visibleTemporaryCards.length) localStorage.setItem(storageKey, JSON.stringify(visibleTemporaryCards));
+      const temporaryCards = [...temporaryCardsRef.current.values()];
+      if (temporaryCards.length) localStorage.setItem(storageKey, JSON.stringify(temporaryCards));
       else localStorage.removeItem(storageKey);
     } catch {
       // Local cache is best-effort; the PDFs themselves are never stored.
     }
-  }, [state]);
+  }, [temporaryCardsRevision, temporaryStateGameId, temporaryStateGameStatus, temporaryStateOwnerEmail]);
 
   const submitAuth = async () => {
     if (!authEmail.trim() && authMode !== "update") {
@@ -876,6 +890,7 @@ export default function GameConsole() {
       if (event === "PASSWORD_RECOVERY") setAuthMode("update");
       if (session) void refresh();
       else {
+        lastServerSnapshotRef.current = null;
         setState(null);
         setAccess(null);
       }
@@ -998,12 +1013,11 @@ export default function GameConsole() {
     if (!state || view !== "dashboard") return [];
     return state.cards
       .filter((card) => card.status === "active")
-      .map((card, index) => ({
-        card,
-        index,
-        wins: winnersByCard.get(card.id) ?? [],
-        progress: nearestPatternForCard(card, called, allPatterns, winnersByCard.get(card.id) ?? []).progress.progress,
-      }))
+      .map((card, index) => {
+        const wins = winnersByCard.get(card.id) ?? [];
+        const nearest = nearestPatternForCard(card, called, allPatterns, wins);
+        return { card, index, wins, nearest, progress: nearest.progress.progress };
+      })
       .sort((a, b) => b.progress - a.progress || a.index - b.index)
       .slice(0, 4);
   }, [allPatterns, called, state?.cards, view, winnersByCard]);
@@ -1190,6 +1204,7 @@ export default function GameConsole() {
     try {
       if (temporaryCardsRef.current.has(card.id)) {
         temporaryCardsRef.current.set(card.id, { ...card, status });
+        markTemporaryCardsChanged();
       } else {
         await api({ action: "updateCardStatus", gameId: state.game.id, cardId: card.id, status });
       }
@@ -1207,6 +1222,7 @@ export default function GameConsole() {
     if (!state || !window.confirm(`¿Eliminar definitivamente el cartón #${card.number} de esta partida?`)) return;
     try {
       temporaryCardsRef.current.delete(card.id);
+      markTemporaryCardsChanged();
       setState({
         ...state,
         cards: state.cards.filter((item) => item.id !== card.id),
@@ -1285,6 +1301,7 @@ export default function GameConsole() {
       }
       if (temporaryCardsRef.current.has(updated.id)) {
         temporaryCardsRef.current.set(updated.id, updated);
+        markTemporaryCardsChanged();
       } else {
         await api({ action: "updateCard", gameId: state.game.id, card: updated });
       }
@@ -1307,6 +1324,7 @@ export default function GameConsole() {
     try {
       const ids = new Set(voided.map((card) => card.id));
       ids.forEach((id) => temporaryCardsRef.current.delete(id));
+      markTemporaryCardsChanged();
       setState({
         ...state,
         cards: state.cards.filter((card) => !ids.has(card.id)),
@@ -1444,6 +1462,7 @@ export default function GameConsole() {
     try {
       setState({ ...state, cards: [card, ...state.cards] });
       temporaryCardsRef.current.set(card.id, card);
+      markTemporaryCardsChanged();
       setManualOpen(false);
       setManualNumber("");
       setManualSerial("");
@@ -1489,6 +1508,7 @@ export default function GameConsole() {
           continue;
         }
         uniqueCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+        markTemporaryCardsChanged();
         setState((current) => current
           ? { ...current, cards: [...current.cards, ...uniqueCards] }
           : current);
@@ -1591,6 +1611,7 @@ export default function GameConsole() {
         // Imported PDF cards are intentionally session-only. Keep them in the
         // active game state without sending the PDF or card rows to D1/R2.
         readyDrafts.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+        markTemporaryCardsChanged();
         setState((current) => current
           ? { ...current, cards: [...current.cards, ...readyDrafts] }
           : current);
@@ -1651,6 +1672,7 @@ export default function GameConsole() {
         ? { ...current, cards: [...current.cards, ...uniqueCards] }
         : current);
       uniqueCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+      markTemporaryCardsChanged();
       setProMaxImportProgress({ completed: uniqueCards.length, total: proMaxImport.cards.length });
       let syncedPatterns = 0;
       if (syncProMaxPatterns && proMaxImport.patterns.length && access?.role === "admin") {
@@ -1689,6 +1711,7 @@ export default function GameConsole() {
         ? { ...current, cards: [...current.cards, ...readyCards] }
         : current);
       readyCards.forEach((card) => temporaryCardsRef.current.set(card.id, card));
+      markTemporaryCardsChanged();
       setImportReviewOpen(false);
       setImportDrafts([]);
       const followUp: string[] = [];
@@ -1938,13 +1961,11 @@ export default function GameConsole() {
           return matchesFilter && matchesSearch;
         },
       )
-      .map((card, index) => ({
-        card,
-        index,
-        progress: nearestPatternForCard(card, called, allPatterns, winnersByCard.get(card.id) ?? []).progress.progress,
-      }))
-      .sort((a, b) => b.progress - a.progress || a.index - b.index)
-      .map(({ card }) => card);
+      .map((card, index) => {
+        const nearest = nearestPatternForCard(card, called, allPatterns, winnersByCard.get(card.id) ?? []);
+        return { card, index, nearest, progress: nearest.progress.progress };
+      })
+      .sort((a, b) => b.progress - a.progress || a.index - b.index);
   }, [allPatterns, called, cardFilter, search, state?.cards, view, winnersByCard]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
@@ -2289,13 +2310,14 @@ export default function GameConsole() {
                   </div>
                   {dashboardCards.length ? (
                     <div className="live-ticket-grid">
-                      {dashboardCards.map(({ card, wins }) => (
+                      {dashboardCards.map(({ card, wins, nearest }) => (
                           <CardPreview
                             called={called}
                             card={card}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
                             patterns={allPatterns}
+                            precomputedNearest={nearest}
                             wins={wins}
                           />
                         ))}
@@ -2418,7 +2440,7 @@ export default function GameConsole() {
                 </section>
               )}
               <div className="cards-toolbar">
-                <div className="search-box"><Search size={17} /><input onChange={(event) => { setSearch(event.target.value); setCardsLimit(60); }} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
+                <div className="search-box"><Search size={17} /><input onChange={(event) => { setSearch(event.target.value); setCardsLimit(12); }} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
                 <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
               </div>
               <div className="pattern-filter-bar card-filter-bar" aria-label="Filtrar cartones por formato">
@@ -2431,7 +2453,7 @@ export default function GameConsole() {
                   ["adicionales", "Juegos adicionales"],
                 ] as Array<[CardFilter, string]>).map(([value, label]) => {
                   const count = value === "all" ? state.cards.length : state.cards.filter((card) => cardFilterFor(card) === value).length;
-                  return <button aria-pressed={cardFilter === value} className={cardFilter === value ? "active" : ""} key={value} onClick={() => { setCardFilter(value); setCardsLimit(60); }} type="button">{label} <b>{count}</b></button>;
+                  return <button aria-pressed={cardFilter === value} className={cardFilter === value ? "active" : ""} key={value} onClick={() => { setCardFilter(value); setCardsLimit(12); }} type="button">{label} <b>{count}</b></button>;
                 })}
               </div>
               <div className="card-legend" aria-label="Controles de visualización del cartón">
@@ -2443,7 +2465,7 @@ export default function GameConsole() {
               {filteredCards.length ? (
                 <>
                 <div className="ticket-grid">
-                  {filteredCards.slice(0, cardsLimit).map((card) => (
+                  {filteredCards.slice(0, cardsLimit).map(({ card, nearest }) => (
                     <CardPreview
                       card={card}
                       called={called}
@@ -2452,6 +2474,7 @@ export default function GameConsole() {
                       onEdit={access?.role === "admin" ? openCardEditor : undefined}
                       onToggleStatus={access?.role === "admin" ? toggleCardStatus : undefined}
                       patterns={allPatterns}
+                      precomputedNearest={nearest}
                       showCalled={cardLayers.called}
                       showPattern={cardLayers.pattern}
                       showPending={cardLayers.pending}
@@ -2460,8 +2483,8 @@ export default function GameConsole() {
                   ))}
                 </div>
                 {filteredCards.length > cardsLimit && (
-                  <button className="secondary-button load-more-cards" onClick={() => setCardsLimit((current) => current + 60)} type="button">
-                    Cargar 60 más ({filteredCards.length - cardsLimit} restantes)
+                    <button className="secondary-button load-more-cards" onClick={() => setCardsLimit((current) => current + 12)} type="button">
+                      Cargar 12 más ({filteredCards.length - cardsLimit} restantes)
                   </button>
                 )}
                 </>
