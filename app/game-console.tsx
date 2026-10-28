@@ -319,6 +319,7 @@ function BingoGrid({
                 className={`bingo-cell target ${marked ? "marked" : ""}`}
                 disabled
                 key={`${index}-${value}`}
+                style={compact ? { fontSize: "clamp(24px, 3vw, 32px)", fontWeight: 800, lineHeight: 1 } : undefined}
                 type="button"
               >
                 {value}
@@ -346,7 +347,11 @@ function BingoGrid({
               disabled={!editable}
               key={index}
               onClick={() => onCellClick?.(index)}
-              style={{ gridColumn: cell.column + 1, gridRow: cell.row + 1 }}
+              style={{
+                gridColumn: cell.column + 1,
+                gridRow: cell.row + 1,
+                ...(compact ? { fontSize: "clamp(24px, 3vw, 32px)", fontWeight: 800, lineHeight: 1 } : {}),
+              }}
               type="button"
             >
               {editable ? (selected.includes(index) ? <Check size={16} /> : "") : value > 0 ? value : "?"}
@@ -370,6 +375,7 @@ function BingoGrid({
             disabled={!editable}
             key={index}
             onClick={() => onCellClick?.(index)}
+            style={compact ? { fontSize: "clamp(24px, 3vw, 32px)", fontWeight: 800, lineHeight: 1 } : undefined}
             type="button"
             aria-label={editable ? `Casilla ${index + 1}` : isFree ? "Casilla libre" : `Número ${value}`}
           >
