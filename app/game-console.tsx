@@ -559,6 +559,7 @@ export default function GameConsole() {
   const [winnerModal, setWinnerModal] = useState<Winner[]>([]);
   const [search, setSearch] = useState("");
   const [cardFilter, setCardFilter] = useState<CardFilter>("all");
+  const [cardsLimit, setCardsLimit] = useState(60);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof window !== "undefined" && localStorage.getItem("bingo-theme") === "light" ? "light" : "dark",
@@ -610,6 +611,7 @@ export default function GameConsole() {
   const temporaryGameIdRef = useRef<string | null>(null);
   const temporaryOwnerEmailRef = useRef<string | null>(null);
   const temporaryStorageKeyRef = useRef<string | null>(null);
+  const refreshInFlightRef = useRef(false);
 
   const notify = useCallback((message: string, tone: Toast["tone"] = "success") => {
     const id = crypto.randomUUID();
@@ -618,6 +620,8 @@ export default function GameConsole() {
   }, []);
 
   const refresh = useCallback(async (silent = false) => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     if (!silent) {
       setLoading(true);
       setError("");
@@ -679,6 +683,7 @@ export default function GameConsole() {
     } catch (caught) {
       if (!silent) setError(caught instanceof Error ? caught.message : "No se pudo abrir la partida.");
     } finally {
+      refreshInFlightRef.current = false;
       if (!silent) setLoading(false);
     }
   }, []);
@@ -948,33 +953,60 @@ export default function GameConsole() {
   );
   const gamePatterns = allPatterns;
   const visiblePatterns = useMemo(() => filteredPatterns.slice(0, patternLimit), [filteredPatterns, patternLimit]);
+  const winnersByCard = useMemo(() => {
+    const byCard = new Map<string, Winner[]>();
+    for (const winner of state?.winners ?? []) {
+      const wins = byCard.get(winner.cardId) ?? [];
+      wins.push(winner);
+      byCard.set(winner.cardId, wins);
+    }
+    return byCard;
+  }, [state?.winners]);
   const patternStatuses = useMemo(
-    () =>
-      gamePatterns.map((pattern) => {
-        const compatibleCards = (state?.cards ?? []).filter(
-          (card) => {
-            if (card.status !== "active") return false;
-            if (pattern.id === COMPACT_CARD_PATTERN.id) return cardLayoutFor(card).type === "sabrosito-5";
-            return patternsForCard(card, [pattern]).some((candidate) => candidate.id === pattern.id);
-          },
-        );
-        const nearest = compatibleCards.reduce(
-          (best, card) =>
-            Math.max(best, cardProgress(card, called, pattern).progress),
-          0,
-        );
-        const winners = (state?.winners ?? []).filter(
-          (winner) => winner.patternId === pattern.id,
-        ).length;
-        return {
-          pattern,
-          cards: compatibleCards.length,
-          nearest,
-          winners,
-        };
-      }),
-    [called, gamePatterns, state?.cards, state?.winners],
+    () => {
+      if (view !== "dashboard") return [];
+      const stats = new Map(gamePatterns.map((pattern) => [pattern.id, {
+        pattern,
+        cards: 0,
+        nearest: 0,
+        winners: 0,
+      }]));
+      for (const winner of state?.winners ?? []) {
+        const item = stats.get(winner.patternId);
+        if (item) item.winners += 1;
+      }
+      for (const card of state?.cards ?? []) {
+        if (card.status !== "active") continue;
+        // Resolve card type/target compatibility once per card. Calling
+        // patternsForCard separately for every pattern repeated expensive
+        // OCR-layout classification dozens of times per card.
+        for (const pattern of patternsForCard(card, gamePatterns)) {
+          const item = stats.get(pattern.id);
+          if (!item) continue;
+          item.cards += 1;
+          item.nearest = Math.max(item.nearest, cardProgress(card, called, pattern).progress);
+        }
+      }
+      return gamePatterns.flatMap((pattern) => {
+        const item = stats.get(pattern.id);
+        return item ? [item] : [];
+      });
+    },
+    [called, gamePatterns, state?.cards, state?.winners, view],
   );
+  const dashboardCards = useMemo(() => {
+    if (!state || view !== "dashboard") return [];
+    return state.cards
+      .filter((card) => card.status === "active")
+      .map((card, index) => ({
+        card,
+        index,
+        wins: winnersByCard.get(card.id) ?? [],
+        progress: nearestPatternForCard(card, called, allPatterns, winnersByCard.get(card.id) ?? []).progress.progress,
+      }))
+      .sort((a, b) => b.progress - a.progress || a.index - b.index)
+      .slice(0, 4);
+  }, [allPatterns, called, state?.cards, view, winnersByCard]);
   const lastDraw = state?.draws[state.draws.length - 1];
 
   const playTone = useCallback(
@@ -1893,7 +1925,7 @@ export default function GameConsole() {
   };
 
   const filteredCards = useMemo(() => {
-    if (!state) return [];
+    if (!state || view !== "cards") return [];
     const term = search.trim().toLowerCase();
     return state.cards
       .filter(
@@ -1906,22 +1938,14 @@ export default function GameConsole() {
           return matchesFilter && matchesSearch;
         },
       )
-      .sort(
-        (a, b) =>
-          nearestPatternForCard(
-            b,
-            called,
-            allPatterns,
-            state.winners.filter((winner) => winner.cardId === b.id),
-          ).progress.progress -
-          nearestPatternForCard(
-            a,
-            called,
-            allPatterns,
-            state.winners.filter((winner) => winner.cardId === a.id),
-          ).progress.progress,
-      );
-  }, [allPatterns, called, cardFilter, search, state]);
+      .map((card, index) => ({
+        card,
+        index,
+        progress: nearestPatternForCard(card, called, allPatterns, winnersByCard.get(card.id) ?? []).progress.progress,
+      }))
+      .sort((a, b) => b.progress - a.progress || a.index - b.index)
+      .map(({ card }) => card);
+  }, [allPatterns, called, cardFilter, search, state?.cards, view, winnersByCard]);
 
   const navItems: { id: View; label: string; icon: typeof Activity }[] = [
     { id: "dashboard", label: "Sala de juego", icon: LayoutDashboard },
@@ -2263,34 +2287,16 @@ export default function GameConsole() {
                     <div><span className="eyebrow">CARTONES MÁS CERCA</span><h3>Seguimiento en tiempo real</h3></div>
                     <button className="text-button" onClick={() => setView("cards")} type="button">Ver todos <ChevronRight size={15} /></button>
                   </div>
-                  {state.cards.length ? (
+                  {dashboardCards.length ? (
                     <div className="live-ticket-grid">
-                      {[...state.cards]
-                        .filter((card) => card.status === "active")
-                        .sort(
-                          (a, b) =>
-                            nearestPatternForCard(
-                              b,
-                              called,
-                              allPatterns,
-                              state.winners.filter((winner) => winner.cardId === b.id),
-                            ).progress.progress -
-                            nearestPatternForCard(
-                              a,
-                              called,
-                              allPatterns,
-                              state.winners.filter((winner) => winner.cardId === a.id),
-                            ).progress.progress,
-                        )
-                        .slice(0, 4)
-                        .map((card) => (
+                      {dashboardCards.map(({ card, wins }) => (
                           <CardPreview
                             called={called}
                             card={card}
                             key={card.id}
                             onToggleStatus={toggleCardStatus}
                             patterns={allPatterns}
-                            wins={state.winners.filter((winner) => winner.cardId === card.id)}
+                            wins={wins}
                           />
                         ))}
                     </div>
@@ -2412,7 +2418,7 @@ export default function GameConsole() {
                 </section>
               )}
               <div className="cards-toolbar">
-                <div className="search-box"><Search size={17} /><input onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
+                <div className="search-box"><Search size={17} /><input onChange={(event) => { setSearch(event.target.value); setCardsLimit(60); }} placeholder="Buscar por cartón, serie o archivo…" value={search} /></div>
                 <div><span>{filteredCards.length} cartones · ordenados por avance</span><span>{state.cards.filter((card) => card.status === "void").length} anulados</span>{state.cards.some((card) => card.status === "void") && <button className="ghost-button compact danger-button" onClick={() => void deleteVoidedCards()} type="button"><Trash2 size={14} /> Eliminar anulados</button>}</div>
               </div>
               <div className="pattern-filter-bar card-filter-bar" aria-label="Filtrar cartones por formato">
@@ -2425,7 +2431,7 @@ export default function GameConsole() {
                   ["adicionales", "Juegos adicionales"],
                 ] as Array<[CardFilter, string]>).map(([value, label]) => {
                   const count = value === "all" ? state.cards.length : state.cards.filter((card) => cardFilterFor(card) === value).length;
-                  return <button aria-pressed={cardFilter === value} className={cardFilter === value ? "active" : ""} key={value} onClick={() => setCardFilter(value)} type="button">{label} <b>{count}</b></button>;
+                  return <button aria-pressed={cardFilter === value} className={cardFilter === value ? "active" : ""} key={value} onClick={() => { setCardFilter(value); setCardsLimit(60); }} type="button">{label} <b>{count}</b></button>;
                 })}
               </div>
               <div className="card-legend" aria-label="Controles de visualización del cartón">
@@ -2435,8 +2441,9 @@ export default function GameConsole() {
                 <b><Activity size={13} /> Sincronización en vivo cada 4 s</b>
               </div>
               {filteredCards.length ? (
+                <>
                 <div className="ticket-grid">
-                  {filteredCards.map((card) => (
+                  {filteredCards.slice(0, cardsLimit).map((card) => (
                     <CardPreview
                       card={card}
                       called={called}
@@ -2448,10 +2455,16 @@ export default function GameConsole() {
                       showCalled={cardLayers.called}
                       showPattern={cardLayers.pattern}
                       showPending={cardLayers.pending}
-                      wins={state.winners.filter((winner) => winner.cardId === card.id)}
+                        wins={winnersByCard.get(card.id) ?? []}
                     />
                   ))}
                 </div>
+                {filteredCards.length > cardsLimit && (
+                  <button className="secondary-button load-more-cards" onClick={() => setCardsLimit((current) => current + 60)} type="button">
+                    Cargar 60 más ({filteredCards.length - cardsLimit} restantes)
+                  </button>
+                )}
+                </>
               ) : (
                 <EmptyState
                   action={<div className="empty-actions"><button className="primary-button" onClick={() => fileInputRef.current?.click()} type="button"><UploadCloud size={16} /> Importar PDF</button>{access?.role === "admin" && <button className="secondary-button" onClick={() => setManualOpen(true)} type="button"><SquarePen size={16} /> Crear manual</button>}</div>}

@@ -213,7 +213,22 @@ const schemaStatements = [
   "CREATE INDEX IF NOT EXISTS presence_last_seen_idx ON presence(last_seen)",
 ];
 
+let schemaInitialization: Promise<void> | null = null;
+
 async function ensureSchema(db: D1) {
+  // D1 schema compatibility checks are needed once per warm Worker isolate,
+  // not on every API call. Re-running the DDL batch and legacy migrations for
+  // every 4-second live poll added latency to both page actions and gameplay.
+  if (!schemaInitialization) {
+    schemaInitialization = initializeSchema(db).catch((error: unknown) => {
+      schemaInitialization = null;
+      throw error;
+    });
+  }
+  await schemaInitialization;
+}
+
+async function initializeSchema(db: D1) {
   await db.batch(schemaStatements.map((statement) => db.prepare(statement)));
   for (const statement of [
     "ALTER TABLE games ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''",
