@@ -241,7 +241,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .search-box { width: min(420px, 100%); display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--muted); }
 .search-box input { flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 10px; }
 .cards-toolbar > div:last-child { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: var(--muted); font-size: 8px; }
-.ticket-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ticket-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .ticket { position: relative; overflow: hidden; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .ticket > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
 .ticket-actions { display: flex; align-items: center; gap: 5px; }
@@ -250,7 +250,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .ticket-wins { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: -2px 0 9px; padding: 6px 7px; border: 1px solid rgba(215,255,63,.2); border-radius: 7px; background: var(--lime-soft); color: var(--lime); }
 .ticket-wins span { overflow: hidden; color: var(--text); font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
 .ticket-wins b { font-size: 6px; text-transform: uppercase; letter-spacing: .08em; }
-.bingo-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+.bingo-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .variable-card-grid { display: grid; gap: 5px; align-items: center; justify-items: stretch; }
 .variable-card-grid .bingo-cell { width: 100%; min-width: 0; }
 .variable-card-grid.cell-circle .bingo-cell { border-radius: 50%; }
@@ -258,7 +258,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .variable-card-grid.cell-diamond .bingo-cell > * { transform: rotate(-45deg); }
 .variable-card-grid.cell-diamond .bingo-cell { font-size: 8px; }
 .variable-card-grid.hide-pending .bingo-cell:not(.marked):not(.target) { opacity: .16; }
-.variable-card-grid.compact .bingo-cell { font-size: clamp(28px, 2.7vw, 36px); font-weight: 850; line-height: 1; }
+.variable-card-grid.compact .bingo-cell { font-weight: 750; line-height: 1; }
 .bingo-head { display: grid; place-items: center; height: 22px; color: var(--lime); font-size: 9px; font-weight: 800; }
 .bingo-cell { aspect-ratio: 1; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--muted); font-family: var(--font-geist-mono); font-size: 9px; }
 .bingo-cell.target { border-color: color-mix(in srgb, var(--lime), var(--line) 56%); }
@@ -268,12 +268,12 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .bingo-cell:disabled:not(.marked) { cursor: default; }
 .bingo-grid.hide-pending .bingo-cell:not(.marked):not(.target),
 .compact-card-grid.hide-pending .bingo-cell:not(.marked) { opacity: .16; }
-.bingo-grid.compact .bingo-cell { font-size: clamp(28px, 2.7vw, 36px); font-weight: 850; line-height: 1; }
+.bingo-grid.compact .bingo-cell { font-weight: 750; line-height: 1; }
 .bingo-grid.compact .bingo-cell.marked { box-shadow: 0 3px 10px rgba(160,195,23,.1); }
 .compact-card-grid { display: grid; gap: 9px; }
 .compact-card-title { color: var(--lime); font-size: 8px; font-weight: 850; letter-spacing: .16em; text-align: center; }
 .compact-number-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px 13%; }
-.compact-number-grid .bingo-cell { border-radius: 50%; font-size: clamp(28px, 2.7vw, 36px); font-weight: 850; line-height: 1; }
+.compact-number-grid .bingo-cell { border-radius: 50%; font-weight: 750; line-height: 1; }
 .compact-number-grid .bingo-cell:nth-child(4) { grid-column: 1; }
 .compact-number-grid .bingo-cell:nth-child(5) { grid-column: 3; }
 .compact-card-grid.compact .compact-number-grid .bingo-cell.marked { box-shadow: 0 3px 12px rgba(160,195,23,.14); }
